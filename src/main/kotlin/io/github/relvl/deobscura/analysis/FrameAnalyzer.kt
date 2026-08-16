@@ -52,43 +52,62 @@ class FrameAnalyzer {
             )
         }
 
-        val entryFrames = mutableMapOf<BasicBlockId, FrameState>()
-        val exitFrames = mutableMapOf<BasicBlockId, FrameState>()
-        val queue = ArrayDeque<BasicBlockId>()
-        val queued = mutableSetOf<BasicBlockId>()
+        // JSR/RET subroutines are context-sensitive: the same subroutine body may be entered from
+        // several JSR sites while caller locals contain different values. Merging those callers at
+        // the subroutine entry destroys locals that must be preserved across the finally body.
+        // Keep an independent data-flow state for every active legacy-subroutine call stack.
+        val rootLocation = FrameLocation(entryBlock, LegacySubroutineContext.EMPTY)
+        val contextualEntryFrames = mutableMapOf<FrameLocation, FrameState>()
+        val contextualExitFrames = mutableMapOf<FrameLocation, FrameState>()
+        val queue = ArrayDeque<FrameLocation>()
+        val queued = mutableSetOf<FrameLocation>()
         val counters = MergeCounters()
 
-        entryFrames[entryBlock] = initialFrame(ownerInternalName, method, maxLocals)
-        queue.addLast(entryBlock)
-        queued += entryBlock
+        contextualEntryFrames[rootLocation] = initialFrame(ownerInternalName, method, maxLocals)
+        queue.addLast(rootLocation)
+        queued += rootLocation
 
-        fun schedule(block: BasicBlockId) {
-            if (queued.add(block)) queue.addLast(block)
+        fun schedule(location: FrameLocation) {
+            if (queued.add(location)) queue.addLast(location)
         }
 
-        fun mergeInto(block: BasicBlockId, incoming: FrameState, context: String) {
-            val current = entryFrames[block]
+        fun mergeInto(location: FrameLocation, incoming: FrameState, context: String) {
+            val current = contextualEntryFrames[location]
             if (current == null) {
-                entryFrames[block] = incoming
-                schedule(block)
+                contextualEntryFrames[location] = incoming
+                schedule(location)
                 return
             }
             val merged = mergeFrames(current, incoming, counters, context)
             if (merged != current) {
-                entryFrames[block] = merged
-                schedule(block)
+                contextualEntryFrames[location] = merged
+                schedule(location)
             }
         }
 
+        fun propagateOrdinarySuccessors(location: FrameLocation, output: FrameState) {
+            graph.edges.asSequence()
+                .filter { it.from == location.block && it.kind != ControlFlowEdgeKind.EXCEPTION }
+                .forEach { edge ->
+                    mergeInto(
+                        FrameLocation(edge.to, location.context),
+                        output,
+                        "edge ${edge.from.value}->${edge.to.value}",
+                    )
+                }
+        }
+
         while (queue.isNotEmpty()) {
-            val blockId = queue.removeFirst()
-            queued.remove(blockId)
+            val location = queue.removeFirst()
+            queued.remove(location)
+            val blockId = location.block
             val block = graph.block(blockId)
-            val input = requireNotNull(entryFrames[blockId])
+            val input = requireNotNull(contextualEntryFrames[location])
             val mutable = MutableFrame(input.locals.toMutableList(), input.stack.toMutableList())
 
             for (instructionIndex in block.startInstructionIndex until block.endInstructionIndexExclusive) {
                 // Any instruction inside a protected range is conservatively treated as a potential throw site.
+                // An exception raised inside a JSR subroutine stays in the same subroutine invocation context.
                 handlers.asSequence()
                     .filter { instructionIndex >= it.start && instructionIndex < it.endExclusive }
                     .forEach { handler ->
@@ -105,7 +124,7 @@ class FrameAnalyzer {
                             ),
                         )
                         mergeInto(
-                            handler.handlerBlock,
+                            FrameLocation(handler.handlerBlock, location.context),
                             exceptionFrame,
                             "exception handler for instruction $instructionIndex",
                         )
@@ -115,47 +134,64 @@ class FrameAnalyzer {
             }
 
             val output = mutable.freeze()
-            exitFrames[blockId] = output
+            contextualExitFrames[location] = output
             when (val terminator = code.instructions[block.endInstructionIndexExclusive - 1]) {
                 is RawRetInstruction -> {
                     val returnAddress = mutable.requireLocal(terminator.slot, FrameValueKind.RETURN_ADDRESS)
-                    val returnSites = returnAddress.origins.filterIsInstance<ValueOrigin.ReturnAddress>()
-                    require(returnSites.isNotEmpty()) {
-                        "RET in block ${block.id.value} has no return-address origin in local ${terminator.slot}."
-                    }
-                    returnSites.forEach { origin ->
-                        val returnBlock = blockForInstruction(graph, origin.returnInstructionIndex)
-                        mergeInto(
-                            returnBlock,
-                            output,
-                            "legacy RET from block ${block.id.value} to instruction ${origin.returnInstructionIndex}",
+                    val expectedReturnSite = location.context.currentReturnSite
+                        ?: throw StackInconsistencyException(
+                            "RET in block ${block.id.value} executes outside a JSR subroutine context.",
+                        )
+                    val returnSites = returnAddress.origins
+                        .filterIsInstance<ValueOrigin.ReturnAddress>()
+                        .mapTo(linkedSetOf()) { it.returnInstructionIndex }
+                    if (expectedReturnSite !in returnSites) {
+                        throw StackInconsistencyException(
+                            "RET in block ${block.id.value} uses return-address local ${terminator.slot} for " +
+                                "$returnSites, expected $expectedReturnSite.",
                         )
                     }
+                    val returnBlock = blockForInstruction(graph, expectedReturnSite)
+                    mergeInto(
+                        FrameLocation(returnBlock, location.context.returnFromSubroutine()),
+                        output,
+                        "legacy RET from block ${block.id.value} to instruction $expectedReturnSite",
+                    )
                 }
 
                 is RawBranchInstruction -> {
                     if (terminator.opcode.mnemonic in LEGACY_JSR_OPCODES) {
+                        val returnSite = block.endInstructionIndexExclusive
+                        require(returnSite in code.instructions.indices) {
+                            "JSR at the end of method has no return site."
+                        }
+                        val subroutineContext = location.context.enterSubroutine(returnSite)
                         // The CFG keeps the post-JSR block reachable for structural diagnostics, but execution
-                        // reaches it only through RET. Propagate the frame only into the subroutine target here.
+                        // reaches it only through RET. Enter only the actual subroutine target here.
                         graph.edges.asSequence()
-                            .filter {
-                                it.from == blockId && it.kind == ControlFlowEdgeKind.JUMP
-                            }
+                            .filter { it.from == blockId && it.kind == ControlFlowEdgeKind.JUMP }
                             .forEach { edge ->
-                                mergeInto(edge.to, output, "legacy JSR edge ${edge.from.value}->${edge.to.value}")
+                                mergeInto(
+                                    FrameLocation(edge.to, subroutineContext),
+                                    output,
+                                    "legacy JSR edge ${edge.from.value}->${edge.to.value}",
+                                )
                             }
                     } else {
-                        propagateOrdinarySuccessors(graph, blockId, output, ::mergeInto)
+                        propagateOrdinarySuccessors(location, output)
                     }
                 }
 
-                else -> propagateOrdinarySuccessors(graph, blockId, output, ::mergeInto)
+                else -> propagateOrdinarySuccessors(location, output)
             }
         }
 
         return FrameAnalysis(
-            entryFrames = entryFrames.toMap(),
-            exitFrames = exitFrames.toMap(),
+            // For ordinary bytecode every location is in the root context. Legacy JSR subroutine
+            // bodies can have several valid caller-specific frames and therefore cannot be losslessly
+            // represented by Map<BasicBlockId, FrameState>; expose the root-context view here.
+            entryFrames = rootContextFrames(contextualEntryFrames),
+            exitFrames = rootContextFrames(contextualExitFrames),
             frameMergeCount = counters.frameMerges,
             valueMergeCount = counters.valueMerges,
         )
@@ -501,16 +537,12 @@ class FrameAnalyzer {
         return FrameValue(current.kind, origins)
     }
 
-    private fun propagateOrdinarySuccessors(
-        graph: ControlFlowGraph,
-        blockId: BasicBlockId,
-        output: FrameState,
-        mergeInto: (BasicBlockId, FrameState, String) -> Unit,
-    ) {
-        graph.edges.asSequence()
-            .filter { it.from == blockId && it.kind != ControlFlowEdgeKind.EXCEPTION }
-            .forEach { edge -> mergeInto(edge.to, output, "edge ${edge.from.value}->${edge.to.value}") }
-    }
+    private fun rootContextFrames(
+        contextualFrames: Map<FrameLocation, FrameState>,
+    ): Map<BasicBlockId, FrameState> = contextualFrames
+        .asSequence()
+        .filter { (location, _) -> location.context == LegacySubroutineContext.EMPTY }
+        .associate { (location, frame) -> location.block to frame }
 
     private fun blockForInstruction(graph: ControlFlowGraph, instructionIndex: Int): BasicBlockId =
         graph.blocks.firstOrNull {
@@ -528,6 +560,35 @@ class FrameAnalyzer {
         throw UnsupportedFrameInstructionException(
             "Unsupported instruction '${instruction.opcode.mnemonic}' at instruction $index (${instruction::class.simpleName}).",
         )
+
+    private data class FrameLocation(
+        val block: BasicBlockId,
+        val context: LegacySubroutineContext,
+    )
+
+    private data class LegacySubroutineContext(
+        val returnSites: List<Int>,
+    ) {
+        val currentReturnSite: Int?
+            get() = returnSites.lastOrNull()
+
+        fun enterSubroutine(returnSite: Int): LegacySubroutineContext {
+            require(returnSites.size < MAX_LEGACY_SUBROUTINE_DEPTH) {
+                "Legacy JSR nesting exceeds $MAX_LEGACY_SUBROUTINE_DEPTH levels."
+            }
+            return LegacySubroutineContext(returnSites + returnSite)
+        }
+
+        fun returnFromSubroutine(): LegacySubroutineContext {
+            require(returnSites.isNotEmpty()) { "Cannot RET from an empty legacy subroutine context." }
+            return LegacySubroutineContext(returnSites.dropLast(1))
+        }
+
+        companion object {
+            val EMPTY = LegacySubroutineContext(emptyList())
+            private const val MAX_LEGACY_SUBROUTINE_DEPTH = 64
+        }
+    }
 
     private data class ResolvedHandler(
         val start: Int,

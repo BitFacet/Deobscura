@@ -10,6 +10,7 @@ import io.github.relvl.deobscura.jar.JarLoader
 import io.github.relvl.deobscura.resolution.ClassResolver
 import io.github.relvl.deobscura.resolution.ResolutionDiagnostics
 import io.github.relvl.deobscura.resolution.ReferenceKind
+import io.github.relvl.deobscura.resolution.ResolutionRequest
 import io.github.relvl.deobscura.resolution.RuntimeClassSource
 import io.github.relvl.deobscura.raw.ClassImporter
 import org.slf4j.LoggerFactory
@@ -81,15 +82,6 @@ class DeobscuraCommand : Callable<Int> {
                         val frameAnalysis = FrameDiagnostics().inspect(rawImport)
                         frameAnalysis.warnings.forEach { logger.warn(it) }
 
-                        diagnostics.unresolved.forEach { unresolved ->
-                            logger.warn(
-                                "Unresolved class '{}' [{}] referenced by {}.",
-                                unresolved.internalName,
-                                unresolved.kind,
-                                formatReferrers(unresolved.referrers),
-                            )
-                        }
-
                         logger.info("Working directory: {}", workingDirectory)
                         logger.info("Input JAR: {}", resolution.config.input)
                         logger.info("Runtime: {} (Java {})", resolution.config.runtime, resolution.config.runtimeVersion)
@@ -152,6 +144,26 @@ class DeobscuraCommand : Callable<Int> {
                             frameAnalysis.stackInconsistencyCount,
                             frameAnalysis.unsupportedInstructionCount,
                         )
+
+                        val unresolvedAnalysisUses = classResolver.unresolvedAnalysisUses
+                        unresolvedAnalysisUses.forEach { use ->
+                            val discovered = diagnostics.unresolved.firstOrNull { it.internalName == use.internalName }
+                            logger.warn(
+                                "Unresolved class '{}'{} affected analysis [{}]: {}.",
+                                use.internalName,
+                                discovered?.let { " [${it.kind}]" } ?: "",
+                                use.strongestImpact,
+                                formatAnalysisRequests(use.requests),
+                            )
+                        }
+                        val affectedNames = unresolvedAnalysisUses.asSequence().map { it.internalName }.toSet()
+                        val unaffectedCount = diagnostics.unresolved.count { it.internalName !in affectedNames }
+                        logger.info(
+                            "Unresolved class impact: {} referenced, {} affected performed analyses, {} did not affect performed analyses.",
+                            diagnostics.unresolved.size,
+                            unresolvedAnalysisUses.size,
+                            unaffectedCount,
+                        )
                     }
                     EXIT_SUCCESS
                 }
@@ -166,13 +178,16 @@ class DeobscuraCommand : Callable<Int> {
         }
     }
 
-    private fun formatReferrers(referrers: List<String>): String {
-        val shown = referrers.take(MAX_REFERRERS_IN_WARNING)
+    private fun formatAnalysisRequests(
+        requests: List<ResolutionRequest>,
+    ): String {
+        val distinctRequests = requests.distinct()
+        val shown = distinctRequests.take(MAX_ANALYSIS_REQUESTS_IN_WARNING)
         return buildString {
-            append(shown.joinToString())
-            if (referrers.size > shown.size) {
+            append(shown.joinToString { "${it.purpose} for ${it.consumer}" })
+            if (distinctRequests.size > shown.size) {
                 append(" (+")
-                append(referrers.size - shown.size)
+                append(distinctRequests.size - shown.size)
                 append(" more)")
             }
         }
@@ -188,7 +203,7 @@ class DeobscuraCommand : Callable<Int> {
         const val EXIT_SUCCESS = 0
         const val EXIT_FAILURE = 1
         const val EXIT_CONFIGURATION_REQUIRED = 2
-        const val MAX_REFERRERS_IN_WARNING = 5
+        const val MAX_ANALYSIS_REQUESTS_IN_WARNING = 5
 
         val logger = LoggerFactory.getLogger(DeobscuraCommand::class.java)
     }

@@ -60,4 +60,49 @@ class ClassResolverTest {
             assertEquals(1, resolver.resolvedRuntimeClassCount)
         }
     }
+
+    @Test
+    fun `plain lookup does not mark a missing class as affecting analysis`() {
+        val jarResult = emptyJarResult()
+
+        RuntimeClassSource(Path.of(System.getProperty("java.home"))).use { runtimeSource ->
+            val resolver = ClassResolver(jarResult, runtimeSource)
+
+            assertEquals(null, resolver.findClass("not/a/real/Class"))
+            assertEquals(emptyList(), resolver.unresolvedAnalysisUses)
+        }
+    }
+
+    @Test
+    fun `analysis lookup records why a missing class matters`() {
+        val jarResult = emptyJarResult()
+
+        RuntimeClassSource(Path.of(System.getProperty("java.home"))).use { runtimeSource ->
+            val resolver = ClassResolver(jarResult, runtimeSource)
+
+            assertEquals(
+                null,
+                resolver.findClassForAnalysis(
+                    internalName = "not/a/real/Class",
+                    purpose = ResolutionPurpose.OVERRIDE_ANALYSIS,
+                    consumer = "example/Child.method()V",
+                ),
+            )
+
+            val use = resolver.unresolvedAnalysisUses.single()
+            assertEquals("not/a/real/Class", use.internalName)
+            assertEquals(ResolutionImpact.PRECISION_LOSS, use.strongestImpact)
+            assertEquals(ResolutionPurpose.OVERRIDE_ANALYSIS, use.requests.single().purpose)
+            assertEquals("example/Child.method()V", use.requests.single().consumer)
+        }
+    }
+
+    private fun emptyJarResult() = JarLoadResult(
+        classes = emptyMap(),
+        inputClassCount = 0,
+        classpathClassCount = 0,
+        classpathOnlyClassCount = 0,
+        shadowedClasspathClassCount = 0,
+        warnings = emptyList(),
+    )
 }

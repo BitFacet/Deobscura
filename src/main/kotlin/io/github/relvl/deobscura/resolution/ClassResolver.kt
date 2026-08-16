@@ -10,8 +10,27 @@ class ClassResolver(
 ) {
     private val jarClasses = jarLoadResult.classes
     private val runtimeClasses = mutableMapOf<String, ResolvedClass>()
+    private val impactTracker = ResolutionImpactTracker()
 
-    fun findClass(internalName: String): ResolvedClass? {
+    fun findClass(internalName: String): ResolvedClass? = resolveClass(internalName)
+
+    fun findClassForAnalysis(
+        internalName: String,
+        purpose: ResolutionPurpose,
+        consumer: String,
+        impactIfMissing: ResolutionImpact = ResolutionImpact.PRECISION_LOSS,
+    ): ResolvedClass? {
+        val resolved = resolveClass(internalName)
+        if (resolved == null) {
+            impactTracker.record(internalName, purpose, consumer, impactIfMissing)
+        }
+        return resolved
+    }
+
+    val unresolvedAnalysisUses: List<UnresolvedAnalysisUse>
+        get() = impactTracker.snapshot()
+
+    private fun resolveClass(internalName: String): ResolvedClass? {
         jarClasses[internalName]?.let { loadedClass ->
             return ResolvedClass(
                 internalName = internalName,

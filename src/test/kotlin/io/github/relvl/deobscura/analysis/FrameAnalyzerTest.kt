@@ -15,6 +15,7 @@ import io.github.relvl.deobscura.raw.RawMethod
 import io.github.relvl.deobscura.raw.RawNewObjectInstruction
 import io.github.relvl.deobscura.raw.RawRetInstruction
 import io.github.relvl.deobscura.raw.RawReturnInstruction
+import io.github.relvl.deobscura.raw.RawStackInstruction
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -93,28 +94,36 @@ class FrameAnalyzerTest {
     }
 
     @Test
-    fun `analyzes legacy jsr ret subroutines`() {
+    fun `analyzes legacy jsr ret subroutines without merging caller locals`() {
         val subroutineLabel = RawLabelId(1)
         val instructions = listOf(
+            RawNewObjectInstruction(JvmOpcode("new"), "java/lang/Object"),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 1),
             RawBranchInstruction(JvmOpcode("jsr"), subroutineLabel),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 1),
+            RawStackInstruction(JvmOpcode("pop")),
+            RawLocalInstruction(JvmOpcode("iload"), LocalOperation.LOAD, JvmComputationalType.INT, 0),
+            RawLocalInstruction(JvmOpcode("istore"), LocalOperation.STORE, JvmComputationalType.INT, 1),
             RawBranchInstruction(JvmOpcode("jsr"), subroutineLabel),
+            RawLocalInstruction(JvmOpcode("iload"), LocalOperation.LOAD, JvmComputationalType.INT, 1),
+            RawStackInstruction(JvmOpcode("pop")),
             RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
-            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 0),
-            RawRetInstruction(JvmOpcode("ret"), 0),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 2),
+            RawRetInstruction(JvmOpcode("ret"), 2),
         )
         val code = RawCode(
             maxStack = 1,
-            maxLocals = 1,
+            maxLocals = 3,
             bytecodeLength = null,
             instructions = instructions,
-            labels = listOf(RawLabel(subroutineLabel, instructionIndex = 3, bytecodeOffset = null)),
+            labels = listOf(RawLabel(subroutineLabel, instructionIndex = 11, bytecodeOffset = null)),
             exceptionHandlers = emptyList(),
             lineNumbers = emptyList(),
         )
         val method = RawMethod(
             name = "legacyFinally",
-            descriptor = "()V",
-            type = JvmMethodDescriptor.parse("()V"),
+            descriptor = "(I)V",
+            type = JvmMethodDescriptor.parse("(I)V"),
             accessFlags = 0x0008,
             exceptions = emptyList(),
             code = code,
@@ -123,11 +132,10 @@ class FrameAnalyzerTest {
 
         val analysis = analyzer.analyze("test/Owner", method, graph)
 
-        val firstReturnSite = graph.blocks.single { it.startInstructionIndex == 1 }
-        val secondReturnSite = graph.blocks.single { it.startInstructionIndex == 2 }
-        assertTrue(firstReturnSite.id in analysis.entryFrames)
-        assertTrue(secondReturnSite.id in analysis.entryFrames)
-        assertEquals(emptyList(), analysis.entryFrames.getValue(secondReturnSite.id).stack)
+        val firstReturnSite = graph.blocks.single { it.startInstructionIndex == 3 }
+        val secondReturnSite = graph.blocks.single { it.startInstructionIndex == 8 }
+        assertEquals(FrameValueKind.REFERENCE, analysis.entryFrames.getValue(firstReturnSite.id).locals[1]?.kind)
+        assertEquals(FrameValueKind.INT, analysis.entryFrames.getValue(secondReturnSite.id).locals[1]?.kind)
     }
 
     private fun importFixture(): io.github.relvl.deobscura.raw.RawClass {
