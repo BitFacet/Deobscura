@@ -1,11 +1,13 @@
 package io.github.relvl.deobscura.analysis
 
 import io.github.relvl.deobscura.cfg.ControlFlowGraphBuilder
+import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizer
 import io.github.relvl.deobscura.raw.RawImportResult
 
 class FrameDiagnostics(
     private val graphBuilder: ControlFlowGraphBuilder = ControlFlowGraphBuilder(),
     private val analyzer: FrameAnalyzer = FrameAnalyzer(),
+    private val legacySubroutineNormalizer: LegacySubroutineNormalizer = LegacySubroutineNormalizer(),
 ) {
     fun inspect(rawImport: RawImportResult): FrameDiagnosticsResult {
         var methodCount = 0
@@ -22,8 +24,10 @@ class FrameDiagnostics(
                 methodCount++
                 val methodName = "${rawClass.internalName}.${method.name}${method.descriptor}"
                 try {
-                    val graph = graphBuilder.build(method.code)
-                    val analysis = analyzer.analyze(rawClass.internalName, method, graph)
+                    val normalizedCode = legacySubroutineNormalizer.normalize(method.code).code
+                    val normalizedMethod = if (normalizedCode === method.code) method else method.copy(code = normalizedCode)
+                    val graph = graphBuilder.build(normalizedCode)
+                    val analysis = analyzer.analyze(rawClass.internalName, normalizedMethod, graph)
                     frameMergeCount += analysis.frameMergeCount
                     valueMergeCount += analysis.valueMergeCount
                 } catch (exception: StackInconsistencyException) {

@@ -7,6 +7,7 @@ import io.github.relvl.deobscura.config.ConfigLoadResult
 import io.github.relvl.deobscura.config.ConfigRepository
 import io.github.relvl.deobscura.config.ConfigResolver
 import io.github.relvl.deobscura.jar.JarLoader
+import io.github.relvl.deobscura.normalize.LegacySubroutineDiagnostics
 import io.github.relvl.deobscura.resolution.ClassResolver
 import io.github.relvl.deobscura.resolution.ResolutionDiagnostics
 import io.github.relvl.deobscura.resolution.ReferenceKind
@@ -41,6 +42,7 @@ class DeobscuraCommand : Callable<Int> {
     override fun call(): Int {
         val workingDirectory = Path.of("").toAbsolutePath().normalize()
         val absoluteConfigPath = resolveAgainst(workingDirectory, configPath)
+        logger.info("Working directory: {}", workingDirectory)
 
         return try {
             when (val loaded = ConfigRepository().loadOrCreate(absoluteConfigPath)) {
@@ -59,6 +61,7 @@ class DeobscuraCommand : Callable<Int> {
                     }
 
                     val resolution = ConfigResolver(workingDirectory).resolve(loaded.config)
+                    logger.info("Input JAR: {}", resolution.config.input)
                     resolution.warnings.forEach { logger.warn(it) }
 
                     val result = JarLoader().load(resolution.config)
@@ -79,11 +82,11 @@ class DeobscuraCommand : Callable<Int> {
                         }
                         val controlFlow = ControlFlowDiagnostics().inspect(rawImport)
                         controlFlow.warnings.forEach { logger.warn(it) }
+                        val legacySubroutines = LegacySubroutineDiagnostics().inspect(rawImport)
+                        legacySubroutines.warnings.forEach { logger.warn(it) }
                         val frameAnalysis = FrameDiagnostics().inspect(rawImport)
                         frameAnalysis.warnings.forEach { logger.warn(it) }
 
-                        logger.info("Working directory: {}", workingDirectory)
-                        logger.info("Input JAR: {}", resolution.config.input)
                         logger.info("Runtime: {} (Java {})", resolution.config.runtime, resolution.config.runtimeVersion)
                         logger.info("Loaded {} classes from input JAR.", result.inputClassCount)
                         logger.info(
@@ -132,6 +135,17 @@ class DeobscuraCommand : Callable<Int> {
                             controlFlow.unreachableBlockCount,
                         )
                         logger.info("CFG construction completed with {} failure(s).", controlFlow.failureCount)
+                        logger.info(
+                            "Normalized legacy JSR/RET in {} method(s): {} JSR call site(s), {} cloned basic block(s), {} normalized instruction(s).",
+                            legacySubroutines.methodCount,
+                            legacySubroutines.jsrCallSiteCount,
+                            legacySubroutines.clonedBlockCount,
+                            legacySubroutines.normalizedInstructionCount,
+                        )
+                        logger.info(
+                            "Legacy JSR/RET normalization completed with {} failure(s).",
+                            legacySubroutines.failureCount,
+                        )
                         logger.info(
                             "Analyzed JVM frames for {} method(s): {} frame merge(s), {} value merge(s).",
                             frameAnalysis.methodCount,
