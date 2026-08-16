@@ -1,33 +1,7 @@
 package io.github.relvl.deobscura.analysis
 
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
-import io.github.relvl.deobscura.raw.ArrayOperation
-import io.github.relvl.deobscura.raw.JvmComputationalType
-import io.github.relvl.deobscura.raw.JvmType
-import io.github.relvl.deobscura.raw.LocalOperation
-import io.github.relvl.deobscura.raw.RawArrayInstruction
-import io.github.relvl.deobscura.raw.RawBranchInstruction
-import io.github.relvl.deobscura.raw.RawConstantInstruction
-import io.github.relvl.deobscura.raw.RawConversionInstruction
-import io.github.relvl.deobscura.raw.RawFieldInstruction
-import io.github.relvl.deobscura.raw.RawIncrementInstruction
-import io.github.relvl.deobscura.raw.RawInstruction
-import io.github.relvl.deobscura.raw.RawInvokeDynamicInstruction
-import io.github.relvl.deobscura.raw.RawInvokeInstruction
-import io.github.relvl.deobscura.raw.RawLocalInstruction
-import io.github.relvl.deobscura.raw.RawMonitorInstruction
-import io.github.relvl.deobscura.raw.RawNewArrayInstruction
-import io.github.relvl.deobscura.raw.RawNewMultiArrayInstruction
-import io.github.relvl.deobscura.raw.RawNewObjectInstruction
-import io.github.relvl.deobscura.raw.RawNopInstruction
-import io.github.relvl.deobscura.raw.RawOperatorInstruction
-import io.github.relvl.deobscura.raw.RawRetInstruction
-import io.github.relvl.deobscura.raw.RawReturnInstruction
-import io.github.relvl.deobscura.raw.RawStackInstruction
-import io.github.relvl.deobscura.raw.RawSwitchInstruction
-import io.github.relvl.deobscura.raw.RawThrowInstruction
-import io.github.relvl.deobscura.raw.RawTypeCheckInstruction
-import io.github.relvl.deobscura.raw.RawUnknownInstruction
+import io.github.relvl.deobscura.raw.*
 
 class ValueFlowAnalyzer {
     fun analyze(
@@ -102,12 +76,14 @@ class ValueFlowAnalyzer {
             state.writeLocal(instruction.slot, output)
             ValueOperation(index, instruction, listOf(input.id), output.id, instruction.slot)
         }
+
         is RawArrayInstruction -> executeArray(instruction, index, state, allocator)
         is RawOperatorInstruction -> executeOperator(instruction, index, state, allocator)
         is RawConversionInstruction -> {
             val input = state.pop(instruction.fromType.toFrameValueKind())
             produce(instruction, index, instruction.toType.toFrameValueKind(), listOf(input), state, allocator)
         }
+
         is RawBranchInstruction -> executeBranch(instruction, index, state)
         is RawSwitchInstruction -> ValueOperation(index, instruction, listOf(state.pop(FrameValueKind.INT).id))
         is RawFieldInstruction -> executeField(instruction, index, state, allocator)
@@ -116,15 +92,18 @@ class ValueFlowAnalyzer {
             val arguments = popArguments(instruction.type.parameterTypes, state)
             produceOptional(instruction, index, instruction.type.returnType, arguments, state, allocator)
         }
+
         is RawNewObjectInstruction -> produce(instruction, index, FrameValueKind.REFERENCE, emptyList(), state, allocator)
         is RawNewArrayInstruction -> {
             val size = state.pop(FrameValueKind.INT)
             produce(instruction, index, FrameValueKind.REFERENCE, listOf(size), state, allocator)
         }
+
         is RawNewMultiArrayInstruction -> {
             val dimensions = MutableList(instruction.dimensions) { state.pop(FrameValueKind.INT) }.asReversed()
             produce(instruction, index, FrameValueKind.REFERENCE, dimensions, state, allocator)
         }
+
         is RawTypeCheckInstruction -> when (instruction.opcode.mnemonic) {
             "checkcast" -> produce(
                 instruction,
@@ -134,6 +113,7 @@ class ValueFlowAnalyzer {
                 state,
                 allocator,
             )
+
             "instanceof" -> produce(
                 instruction,
                 index,
@@ -142,8 +122,10 @@ class ValueFlowAnalyzer {
                 state,
                 allocator,
             )
+
             else -> unsupported(instruction, index)
         }
+
         is RawReturnInstruction -> {
             val inputs = if (instruction.type == JvmComputationalType.VOID) {
                 emptyList()
@@ -152,12 +134,14 @@ class ValueFlowAnalyzer {
             }
             ValueOperation(index, instruction, inputs)
         }
+
         is RawMonitorInstruction -> ValueOperation(index, instruction, listOf(state.pop(FrameValueKind.REFERENCE).id))
         is RawThrowInstruction -> ValueOperation(index, instruction, listOf(state.pop(FrameValueKind.REFERENCE).id))
         is RawNopInstruction -> null
         is RawRetInstruction -> throw UnsupportedValueFlowInstructionException(
             "RET remains after legacy subroutine normalization at instruction $index.",
         )
+
         is RawUnknownInstruction -> unsupported(instruction, index)
         is RawStackInstruction -> error("Stack instructions are handled before execute().")
     }
@@ -174,6 +158,7 @@ class ValueFlowAnalyzer {
                 state.push(value)
                 ValueOperation(index, instruction, listOf(value.id), localSlot = instruction.slot)
             }
+
             LocalOperation.STORE -> {
                 val value = if (kind == FrameValueKind.REFERENCE) state.popReferenceLike() else state.pop(kind)
                 state.writeLocal(instruction.slot, value)
@@ -195,6 +180,7 @@ class ValueFlowAnalyzer {
                 val array = state.pop(FrameValueKind.REFERENCE)
                 produce(instruction, index, componentKind, listOf(array, arrayIndex), state, allocator)
             }
+
             ArrayOperation.STORE -> {
                 val value = state.pop(componentKind)
                 val arrayIndex = state.pop(FrameValueKind.INT)
@@ -221,6 +207,7 @@ class ValueFlowAnalyzer {
                 state,
                 allocator,
             )
+
             mnemonic.endsWith("neg") -> produce(
                 instruction,
                 index,
@@ -229,16 +216,19 @@ class ValueFlowAnalyzer {
                 state,
                 allocator,
             )
+
             mnemonic in COMPARISONS -> {
                 val right = state.pop(kind)
                 val left = state.pop(kind)
                 produce(instruction, index, FrameValueKind.INT, listOf(left, right), state, allocator)
             }
+
             mnemonic in SHIFT_OPERATORS -> {
                 val distance = state.pop(FrameValueKind.INT)
                 val value = state.pop(kind)
                 produce(instruction, index, kind, listOf(value, distance), state, allocator)
             }
+
             else -> {
                 val right = state.pop(kind)
                 val left = state.pop(kind)
@@ -260,11 +250,13 @@ class ValueFlowAnalyzer {
                 val left = state.pop(FrameValueKind.INT)
                 listOf(left.id, right.id)
             }
+
             mnemonic.startsWith("if_acmp") -> {
                 val right = state.pop(FrameValueKind.REFERENCE)
                 val left = state.pop(FrameValueKind.REFERENCE)
                 listOf(left.id, right.id)
             }
+
             mnemonic == "ifnull" || mnemonic == "ifnonnull" -> listOf(state.pop(FrameValueKind.REFERENCE).id)
             mnemonic.startsWith("if") -> listOf(state.pop(FrameValueKind.INT).id)
             else -> throw UnsupportedValueFlowInstructionException("Unsupported branch opcode '$mnemonic' at instruction $index.")
@@ -290,11 +282,13 @@ class ValueFlowAnalyzer {
                 state,
                 allocator,
             )
+
             "putfield" -> {
                 val value = state.pop(kind)
                 val receiver = state.pop(FrameValueKind.REFERENCE)
                 ValueOperation(index, instruction, listOf(receiver.id, value.id))
             }
+
             else -> unsupported(instruction, index)
         }
     }
@@ -346,81 +340,20 @@ class ValueFlowAnalyzer {
     }
 
     private fun executeStack(mnemonic: String, state: MutableValueState) {
-        when (mnemonic) {
-            "pop" -> requireCategory(state.popAny(), 1, mnemonic)
-            "pop2" -> {
-                val first = state.popAny()
-                if (first.kind.category == 1) requireCategory(state.popAny(), 1, mnemonic)
-            }
-            "dup" -> {
-                val a = requireCategory(state.popAny(), 1, mnemonic)
-                state.push(a); state.push(a)
-            }
-            "dup_x1" -> {
-                val a = requireCategory(state.popAny(), 1, mnemonic)
-                val b = requireCategory(state.popAny(), 1, mnemonic)
-                state.push(a); state.push(b); state.push(a)
-            }
-            "dup_x2" -> {
-                val a = requireCategory(state.popAny(), 1, mnemonic)
-                val b = state.popAny()
-                if (b.kind.category == 2) {
-                    state.push(a); state.push(b); state.push(a)
-                } else {
-                    val c = requireCategory(state.popAny(), 1, mnemonic)
-                    state.push(a); state.push(c); state.push(b); state.push(a)
-                }
-            }
-            "dup2" -> {
-                val a = state.popAny()
-                if (a.kind.category == 2) {
-                    state.push(a); state.push(a)
-                } else {
-                    val b = requireCategory(state.popAny(), 1, mnemonic)
-                    state.push(b); state.push(a); state.push(b); state.push(a)
-                }
-            }
-            "dup2_x1" -> {
-                val a = state.popAny()
-                if (a.kind.category == 2) {
-                    val b = requireCategory(state.popAny(), 1, mnemonic)
-                    state.push(a); state.push(b); state.push(a)
-                } else {
-                    val b = requireCategory(state.popAny(), 1, mnemonic)
-                    val c = requireCategory(state.popAny(), 1, mnemonic)
-                    state.push(b); state.push(a); state.push(c); state.push(b); state.push(a)
-                }
-            }
-            "dup2_x2" -> executeDup2X2(state)
-            "swap" -> {
-                val a = requireCategory(state.popAny(), 1, mnemonic)
-                val b = requireCategory(state.popAny(), 1, mnemonic)
-                state.push(a); state.push(b)
-            }
-            else -> throw UnsupportedValueFlowInstructionException("Unsupported stack opcode '$mnemonic'.")
-        }
-    }
-
-    private fun executeDup2X2(state: MutableValueState) {
-        val a = state.popAny()
-        if (a.kind.category == 2) {
-            val b = state.popAny()
-            if (b.kind.category == 2) {
-                state.push(a); state.push(b); state.push(a)
-            } else {
-                val c = requireCategory(state.popAny(), 1, "dup2_x2")
-                state.push(a); state.push(c); state.push(b); state.push(a)
-            }
-        } else {
-            val b = requireCategory(state.popAny(), 1, "dup2_x2")
-            val c = state.popAny()
-            if (c.kind.category == 2) {
-                state.push(b); state.push(a); state.push(c); state.push(b); state.push(a)
-            } else {
-                val d = requireCategory(state.popAny(), 1, "dup2_x2")
-                state.push(b); state.push(a); state.push(d); state.push(c); state.push(b); state.push(a)
-            }
-        }
+        JvmStackOperations.execute(
+            mnemonic = mnemonic,
+            pop = state::popAny,
+            push = state::push,
+            category = { it.kind.category },
+            invalidCategory = { opcode, expected, value ->
+                throw ValueFlowInconsistencyException(
+                    "Opcode $opcode requires category-$expected value, got ${value.kind}.",
+                )
+            },
+            unsupported = { opcode ->
+                throw UnsupportedValueFlowInstructionException("Unsupported stack opcode '$opcode'.")
+            },
+        )
     }
 
     private fun requireCategory(value: SymbolicValue, category: Int, mnemonic: String): SymbolicValue {

@@ -42,7 +42,7 @@ internal fun JvmComputationalType.toFrameValueKind(): FrameValueKind = when (thi
     JvmComputationalType.CHAR,
     JvmComputationalType.SHORT,
     JvmComputationalType.INT,
-    -> FrameValueKind.INT
+        -> FrameValueKind.INT
 
     JvmComputationalType.LONG -> FrameValueKind.LONG
     JvmComputationalType.FLOAT -> FrameValueKind.FLOAT
@@ -58,7 +58,7 @@ internal fun JvmType.toFrameValueKind(): FrameValueKind = when (this) {
     JvmType.CharType,
     JvmType.ShortType,
     JvmType.IntType,
-    -> FrameValueKind.INT
+        -> FrameValueKind.INT
 
     JvmType.LongType -> FrameValueKind.LONG
     JvmType.FloatType -> FrameValueKind.FLOAT

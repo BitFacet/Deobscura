@@ -1,25 +1,9 @@
 package io.github.relvl.deobscura.normalize
 
-import io.github.relvl.deobscura.cfg.BasicBlockId
-import io.github.relvl.deobscura.cfg.ControlFlowEdge
-import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
-import io.github.relvl.deobscura.cfg.ControlFlowGraph
-import io.github.relvl.deobscura.cfg.ControlFlowGraphBuilder
-import io.github.relvl.deobscura.raw.JvmComputationalType
-import io.github.relvl.deobscura.raw.JvmOpcode
-import io.github.relvl.deobscura.raw.RawBranchInstruction
-import io.github.relvl.deobscura.raw.RawConstantInstruction
-import io.github.relvl.deobscura.raw.RawCode
-import io.github.relvl.deobscura.raw.RawExceptionHandler
-import io.github.relvl.deobscura.raw.RawInstruction
-import io.github.relvl.deobscura.raw.RawLabel
-import io.github.relvl.deobscura.raw.RawLabelId
-import io.github.relvl.deobscura.raw.RawLineNumber
-import io.github.relvl.deobscura.raw.RawRetInstruction
-import io.github.relvl.deobscura.raw.RawSwitchCase
-import io.github.relvl.deobscura.raw.RawSwitchInstruction
+import io.github.relvl.deobscura.cfg.*
+import io.github.relvl.deobscura.raw.*
 import java.lang.constant.ConstantDescs
-import java.util.ArrayDeque
+import java.util.*
 
 /**
  * Expands legacy JSR/RET subroutines into ordinary control flow for later analyses.
@@ -83,9 +67,7 @@ class LegacySubroutineNormalizer(
         while (queue.isNotEmpty()) {
             val instance = queue.removeFirst()
             val block = graph.block(instance.block)
-            val terminator = code.instructions[block.endInstructionIndexExclusive - 1]
-
-            when (terminator) {
+            when (val terminator = code.instructions[block.endInstructionIndexExclusive - 1]) {
                 is RawRetInstruction -> {
                     val frame = instance.context.current
                         ?: throw LegacySubroutineNormalizationException(
@@ -171,6 +153,7 @@ class LegacySubroutineNormalizer(
                         )
                         RawBranchInstruction(JvmOpcode("goto"), instanceLabels.getValue(destination))
                     }
+
                     instruction is RawBranchInstruction && instruction.opcode.mnemonic in LEGACY_JSR_OPCODES -> {
                         val directEdge = ordinaryEdges(instance).singleOrNull { it.kind == ControlFlowEdgeKind.JUMP }
                             ?: throw LegacySubroutineNormalizationException(
@@ -189,15 +172,18 @@ class LegacySubroutineNormalizer(
                             instanceLabels.getValue(BlockInstance(directEdge.to, nestedContext)),
                         )
                     }
+
                     instruction is RawBranchInstruction -> instruction.copy(
                         target = remapTarget(instruction.target, instance.context),
                     )
+
                     instruction is RawSwitchInstruction -> instruction.copy(
                         defaultTarget = remapTarget(instruction.defaultTarget, instance.context),
                         cases = instruction.cases.map { case ->
                             RawSwitchCase(case.value, remapTarget(case.target, instance.context))
                         },
                     )
+
                     else -> instruction
                 }
                 instructions += rewritten
@@ -286,6 +272,7 @@ class LegacySubroutineNormalizer(
                     instanceLabels.getValue(BlockInstance(fallthrough.to, instance.context)),
                 )
             }
+
             else -> {
                 val fallthrough = ordinaryEdges.singleOrNull { it.kind == ControlFlowEdgeKind.FALLTHROUGH }
                     ?: return
@@ -320,7 +307,7 @@ class LegacySubroutineNormalizer(
 
     private fun RawCode.hasLegacySubroutines(): Boolean = instructions.any { instruction ->
         instruction is RawRetInstruction ||
-            instruction is RawBranchInstruction && instruction.opcode.mnemonic in LEGACY_JSR_OPCODES
+                instruction is RawBranchInstruction && instruction.opcode.mnemonic in LEGACY_JSR_OPCODES
     }
 
     private data class BlockInstance(

@@ -3,15 +3,41 @@ package io.github.relvl.deobscura.raw
 sealed interface JvmType {
     val descriptor: String
 
-    data object BooleanType : JvmType { override val descriptor = "Z" }
-    data object ByteType : JvmType { override val descriptor = "B" }
-    data object CharType : JvmType { override val descriptor = "C" }
-    data object ShortType : JvmType { override val descriptor = "S" }
-    data object IntType : JvmType { override val descriptor = "I" }
-    data object LongType : JvmType { override val descriptor = "J" }
-    data object FloatType : JvmType { override val descriptor = "F" }
-    data object DoubleType : JvmType { override val descriptor = "D" }
-    data object VoidType : JvmType { override val descriptor = "V" }
+    data object BooleanType : JvmType {
+        override val descriptor = "Z"
+    }
+
+    data object ByteType : JvmType {
+        override val descriptor = "B"
+    }
+
+    data object CharType : JvmType {
+        override val descriptor = "C"
+    }
+
+    data object ShortType : JvmType {
+        override val descriptor = "S"
+    }
+
+    data object IntType : JvmType {
+        override val descriptor = "I"
+    }
+
+    data object LongType : JvmType {
+        override val descriptor = "J"
+    }
+
+    data object FloatType : JvmType {
+        override val descriptor = "F"
+    }
+
+    data object DoubleType : JvmType {
+        override val descriptor = "D"
+    }
+
+    data object VoidType : JvmType {
+        override val descriptor = "V"
+    }
 
     data class ObjectType(val internalName: String) : JvmType {
         override val descriptor: String = "L$internalName;"
@@ -85,6 +111,7 @@ private class DescriptorCursor(private val descriptor: String) {
                 require(allowVoid) { "Void is not valid here in descriptor '$descriptor'." }
                 JvmType.VoidType
             }
+
             '[' -> JvmType.ArrayType(readType(allowVoid = false))
             'L' -> {
                 val end = descriptor.indexOf(';', index)
@@ -94,6 +121,7 @@ private class DescriptorCursor(private val descriptor: String) {
                 index = end + 1
                 JvmType.ObjectType(internalName)
             }
+
             else -> throw IllegalArgumentException("Unknown descriptor marker '$marker' in '$descriptor'.")
         }
     }

@@ -1,11 +1,7 @@
 package io.github.relvl.deobscura.analysis
 
 import io.github.relvl.deobscura.cfg.ControlFlowGraphBuilder
-import io.github.relvl.deobscura.raw.ClassImporter
-import io.github.relvl.deobscura.raw.LocalOperation
-import io.github.relvl.deobscura.raw.RawLocalInstruction
-import io.github.relvl.deobscura.raw.RawOperatorInstruction
-import io.github.relvl.deobscura.raw.RawStackInstruction
+import io.github.relvl.deobscura.raw.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -82,7 +78,7 @@ class ValueFlowAnalyzerTest {
         assertTrue(analysis.operations.none { it.instruction is RawStackInstruction })
     }
 
-    private fun importFixture(): io.github.relvl.deobscura.raw.RawClass {
+    private fun importFixture(): RawClass {
         val type = ValueFlowFixture::class.java
         val internalName = type.name.replace('.', '/')
         val bytes = requireNotNull(type.getResourceAsStream("/$internalName.class")).use { it.readAllBytes() }

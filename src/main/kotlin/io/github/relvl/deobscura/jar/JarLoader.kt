@@ -1,10 +1,14 @@
 package io.github.relvl.deobscura.jar
 
 import io.github.relvl.deobscura.config.ResolvedConfig
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import java.nio.file.Path
 import java.util.jar.JarFile
 
-class JarLoader {
+class JarLoader(
+    private val logger: Logger = LoggerFactory.getLogger(JarLoader::class.java),
+) {
     fun load(config: ResolvedConfig): JarLoadResult {
         val classes = linkedMapOf<String, LoadedClass>()
         val warnings = mutableListOf<String>()
@@ -70,7 +74,23 @@ class JarLoader {
             classpathOnlyClassCount = classpathOnlyClassCount,
             shadowedClasspathClassCount = shadowedClasspathClassCount,
             warnings = warnings,
+        ).also { result -> logLoadResult(result, config.classpath.size) }
+    }
+
+    private fun logLoadResult(result: JarLoadResult, classpathJarCount: Int) {
+        result.warnings.forEach { logger.warn(it) }
+        logger.info("Loaded {} classes from input JAR.", result.inputClassCount)
+        logger.info(
+            "Loaded {} classes from {} classpath JAR(s).",
+            result.classpathClassCount,
+            classpathJarCount,
         )
+        logger.info(
+            "Classpath contributed {} classes to the resolved set; {} classpath classes were shadowed by the input JAR.",
+            result.classpathOnlyClassCount,
+            result.shadowedClasspathClassCount,
+        )
+        logger.info("Application class set contains {} classes.", result.classes.size)
     }
 
     private fun loadJar(source: JarSource, runtimeVersion: Runtime.Version): List<LoadedClass> {
@@ -80,17 +100,16 @@ class JarLoader {
                 entries
                     .filter { entry ->
                         !entry.isDirectory &&
-                            entry.name.endsWith(CLASS_SUFFIX) &&
-                            (multiRelease || !entry.name.startsWith(MULTI_RELEASE_PREFIX))
+                                entry.name.endsWith(CLASS_SUFFIX) &&
+                                (multiRelease || !entry.name.startsWith(MULTI_RELEASE_PREFIX))
                     }
                     .map { entry ->
-                        val logicalEntryName = if (multiRelease) logicalMultiReleaseEntryName(entry.name) else entry.name
                         LoadedClass(
-                            internalName = logicalEntryName.removeSuffix(CLASS_SUFFIX),
+                            internalName = entry.name.removeSuffix(CLASS_SUFFIX),
                             bytes = jar.getInputStream(entry).use { it.readAllBytes() },
                             origin = ClassOrigin(
                                 jar = source.path,
-                                entry = entry.name,
+                                entry = entry.realName,
                                 role = source.role,
                             ),
                         )
@@ -98,11 +117,6 @@ class JarLoader {
                     .toList()
             }
         }
-    }
-
-    private fun logicalMultiReleaseEntryName(entryName: String): String {
-        val match = MULTI_RELEASE_ENTRY.matchEntire(entryName)
-        return match?.groupValues?.get(1) ?: entryName
     }
 
     private data class JarSource(
@@ -113,7 +127,6 @@ class JarLoader {
     private companion object {
         const val CLASS_SUFFIX = ".class"
         const val MULTI_RELEASE_PREFIX = "META-INF/versions/"
-        val MULTI_RELEASE_ENTRY = Regex("META-INF/versions/\\d+/(.+)")
     }
 }
 

@@ -1,39 +1,10 @@
 package io.github.relvl.deobscura.analysis
 
-import io.github.relvl.deobscura.cfg.BasicBlock
 import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
-import io.github.relvl.deobscura.raw.ArrayOperation
-import io.github.relvl.deobscura.raw.JvmComputationalType
-import io.github.relvl.deobscura.raw.JvmType
-import io.github.relvl.deobscura.raw.LocalOperation
-import io.github.relvl.deobscura.raw.RawArrayInstruction
-import io.github.relvl.deobscura.raw.RawBranchInstruction
-import io.github.relvl.deobscura.raw.RawConstantInstruction
-import io.github.relvl.deobscura.raw.RawConversionInstruction
-import io.github.relvl.deobscura.raw.RawExceptionHandler
-import io.github.relvl.deobscura.raw.RawFieldInstruction
-import io.github.relvl.deobscura.raw.RawIncrementInstruction
-import io.github.relvl.deobscura.raw.RawInstruction
-import io.github.relvl.deobscura.raw.RawInvokeDynamicInstruction
-import io.github.relvl.deobscura.raw.RawInvokeInstruction
-import io.github.relvl.deobscura.raw.RawLocalInstruction
-import io.github.relvl.deobscura.raw.RawMethod
-import io.github.relvl.deobscura.raw.RawMonitorInstruction
-import io.github.relvl.deobscura.raw.RawNewArrayInstruction
-import io.github.relvl.deobscura.raw.RawNewMultiArrayInstruction
-import io.github.relvl.deobscura.raw.RawNewObjectInstruction
-import io.github.relvl.deobscura.raw.RawNopInstruction
-import io.github.relvl.deobscura.raw.RawOperatorInstruction
-import io.github.relvl.deobscura.raw.RawRetInstruction
-import io.github.relvl.deobscura.raw.RawReturnInstruction
-import io.github.relvl.deobscura.raw.RawStackInstruction
-import io.github.relvl.deobscura.raw.RawSwitchInstruction
-import io.github.relvl.deobscura.raw.RawThrowInstruction
-import io.github.relvl.deobscura.raw.RawTypeCheckInstruction
-import io.github.relvl.deobscura.raw.RawUnknownInstruction
-import java.util.ArrayDeque
+import io.github.relvl.deobscura.raw.*
+import java.util.*
 
 class FrameAnalyzer {
     fun analyze(ownerInternalName: String, method: RawMethod, graph: ControlFlowGraph): FrameAnalysis {
@@ -148,7 +119,7 @@ class FrameAnalyzer {
                     if (expectedReturnSite !in returnSites) {
                         throw StackInconsistencyException(
                             "RET in block ${block.id.value} uses return-address local ${terminator.slot} for " +
-                                "$returnSites, expected $expectedReturnSite.",
+                                    "$returnSites, expected $expectedReturnSite.",
                         )
                     }
                     val returnBlock = blockForInstruction(graph, expectedReturnSite)
@@ -225,12 +196,14 @@ class FrameAnalyzer {
                 frame.requireLocal(instruction.slot, FrameValueKind.INT)
                 frame.writeLocal(instruction.slot, value(FrameValueKind.INT, index))
             }
+
             is RawArrayInstruction -> executeArray(instruction, index, frame)
             is RawOperatorInstruction -> executeOperator(instruction, index, frame)
             is RawConversionInstruction -> {
                 frame.pop(instruction.fromType.toFrameValueKind())
                 frame.push(value(instruction.toType.toFrameValueKind(), index))
             }
+
             is RawStackInstruction -> executeStack(instruction.opcode.mnemonic, frame)
             is RawBranchInstruction -> executeBranch(instruction.opcode.mnemonic, index, frame)
             is RawSwitchInstruction -> frame.pop(FrameValueKind.INT)
@@ -240,29 +213,36 @@ class FrameAnalyzer {
                 popArguments(instruction.type.parameterTypes, frame)
                 pushReturn(instruction.type.returnType, index, frame)
             }
+
             is RawNewObjectInstruction -> frame.push(value(FrameValueKind.REFERENCE, index))
             is RawNewArrayInstruction -> {
                 frame.pop(FrameValueKind.INT)
                 frame.push(value(FrameValueKind.REFERENCE, index))
             }
+
             is RawNewMultiArrayInstruction -> {
                 repeat(instruction.dimensions) { frame.pop(FrameValueKind.INT) }
                 frame.push(value(FrameValueKind.REFERENCE, index))
             }
+
             is RawTypeCheckInstruction -> when (instruction.opcode.mnemonic) {
                 "checkcast" -> {
                     frame.pop(FrameValueKind.REFERENCE)
                     frame.push(value(FrameValueKind.REFERENCE, index))
                 }
+
                 "instanceof" -> {
                     frame.pop(FrameValueKind.REFERENCE)
                     frame.push(value(FrameValueKind.INT, index))
                 }
+
                 else -> unsupported(instruction, index)
             }
+
             is RawReturnInstruction -> if (instruction.type != JvmComputationalType.VOID) {
                 frame.pop(instruction.type.toFrameValueKind())
             }
+
             is RawMonitorInstruction -> frame.pop(FrameValueKind.REFERENCE)
             is RawThrowInstruction -> frame.pop(FrameValueKind.REFERENCE)
             is RawNopInstruction -> Unit
@@ -300,6 +280,7 @@ class FrameAnalyzer {
                 frame.pop(FrameValueKind.REFERENCE)
                 frame.push(value(componentKind, index))
             }
+
             ArrayOperation.STORE -> {
                 frame.pop(componentKind)
                 frame.pop(FrameValueKind.INT)
@@ -316,20 +297,24 @@ class FrameAnalyzer {
                 frame.pop(FrameValueKind.REFERENCE)
                 frame.push(value(FrameValueKind.INT, index))
             }
+
             mnemonic.endsWith("neg") -> {
                 frame.pop(kind)
                 frame.push(value(kind, index))
             }
+
             mnemonic in COMPARISONS -> {
                 frame.pop(kind)
                 frame.pop(kind)
                 frame.push(value(FrameValueKind.INT, index))
             }
+
             mnemonic in SHIFT_OPERATORS -> {
                 frame.pop(FrameValueKind.INT)
                 frame.pop(kind)
                 frame.push(value(kind, index))
             }
+
             else -> {
                 frame.pop(kind)
                 frame.pop(kind)
@@ -339,82 +324,20 @@ class FrameAnalyzer {
     }
 
     private fun executeStack(mnemonic: String, frame: MutableFrame) {
-        when (mnemonic) {
-            "pop" -> requireCategory(frame.popAny(), 1, mnemonic)
-            "pop2" -> {
-                val first = frame.popAny()
-                if (first.kind.category == 1) requireCategory(frame.popAny(), 1, mnemonic)
-            }
-            "dup" -> {
-                val a = requireCategory(frame.popAny(), 1, mnemonic)
-                frame.push(a)
-                frame.push(a)
-            }
-            "dup_x1" -> {
-                val a = requireCategory(frame.popAny(), 1, mnemonic)
-                val b = requireCategory(frame.popAny(), 1, mnemonic)
-                frame.push(a); frame.push(b); frame.push(a)
-            }
-            "dup_x2" -> {
-                val a = requireCategory(frame.popAny(), 1, mnemonic)
-                val b = frame.popAny()
-                if (b.kind.category == 2) {
-                    frame.push(a); frame.push(b); frame.push(a)
-                } else {
-                    val c = requireCategory(frame.popAny(), 1, mnemonic)
-                    frame.push(a); frame.push(c); frame.push(b); frame.push(a)
-                }
-            }
-            "dup2" -> {
-                val a = frame.popAny()
-                if (a.kind.category == 2) {
-                    frame.push(a); frame.push(a)
-                } else {
-                    val b = requireCategory(frame.popAny(), 1, mnemonic)
-                    frame.push(b); frame.push(a); frame.push(b); frame.push(a)
-                }
-            }
-            "dup2_x1" -> {
-                val a = frame.popAny()
-                if (a.kind.category == 2) {
-                    val b = requireCategory(frame.popAny(), 1, mnemonic)
-                    frame.push(a); frame.push(b); frame.push(a)
-                } else {
-                    val b = requireCategory(frame.popAny(), 1, mnemonic)
-                    val c = requireCategory(frame.popAny(), 1, mnemonic)
-                    frame.push(b); frame.push(a); frame.push(c); frame.push(b); frame.push(a)
-                }
-            }
-            "dup2_x2" -> executeDup2X2(frame)
-            "swap" -> {
-                val a = requireCategory(frame.popAny(), 1, mnemonic)
-                val b = requireCategory(frame.popAny(), 1, mnemonic)
-                frame.push(a); frame.push(b)
-            }
-            else -> throw UnsupportedFrameInstructionException("Unsupported stack opcode '$mnemonic'.")
-        }
-    }
-
-    private fun executeDup2X2(frame: MutableFrame) {
-        val a = frame.popAny()
-        if (a.kind.category == 2) {
-            val b = frame.popAny()
-            if (b.kind.category == 2) {
-                frame.push(a); frame.push(b); frame.push(a)
-            } else {
-                val c = requireCategory(frame.popAny(), 1, "dup2_x2")
-                frame.push(a); frame.push(c); frame.push(b); frame.push(a)
-            }
-        } else {
-            val b = requireCategory(frame.popAny(), 1, "dup2_x2")
-            val c = frame.popAny()
-            if (c.kind.category == 2) {
-                frame.push(b); frame.push(a); frame.push(c); frame.push(b); frame.push(a)
-            } else {
-                val d = requireCategory(frame.popAny(), 1, "dup2_x2")
-                frame.push(b); frame.push(a); frame.push(d); frame.push(c); frame.push(b); frame.push(a)
-            }
-        }
+        JvmStackOperations.execute(
+            mnemonic = mnemonic,
+            pop = frame::popAny,
+            push = frame::push,
+            category = { it.kind.category },
+            invalidCategory = { opcode, expected, value ->
+                throw StackInconsistencyException(
+                    "Opcode $opcode requires category-$expected value, got ${value.kind}.",
+                )
+            },
+            unsupported = { opcode ->
+                throw UnsupportedFrameInstructionException("Unsupported stack opcode '$opcode'.")
+            },
+        )
     }
 
     private fun executeBranch(mnemonic: String, instructionIndex: Int, frame: MutableFrame) {
@@ -425,13 +348,16 @@ class FrameAnalyzer {
                     ValueOrigin.ReturnAddress(returnInstructionIndex = instructionIndex + 1),
                 ),
             )
+
             mnemonic in NO_STACK_BRANCHES -> Unit
             mnemonic.startsWith("if_icmp") -> {
                 frame.pop(FrameValueKind.INT); frame.pop(FrameValueKind.INT)
             }
+
             mnemonic.startsWith("if_acmp") -> {
                 frame.pop(FrameValueKind.REFERENCE); frame.pop(FrameValueKind.REFERENCE)
             }
+
             mnemonic == "ifnull" || mnemonic == "ifnonnull" -> frame.pop(FrameValueKind.REFERENCE)
             mnemonic.startsWith("if") -> frame.pop(FrameValueKind.INT)
             else -> throw UnsupportedFrameInstructionException("Unsupported branch opcode '$mnemonic'.")
@@ -447,10 +373,12 @@ class FrameAnalyzer {
                 frame.pop(FrameValueKind.REFERENCE)
                 frame.push(value(kind, index))
             }
+
             "putfield" -> {
                 frame.pop(kind)
                 frame.pop(FrameValueKind.REFERENCE)
             }
+
             else -> unsupported(instruction, index)
         }
     }

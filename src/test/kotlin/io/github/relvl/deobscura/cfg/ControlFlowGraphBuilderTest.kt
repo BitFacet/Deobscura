@@ -1,14 +1,6 @@
 package io.github.relvl.deobscura.cfg
 
-import io.github.relvl.deobscura.raw.JvmComputationalType
-import io.github.relvl.deobscura.raw.JvmOpcode
-import io.github.relvl.deobscura.raw.RawBranchInstruction
-import io.github.relvl.deobscura.raw.RawCode
-import io.github.relvl.deobscura.raw.RawExceptionHandler
-import io.github.relvl.deobscura.raw.RawLabel
-import io.github.relvl.deobscura.raw.RawLabelId
-import io.github.relvl.deobscura.raw.RawNopInstruction
-import io.github.relvl.deobscura.raw.RawReturnInstruction
+import io.github.relvl.deobscura.raw.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -92,7 +84,7 @@ class ControlFlowGraphBuilderTest {
     }
 
     private fun code(
-        instructions: List<io.github.relvl.deobscura.raw.RawInstruction>,
+        instructions: List<RawInstruction>,
         labels: List<RawLabel> = emptyList(),
         handlers: List<RawExceptionHandler> = emptyList(),
     ) = RawCode(

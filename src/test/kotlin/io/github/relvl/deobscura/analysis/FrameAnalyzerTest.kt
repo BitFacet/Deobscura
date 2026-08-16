@@ -1,21 +1,7 @@
 package io.github.relvl.deobscura.analysis
 
 import io.github.relvl.deobscura.cfg.ControlFlowGraphBuilder
-import io.github.relvl.deobscura.raw.ClassImporter
-import io.github.relvl.deobscura.raw.JvmComputationalType
-import io.github.relvl.deobscura.raw.JvmMethodDescriptor
-import io.github.relvl.deobscura.raw.JvmOpcode
-import io.github.relvl.deobscura.raw.LocalOperation
-import io.github.relvl.deobscura.raw.RawBranchInstruction
-import io.github.relvl.deobscura.raw.RawCode
-import io.github.relvl.deobscura.raw.RawLabel
-import io.github.relvl.deobscura.raw.RawLabelId
-import io.github.relvl.deobscura.raw.RawLocalInstruction
-import io.github.relvl.deobscura.raw.RawMethod
-import io.github.relvl.deobscura.raw.RawNewObjectInstruction
-import io.github.relvl.deobscura.raw.RawRetInstruction
-import io.github.relvl.deobscura.raw.RawReturnInstruction
-import io.github.relvl.deobscura.raw.RawStackInstruction
+import io.github.relvl.deobscura.raw.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -138,7 +124,7 @@ class FrameAnalyzerTest {
         assertEquals(FrameValueKind.INT, analysis.entryFrames.getValue(secondReturnSite.id).locals[1]?.kind)
     }
 
-    private fun importFixture(): io.github.relvl.deobscura.raw.RawClass {
+    private fun importFixture(): RawClass {
         val type = FrameFixture::class.java
         val internalName = type.name.replace('.', '/')
         val bytes = requireNotNull(type.getResourceAsStream("/$internalName.class")).use { it.readAllBytes() }

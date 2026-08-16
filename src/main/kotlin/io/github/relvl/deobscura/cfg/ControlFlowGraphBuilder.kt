@@ -1,13 +1,7 @@
 package io.github.relvl.deobscura.cfg
 
-import io.github.relvl.deobscura.raw.RawBranchInstruction
-import io.github.relvl.deobscura.raw.RawCode
-import io.github.relvl.deobscura.raw.RawLabelId
-import io.github.relvl.deobscura.raw.RawRetInstruction
-import io.github.relvl.deobscura.raw.RawReturnInstruction
-import io.github.relvl.deobscura.raw.RawSwitchInstruction
-import io.github.relvl.deobscura.raw.RawThrowInstruction
-import java.util.ArrayDeque
+import io.github.relvl.deobscura.raw.*
+import java.util.*
 
 class ControlFlowGraphBuilder {
     fun build(code: RawCode): ControlFlowGraph {
@@ -104,8 +98,7 @@ class ControlFlowGraphBuilder {
         }
 
         mutableBlocks.forEachIndexed { blockIndex, block ->
-            val lastInstruction = code.instructions[block.endExclusive - 1]
-            when (lastInstruction) {
+            when (val lastInstruction = code.instructions[block.endExclusive - 1]) {
                 is RawSwitchInstruction -> {
                     addEdge(
                         ControlFlowEdge(

@@ -6,7 +6,7 @@ import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.raw.RawBranchInstruction
 import io.github.relvl.deobscura.raw.RawSwitchInstruction
-import java.util.ArrayDeque
+import java.util.*
 
 /**
  * Resolves conditional branches and switches whose operands are known numeric SSA constants.
@@ -36,8 +36,8 @@ class SsaConstantBranchAnalyzer {
                         ?: return@forEach
                     val outgoing = graph.edges.filter {
                         it.from == block.id &&
-                            it.kind != ControlFlowEdgeKind.EXCEPTION &&
-                            it !in previouslyEliminatedEdges
+                                it.kind != ControlFlowEdgeKind.EXCEPTION &&
+                                it !in previouslyEliminatedEdges
                     }
                     val retainedKind = if (taken) ControlFlowEdgeKind.CONDITIONAL else ControlFlowEdgeKind.FALLTHROUGH
                     if (outgoing.none { it.kind == retainedKind }) return@forEach
@@ -53,8 +53,8 @@ class SsaConstantBranchAnalyzer {
                         ?: return@forEach
                     val outgoing = graph.edges.filter {
                         it.from == block.id &&
-                            it.kind == ControlFlowEdgeKind.SWITCH &&
-                            it !in previouslyEliminatedEdges
+                                it.kind == ControlFlowEdgeKind.SWITCH &&
+                                it !in previouslyEliminatedEdges
                     }
                     val matchingCase = outgoing.firstOrNull { it.switchValue == selector.value }
                     val retained = matchingCase ?: outgoing.firstOrNull { it.switchValue == null } ?: return@forEach

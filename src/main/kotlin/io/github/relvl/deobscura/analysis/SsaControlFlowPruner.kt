@@ -3,7 +3,7 @@ package io.github.relvl.deobscura.analysis
 import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
-import java.util.ArrayDeque
+import java.util.*
 
 /**
  * Applies an analysis-only constant-branch result to SSA.
@@ -127,6 +127,7 @@ class SsaControlFlowPruner {
                         ?: throw SsaInconsistencyException("Kept SSA value ${id.value} has no retained phi node.")
                     definition.copy(inputs = phi.inputs)
                 }
+
                 else -> definition
             }
         }

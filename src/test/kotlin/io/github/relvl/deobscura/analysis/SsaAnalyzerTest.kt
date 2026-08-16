@@ -1,11 +1,6 @@
 package io.github.relvl.deobscura.analysis
 
-import io.github.relvl.deobscura.cfg.BasicBlock
-import io.github.relvl.deobscura.cfg.BasicBlockId
-import io.github.relvl.deobscura.cfg.ControlFlowEdge
-import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
-import io.github.relvl.deobscura.cfg.ControlFlowGraph
-import io.github.relvl.deobscura.cfg.ControlFlowGraphBuilder
+import io.github.relvl.deobscura.cfg.*
 import io.github.relvl.deobscura.raw.ClassImporter
 import io.github.relvl.deobscura.raw.RawCode
 import io.github.relvl.deobscura.raw.RawLocalInstruction

@@ -75,12 +75,12 @@ class SsaOptimizer(
             conservativelyRetainedPhiCount += pruning.conservativelyRetainedPhiCount
 
             val changed = branches.newlyEliminatedEdgeCount > 0 ||
-                pruning.removedOperationCount > 0 ||
-                pruning.removedValueCount > 0 ||
-                pruning.removedPhiNodeCount > 0 ||
-                pruning.removedPhiInputCount > 0 ||
-                simplification.propagatedAliasCount > 0 ||
-                simplification.removedPhiCount > 0
+                    pruning.removedOperationCount > 0 ||
+                    pruning.removedValueCount > 0 ||
+                    pruning.removedPhiNodeCount > 0 ||
+                    pruning.removedPhiInputCount > 0 ||
+                    simplification.propagatedAliasCount > 0 ||
+                    simplification.removedPhiCount > 0
 
             analysis = simplification.analysis
             eliminatedEdges = branches.eliminatedEdges
@@ -94,24 +94,26 @@ class SsaOptimizer(
 
         return SsaOptimizationResult(
             analysis = analysis,
-            iterationCount = iterationCount,
             eliminatedEdges = eliminatedEdges,
-            propagatedAliasCount = propagatedAliasCount,
-            removedPhiNodeCount = removedPhiNodeCount,
-            resolvedConditionalBranchCount = resolvedConditionalBranchCount,
-            resolvedSwitchCount = resolvedSwitchCount,
-            newlyUnreachableBlockCount = newlyUnreachableBlockCount,
-            removedOperationCount = removedOperationCount,
-            removedValueCount = removedValueCount,
-            removedPhiInputCount = removedPhiInputCount,
-            constantValueCount = finalConstantValueCount,
-            literalConstantCount = finalLiteralConstantCount,
-            foldedConstantOperationCount = finalFoldedOperationCount,
-            constantPhiCount = finalConstantPhiCount,
-            newlyExposedConstantCount = newlyExposedConstantCount,
-            retainedUnreachableOperationCount = retainedUnreachableOperationCount,
-            retainedUnreachablePhiCount = retainedUnreachablePhiCount,
-            conservativelyRetainedPhiCount = conservativelyRetainedPhiCount,
+            stats = SsaOptimizationStats(
+                iterationCount = iterationCount,
+                propagatedAliasCount = propagatedAliasCount,
+                removedPhiNodeCount = removedPhiNodeCount,
+                resolvedConditionalBranchCount = resolvedConditionalBranchCount,
+                resolvedSwitchCount = resolvedSwitchCount,
+                newlyUnreachableBlockCount = newlyUnreachableBlockCount,
+                removedOperationCount = removedOperationCount,
+                removedValueCount = removedValueCount,
+                removedPhiInputCount = removedPhiInputCount,
+                constantValueCount = finalConstantValueCount,
+                literalConstantCount = finalLiteralConstantCount,
+                foldedConstantOperationCount = finalFoldedOperationCount,
+                constantPhiCount = finalConstantPhiCount,
+                newlyExposedConstantCount = newlyExposedConstantCount,
+                retainedUnreachableOperationCount = retainedUnreachableOperationCount,
+                retainedUnreachablePhiCount = retainedUnreachablePhiCount,
+                conservativelyRetainedPhiCount = conservativelyRetainedPhiCount,
+            ),
         )
     }
 
@@ -122,8 +124,12 @@ class SsaOptimizer(
 
 data class SsaOptimizationResult(
     val analysis: SsaAnalysis,
-    val iterationCount: Int,
     val eliminatedEdges: Set<ControlFlowEdge>,
+    val stats: SsaOptimizationStats,
+)
+
+data class SsaOptimizationStats(
+    val iterationCount: Int,
     val propagatedAliasCount: Int,
     val removedPhiNodeCount: Int,
     val resolvedConditionalBranchCount: Int,
@@ -140,7 +146,4 @@ data class SsaOptimizationResult(
     val retainedUnreachableOperationCount: Int,
     val retainedUnreachablePhiCount: Int,
     val conservativelyRetainedPhiCount: Int,
-) {
-    val eliminatedEdgeCount: Int
-        get() = eliminatedEdges.size
-}
+)

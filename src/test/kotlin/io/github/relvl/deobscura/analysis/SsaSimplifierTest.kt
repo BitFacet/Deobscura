@@ -4,11 +4,7 @@ import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.raw.JvmComputationalType
 import io.github.relvl.deobscura.raw.JvmOpcode
 import io.github.relvl.deobscura.raw.RawOperatorInstruction
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertSame
-import kotlin.test.assertTrue
+import kotlin.test.*
 
 class SsaSimplifierTest {
     private val simplifier = SsaSimplifier()

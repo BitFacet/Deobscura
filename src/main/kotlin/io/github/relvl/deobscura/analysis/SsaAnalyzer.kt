@@ -55,6 +55,7 @@ class SsaAnalyzer {
                     definition.kind,
                     definition.instructionIndex,
                 )
+
                 is ValueDefinition.Merge -> {
                     val location = when (val site = definition.site) {
                         is ValueMergeSite.Local -> SsaPhiLocation.Local(site.slot)

@@ -3,25 +3,8 @@ package io.github.relvl.deobscura.normalize
 import io.github.relvl.deobscura.analysis.FrameAnalyzer
 import io.github.relvl.deobscura.analysis.FrameValueKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraphBuilder
-import io.github.relvl.deobscura.raw.JvmComputationalType
-import io.github.relvl.deobscura.raw.JvmMethodDescriptor
-import io.github.relvl.deobscura.raw.JvmOpcode
-import io.github.relvl.deobscura.raw.LocalOperation
-import io.github.relvl.deobscura.raw.RawBranchInstruction
-import io.github.relvl.deobscura.raw.RawCode
-import io.github.relvl.deobscura.raw.RawLabel
-import io.github.relvl.deobscura.raw.RawLabelId
-import io.github.relvl.deobscura.raw.RawLocalInstruction
-import io.github.relvl.deobscura.raw.RawMethod
-import io.github.relvl.deobscura.raw.RawNewObjectInstruction
-import io.github.relvl.deobscura.raw.RawRetInstruction
-import io.github.relvl.deobscura.raw.RawReturnInstruction
-import io.github.relvl.deobscura.raw.RawStackInstruction
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertSame
-import kotlin.test.assertTrue
+import io.github.relvl.deobscura.raw.*
+import kotlin.test.*
 
 class LegacySubroutineNormalizerTest {
     private val normalizer = LegacySubroutineNormalizer()
@@ -98,11 +81,11 @@ class LegacySubroutineNormalizerTest {
 
         val referenceLoadBlock = graph.blocks.single { block ->
             result.code.instructions[block.startInstructionIndex] is RawLocalInstruction &&
-                (result.code.instructions[block.startInstructionIndex] as RawLocalInstruction).opcode.mnemonic == "aload"
+                    (result.code.instructions[block.startInstructionIndex] as RawLocalInstruction).opcode.mnemonic == "aload"
         }
         val intLoadBlocks = graph.blocks.filter { block ->
             result.code.instructions[block.startInstructionIndex] is RawLocalInstruction &&
-                (result.code.instructions[block.startInstructionIndex] as RawLocalInstruction).opcode.mnemonic == "iload"
+                    (result.code.instructions[block.startInstructionIndex] as RawLocalInstruction).opcode.mnemonic == "iload"
         }
         val secondReturnSite = intLoadBlocks.last()
 

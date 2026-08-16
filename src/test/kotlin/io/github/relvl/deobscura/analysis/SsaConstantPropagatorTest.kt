@@ -1,11 +1,8 @@
 package io.github.relvl.deobscura.analysis
 
 import io.github.relvl.deobscura.cfg.BasicBlockId
-import io.github.relvl.deobscura.raw.JvmComputationalType
-import io.github.relvl.deobscura.raw.JvmOpcode
-import io.github.relvl.deobscura.raw.RawConstantInstruction
-import io.github.relvl.deobscura.raw.RawConversionInstruction
-import io.github.relvl.deobscura.raw.RawOperatorInstruction
+import io.github.relvl.deobscura.raw.*
+import java.lang.constant.ConstantDesc
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -119,14 +116,14 @@ class SsaConstantPropagatorTest {
 
     private fun constant(index: Int, output: ValueId, value: Int) = ValueOperation(
         instructionIndex = index,
-        instruction = RawConstantInstruction(JvmOpcode("iconst"), JvmComputationalType.INT, value),
+        instruction = RawConstantInstruction(JvmOpcode("iconst"), JvmComputationalType.INT, constantDesc(value)),
         inputs = emptyList(),
         output = output,
     )
 
     private fun constant(index: Int, output: ValueId, value: Float) = ValueOperation(
         instructionIndex = index,
-        instruction = RawConstantInstruction(JvmOpcode("fconst"), JvmComputationalType.FLOAT, value),
+        instruction = RawConstantInstruction(JvmOpcode("fconst"), JvmComputationalType.FLOAT, constantDesc(value)),
         inputs = emptyList(),
         output = output,
     )
@@ -136,13 +133,16 @@ class SsaConstantPropagatorTest {
         output: ValueId,
         mnemonic: String,
         type: JvmComputationalType,
-        vararg inputs: ValueId,
+        left: ValueId,
+        right: ValueId,
     ) = ValueOperation(
         instructionIndex = index,
         instruction = RawOperatorInstruction(JvmOpcode(mnemonic), type),
-        inputs = inputs.toList(),
+        inputs = listOf(left, right),
         output = output,
     )
+
+    private fun constantDesc(value: Any): ConstantDesc = value as ConstantDesc
 
     private fun analysisOf(
         definitions: List<SsaValueDefinition>,

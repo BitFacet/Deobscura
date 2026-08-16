@@ -1,17 +1,8 @@
 package io.github.relvl.deobscura.analysis
 
-import io.github.relvl.deobscura.cfg.BasicBlock
-import io.github.relvl.deobscura.cfg.BasicBlockId
-import io.github.relvl.deobscura.cfg.ControlFlowEdge
-import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
-import io.github.relvl.deobscura.cfg.ControlFlowGraph
-import io.github.relvl.deobscura.raw.JvmComputationalType
-import io.github.relvl.deobscura.raw.JvmOpcode
-import io.github.relvl.deobscura.raw.RawBranchInstruction
-import io.github.relvl.deobscura.raw.RawCode
-import io.github.relvl.deobscura.raw.RawConstantInstruction
-import io.github.relvl.deobscura.raw.RawLabelId
-import io.github.relvl.deobscura.raw.RawNopInstruction
+import io.github.relvl.deobscura.cfg.*
+import io.github.relvl.deobscura.raw.*
+import java.lang.constant.ConstantDesc
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -87,11 +78,11 @@ class SsaOptimizerTest {
 
         val result = optimizer.optimize(graph, analysis)
 
-        assertEquals(3, result.iterationCount)
-        assertEquals(2, result.resolvedConditionalBranchCount)
-        assertEquals(2, result.eliminatedEdgeCount)
-        assertEquals(2, result.newlyUnreachableBlockCount)
-        assertEquals(1, result.propagatedAliasCount)
+        assertEquals(3, result.stats.iterationCount)
+        assertEquals(2, result.stats.resolvedConditionalBranchCount)
+        assertEquals(2, result.eliminatedEdges.size)
+        assertEquals(2, result.stats.newlyUnreachableBlockCount)
+        assertEquals(1, result.stats.propagatedAliasCount)
         assertFalse(phi in result.analysis.values)
         assertFalse(right in result.analysis.values)
         assertEquals(listOf(left), result.analysis.operations.single { it.instructionIndex == 6 }.inputs)
@@ -128,7 +119,9 @@ class SsaOptimizerTest {
     }
 
     private fun constantInstruction(value: Int) =
-        RawConstantInstruction(JvmOpcode("iconst"), JvmComputationalType.INT, value)
+        RawConstantInstruction(JvmOpcode("iconst"), JvmComputationalType.INT, constantDesc(value))
+
+    private fun constantDesc(value: Any): ConstantDesc = value as ConstantDesc
 
     private fun constantOperation(index: Int, output: ValueId, value: Int) = ValueOperation(
         instructionIndex = index,

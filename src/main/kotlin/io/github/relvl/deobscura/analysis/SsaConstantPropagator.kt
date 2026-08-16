@@ -90,21 +90,23 @@ class SsaConstantPropagator {
         operation: ValueOperation,
         constants: Map<ValueId, SsaConstant>,
     ): SsaConstant? {
-        val instruction = operation.instruction
-        return when (instruction) {
+        return when (val instruction = operation.instruction) {
             is RawConstantInstruction -> numericConstant(instruction.value)
             is RawIncrementInstruction -> {
                 val input = operation.inputs.singleOrNull()?.let(constants::get) as? SsaConstant.IntValue ?: return null
                 SsaConstant.IntValue(input.value + instruction.amount)
             }
+
             is RawConversionInstruction -> {
                 val input = operation.inputs.singleOrNull()?.let(constants::get) ?: return null
                 evaluateConversion(instruction.opcode.mnemonic, input)
             }
+
             is RawOperatorInstruction -> {
                 val inputs = operation.inputs.map { constants[it] ?: return null }
                 evaluateOperator(instruction.opcode.mnemonic, inputs)
             }
+
             else -> null
         }
     }
@@ -286,8 +288,10 @@ class SsaConstantPropagator {
     private fun sameConstant(left: SsaConstant, right: SsaConstant): Boolean = when {
         left is SsaConstant.FloatValue && right is SsaConstant.FloatValue ->
             left.value.toRawBits() == right.value.toRawBits()
+
         left is SsaConstant.DoubleValue && right is SsaConstant.DoubleValue ->
             left.value.toRawBits() == right.value.toRawBits()
+
         else -> left == right
     }
 }

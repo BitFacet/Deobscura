@@ -2,42 +2,16 @@ package io.github.relvl.deobscura.raw
 
 import io.github.relvl.deobscura.jar.JarLoadResult
 import io.github.relvl.deobscura.jar.JarRole
-import java.lang.classfile.Attributes
-import java.lang.classfile.ClassFile
-import java.lang.classfile.CodeModel
+import java.lang.classfile.*
 import java.lang.classfile.attribute.CodeAttribute
-import java.lang.classfile.Instruction
-import java.lang.classfile.Label
-import java.lang.classfile.instruction.ArrayLoadInstruction
-import java.lang.classfile.instruction.ArrayStoreInstruction
-import java.lang.classfile.instruction.BranchInstruction
-import java.lang.classfile.instruction.ConstantInstruction
-import java.lang.classfile.instruction.ConvertInstruction
-import java.lang.classfile.instruction.DiscontinuedInstruction
-import java.lang.classfile.instruction.FieldInstruction
-import java.lang.classfile.instruction.IncrementInstruction
-import java.lang.classfile.instruction.InvokeDynamicInstruction
-import java.lang.classfile.instruction.InvokeInstruction
-import java.lang.classfile.instruction.LabelTarget
-import java.lang.classfile.instruction.LineNumber
-import java.lang.classfile.instruction.LoadInstruction
-import java.lang.classfile.instruction.LookupSwitchInstruction
-import java.lang.classfile.instruction.MonitorInstruction
-import java.lang.classfile.instruction.NewMultiArrayInstruction
-import java.lang.classfile.instruction.NewObjectInstruction
-import java.lang.classfile.instruction.NewPrimitiveArrayInstruction
-import java.lang.classfile.instruction.NewReferenceArrayInstruction
-import java.lang.classfile.instruction.NopInstruction
-import java.lang.classfile.instruction.OperatorInstruction
-import java.lang.classfile.instruction.ReturnInstruction
-import java.lang.classfile.instruction.StackInstruction
-import java.lang.classfile.instruction.StoreInstruction
-import java.lang.classfile.instruction.TableSwitchInstruction
-import java.lang.classfile.instruction.ThrowInstruction
-import java.lang.classfile.instruction.TypeCheckInstruction
-import java.util.IdentityHashMap
+import java.lang.classfile.instruction.*
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
+import java.util.*
 
-class ClassImporter {
+class ClassImporter(
+    private val logger: Logger = LoggerFactory.getLogger(ClassImporter::class.java),
+) {
     private val classFile = ClassFile.of()
 
     fun importInput(jarLoadResult: JarLoadResult): RawImportResult {
@@ -79,6 +53,29 @@ class ClassImporter {
             unknownInstructionCount = unknownInstructionCount,
             parseFailureCount = jarLoadResult.inputClassCount - classes.size,
             warnings = warnings,
+        ).also(::logImportResult)
+    }
+
+    private fun logImportResult(result: RawImportResult) {
+        result.warnings.forEach { logger.warn(it) }
+        if (result.unknownInstructionCount > 0) {
+            logger.warn(
+                "Raw importer encountered {} instruction(s) with an unknown representation.",
+                result.unknownInstructionCount,
+            )
+        }
+        logger.info(
+            "Imported {} input classes into raw model: {} fields, {} methods ({} with code), {} instructions.",
+            result.classes.size,
+            result.fieldCount,
+            result.methodCount,
+            result.methodsWithCode,
+            result.instructionCount,
+        )
+        logger.info(
+            "Raw import completed with {} parse failure(s) and {} unknown instruction(s).",
+            result.parseFailureCount,
+            result.unknownInstructionCount,
         )
     }
 
@@ -170,35 +167,41 @@ class ClassImporter {
                 instruction.typeKind().toRawType(),
                 instruction.constantValue(),
             )
+
             is LoadInstruction -> RawLocalInstruction(
                 opcode,
                 LocalOperation.LOAD,
                 instruction.typeKind().toRawType(),
                 instruction.slot(),
             )
+
             is StoreInstruction -> RawLocalInstruction(
                 opcode,
                 LocalOperation.STORE,
                 instruction.typeKind().toRawType(),
                 instruction.slot(),
             )
+
             is IncrementInstruction -> RawIncrementInstruction(opcode, instruction.slot(), instruction.constant())
             is ArrayLoadInstruction -> RawArrayInstruction(
                 opcode,
                 ArrayOperation.LOAD,
                 instruction.typeKind().toRawType(),
             )
+
             is ArrayStoreInstruction -> RawArrayInstruction(
                 opcode,
                 ArrayOperation.STORE,
                 instruction.typeKind().toRawType(),
             )
+
             is OperatorInstruction -> RawOperatorInstruction(opcode, instruction.typeKind().toRawType())
             is ConvertInstruction -> RawConversionInstruction(
                 opcode,
                 instruction.fromType().toRawType(),
                 instruction.toType().toRawType(),
             )
+
             is StackInstruction -> RawStackInstruction(opcode)
             is BranchInstruction -> RawBranchInstruction(opcode, labels.id(instruction.target()))
             is LookupSwitchInstruction -> RawSwitchInstruction(
@@ -206,6 +209,7 @@ class ClassImporter {
                 defaultTarget = labels.id(instruction.defaultTarget()),
                 cases = instruction.cases().map { RawSwitchCase(it.caseValue(), labels.id(it.target())) },
             )
+
             is TableSwitchInstruction -> RawSwitchInstruction(
                 opcode = opcode,
                 defaultTarget = labels.id(instruction.defaultTarget()),
@@ -213,6 +217,7 @@ class ClassImporter {
                 lowValue = instruction.lowValue(),
                 highValue = instruction.highValue(),
             )
+
             is FieldInstruction -> {
                 val descriptor = instruction.type().stringValue()
                 RawFieldInstruction(
@@ -223,6 +228,7 @@ class ClassImporter {
                     type = JvmType.parse(descriptor),
                 )
             }
+
             is InvokeInstruction -> {
                 val descriptor = instruction.type().stringValue()
                 RawInvokeInstruction(
@@ -231,9 +237,10 @@ class ClassImporter {
                     name = instruction.name().stringValue(),
                     descriptor = descriptor,
                     type = JvmMethodDescriptor.parse(descriptor),
-                    isInterface = instruction.isInterface(),
+                    isInterface = instruction.isInterface,
                 )
             }
+
             is InvokeDynamicInstruction -> {
                 val descriptor = instruction.type().stringValue()
                 RawInvokeDynamicInstruction(
@@ -245,15 +252,18 @@ class ClassImporter {
                     bootstrapArguments = instruction.bootstrapArgs(),
                 )
             }
+
             is NewObjectInstruction -> RawNewObjectInstruction(opcode, instruction.className().asInternalName())
             is NewPrimitiveArrayInstruction -> RawNewArrayInstruction(
                 opcode,
                 instruction.typeKind().toJvmType(),
             )
+
             is NewReferenceArrayInstruction -> RawNewArrayInstruction(
                 opcode,
                 JvmType.ObjectType(instruction.componentType().asInternalName()),
             )
+
             is NewMultiArrayInstruction -> {
                 val arrayType = JvmType.parse(instruction.arrayType().asInternalName())
                 require(arrayType is JvmType.ArrayType) {
@@ -261,10 +271,12 @@ class ClassImporter {
                 }
                 RawNewMultiArrayInstruction(opcode, arrayType, instruction.dimensions())
             }
+
             is TypeCheckInstruction -> RawTypeCheckInstruction(
                 opcode,
                 classEntryToJvmType(instruction.type().asInternalName()),
             )
+
             is ReturnInstruction -> RawReturnInstruction(opcode, instruction.typeKind().toRawType())
             is MonitorInstruction -> RawMonitorInstruction(opcode)
             is ThrowInstruction -> RawThrowInstruction(opcode)
@@ -275,10 +287,10 @@ class ClassImporter {
         }
     }
 
-    private fun java.lang.classfile.TypeKind.toRawType(): JvmComputationalType =
+    private fun TypeKind.toRawType(): JvmComputationalType =
         JvmComputationalType.fromClassFileName(name)
 
-    private fun java.lang.classfile.TypeKind.toJvmType(): JvmType = when (name) {
+    private fun TypeKind.toJvmType(): JvmType = when (name) {
         "BOOLEAN" -> JvmType.BooleanType
         "BYTE" -> JvmType.ByteType
         "CHAR" -> JvmType.CharType
