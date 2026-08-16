@@ -82,6 +82,17 @@ class SsaSimplifier {
             operation.copy(inputs = operation.inputs.map(::resolve))
         }
         val uses = buildUses(values, operations, phiNodes)
+        val constants = linkedMapOf<ValueId, SsaConstant>()
+        analysis.constants.forEach { (id, constant) ->
+            val canonical = resolve(id)
+            if (canonical !in values) return@forEach
+            val previous = constants.putIfAbsent(canonical, constant)
+            if (previous != null && previous != constant) {
+                throw SsaInconsistencyException(
+                    "SSA simplification merged conflicting constants for value ${canonical.value}.",
+                )
+            }
+        }
 
         return SsaSimplificationResult(
             analysis = analysis.copy(
@@ -89,6 +100,7 @@ class SsaSimplifier {
                 operations = operations,
                 phiNodes = phiNodes,
                 uses = uses,
+                constants = constants,
             ),
             propagatedAliasCount = aliases.size,
             removedPhiCount = analysis.phiNodes.size - phiNodes.size,

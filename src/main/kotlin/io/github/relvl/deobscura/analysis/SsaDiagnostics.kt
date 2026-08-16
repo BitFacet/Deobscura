@@ -10,7 +10,7 @@ class SsaDiagnostics(
     private val frameAnalyzer: FrameAnalyzer = FrameAnalyzer(),
     private val valueFlowAnalyzer: ValueFlowAnalyzer = ValueFlowAnalyzer(),
     private val ssaAnalyzer: SsaAnalyzer = SsaAnalyzer(),
-    private val ssaSimplifier: SsaSimplifier = SsaSimplifier(),
+    private val ssaOptimizer: SsaOptimizer = SsaOptimizer(),
     private val legacySubroutineNormalizer: LegacySubroutineNormalizer = LegacySubroutineNormalizer(),
 ) {
     fun inspect(rawImport: RawImportResult): SsaDiagnosticsResult {
@@ -33,8 +33,25 @@ class SsaDiagnostics(
         var maxPhiNodesPerBlock = 0
         var useEdgeCount = 0L
         var eliminatedLocalInstructionCount = 0L
+        var maxOptimizationIterationCount = 0
+        var multiIterationMethodCount = 0
         var propagatedAliasCount = 0L
-        var simplifiedPhiCount = 0L
+        var constantValueCount = 0L
+        var literalConstantCount = 0L
+        var foldedConstantOperationCount = 0L
+        var constantPhiCount = 0L
+        var newlyExposedConstantCount = 0L
+        var resolvedConstantBranchCount = 0L
+        var resolvedConstantSwitchCount = 0L
+        var eliminatedConstantEdgeCount = 0L
+        var constantNewlyUnreachableBlockCount = 0L
+        var prunedOperationCount = 0L
+        var prunedPhiNodeCount = 0L
+        var prunedPhiInputCount = 0L
+        var prunedValueCount = 0L
+        var retainedExceptionalProvenanceOperationCount = 0L
+        var retainedExceptionalProvenancePhiCount = 0L
+        var conservativelyRetainedPhiCount = 0L
         var inconsistencyCount = 0
         var failureCount = 0
         val warnings = mutableListOf<String>()
@@ -51,19 +68,35 @@ class SsaDiagnostics(
                     val frames = frameAnalyzer.analyze(rawClass.internalName, normalizedMethod, graph)
                     val valueFlow = valueFlowAnalyzer.analyze(graph, frames)
                     val initialAnalysis = ssaAnalyzer.analyze(graph, valueFlow)
-                    val simplification = ssaSimplifier.simplify(initialAnalysis)
-                    val analysis = simplification.analysis
-                    propagatedAliasCount += simplification.propagatedAliasCount
-                    simplifiedPhiCount += simplification.removedPhiCount
-                    valueCount += analysis.values.size
-                    operationCount += analysis.operations.size
-                    phiCount += analysis.phiNodes.size
-                    localPhiCount += analysis.localPhiCount
-                    stackPhiCount += analysis.stackPhiCount
-                    phiBlockCount += analysis.phiBlockCount
-                    trivialPhiCount += analysis.trivialPhiCount
+                    val optimization = ssaOptimizer.optimize(graph, initialAnalysis)
+                    maxOptimizationIterationCount = maxOf(maxOptimizationIterationCount, optimization.iterationCount)
+                    if (optimization.iterationCount > 1) multiIterationMethodCount++
+                    propagatedAliasCount += optimization.propagatedAliasCount
+                    constantValueCount += optimization.constantValueCount
+                    literalConstantCount += optimization.literalConstantCount
+                    foldedConstantOperationCount += optimization.foldedConstantOperationCount
+                    constantPhiCount += optimization.constantPhiCount
+                    newlyExposedConstantCount += optimization.newlyExposedConstantCount
+                    resolvedConstantBranchCount += optimization.resolvedConditionalBranchCount
+                    resolvedConstantSwitchCount += optimization.resolvedSwitchCount
+                    eliminatedConstantEdgeCount += optimization.eliminatedEdgeCount
+                    constantNewlyUnreachableBlockCount += optimization.newlyUnreachableBlockCount
+                    prunedOperationCount += optimization.removedOperationCount
+                    prunedPhiNodeCount += optimization.removedPhiNodeCount
+                    prunedPhiInputCount += optimization.removedPhiInputCount
+                    prunedValueCount += optimization.removedValueCount
+                    retainedExceptionalProvenanceOperationCount += optimization.retainedUnreachableOperationCount
+                    retainedExceptionalProvenancePhiCount += optimization.retainedUnreachablePhiCount
+                    conservativelyRetainedPhiCount += optimization.conservativelyRetainedPhiCount
+                    valueCount += initialAnalysis.values.size
+                    operationCount += initialAnalysis.operations.size
+                    phiCount += initialAnalysis.phiNodes.size
+                    localPhiCount += initialAnalysis.localPhiCount
+                    stackPhiCount += initialAnalysis.stackPhiCount
+                    phiBlockCount += initialAnalysis.phiBlockCount
+                    trivialPhiCount += initialAnalysis.trivialPhiCount
 
-                    val phiNodesByBlock = analysis.phiNodes.groupBy { it.blockId }
+                    val phiNodesByBlock = initialAnalysis.phiNodes.groupBy { it.blockId }
                     maxPhiNodesPerBlock = maxOf(maxPhiNodesPerBlock, phiNodesByBlock.values.maxOfOrNull { it.size } ?: 0)
                     phiNodesByBlock.forEach { (blockId, phiNodes) ->
                         val block = graph.block(blockId)
@@ -96,8 +129,8 @@ class SsaDiagnostics(
                         }
                     }
 
-                    useEdgeCount += analysis.useEdgeCount
-                    eliminatedLocalInstructionCount += analysis.eliminatedLocalInstructionCount
+                    useEdgeCount += initialAnalysis.useEdgeCount
+                    eliminatedLocalInstructionCount += initialAnalysis.eliminatedLocalInstructionCount
                 } catch (exception: SsaInconsistencyException) {
                     inconsistencyCount++
                     failureCount++
@@ -129,8 +162,25 @@ class SsaDiagnostics(
             maxPhiNodesPerBlock = maxPhiNodesPerBlock,
             useEdgeCount = useEdgeCount,
             eliminatedLocalInstructionCount = eliminatedLocalInstructionCount,
+            maxOptimizationIterationCount = maxOptimizationIterationCount,
+            multiIterationMethodCount = multiIterationMethodCount,
             propagatedAliasCount = propagatedAliasCount,
-            simplifiedPhiCount = simplifiedPhiCount,
+            constantValueCount = constantValueCount,
+            literalConstantCount = literalConstantCount,
+            foldedConstantOperationCount = foldedConstantOperationCount,
+            constantPhiCount = constantPhiCount,
+            newlyExposedConstantCount = newlyExposedConstantCount,
+            resolvedConstantBranchCount = resolvedConstantBranchCount,
+            resolvedConstantSwitchCount = resolvedConstantSwitchCount,
+            eliminatedConstantEdgeCount = eliminatedConstantEdgeCount,
+            constantNewlyUnreachableBlockCount = constantNewlyUnreachableBlockCount,
+            prunedOperationCount = prunedOperationCount,
+            prunedPhiNodeCount = prunedPhiNodeCount,
+            prunedPhiInputCount = prunedPhiInputCount,
+            prunedValueCount = prunedValueCount,
+            retainedExceptionalProvenanceOperationCount = retainedExceptionalProvenanceOperationCount,
+            retainedExceptionalProvenancePhiCount = retainedExceptionalProvenancePhiCount,
+            conservativelyRetainedPhiCount = conservativelyRetainedPhiCount,
             inconsistencyCount = inconsistencyCount,
             failureCount = failureCount,
             warnings = warnings,
@@ -158,8 +208,25 @@ data class SsaDiagnosticsResult(
     val maxPhiNodesPerBlock: Int,
     val useEdgeCount: Long,
     val eliminatedLocalInstructionCount: Long,
+    val maxOptimizationIterationCount: Int,
+    val multiIterationMethodCount: Int,
     val propagatedAliasCount: Long,
-    val simplifiedPhiCount: Long,
+    val constantValueCount: Long,
+    val literalConstantCount: Long,
+    val foldedConstantOperationCount: Long,
+    val constantPhiCount: Long,
+    val newlyExposedConstantCount: Long,
+    val resolvedConstantBranchCount: Long,
+    val resolvedConstantSwitchCount: Long,
+    val eliminatedConstantEdgeCount: Long,
+    val constantNewlyUnreachableBlockCount: Long,
+    val prunedOperationCount: Long,
+    val prunedPhiNodeCount: Long,
+    val prunedPhiInputCount: Long,
+    val prunedValueCount: Long,
+    val retainedExceptionalProvenanceOperationCount: Long,
+    val retainedExceptionalProvenancePhiCount: Long,
+    val conservativelyRetainedPhiCount: Long,
     val inconsistencyCount: Int,
     val failureCount: Int,
     val warnings: List<String>,

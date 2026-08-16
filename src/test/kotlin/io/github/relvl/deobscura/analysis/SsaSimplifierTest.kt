@@ -88,6 +88,23 @@ class SsaSimplifierTest {
         assertEquals(setOf(root.id), result.analysis.values.keys)
     }
 
+
+    @Test
+    fun `canonicalizes constant facts when trivial phi becomes alias`() {
+        val root = root(ValueId(0), 0)
+        val phi = phi(ValueId(1), listOf(root.id, root.id))
+        val analysis = analysisOf(listOf(root, phi), listOf(phi)).copy(
+            constants = mapOf(
+                root.id to SsaConstant.IntValue(42),
+                phi.id to SsaConstant.IntValue(42),
+            ),
+        )
+
+        val result = simplifier.simplify(analysis)
+
+        assertEquals(mapOf(root.id to SsaConstant.IntValue(42)), result.analysis.constants)
+    }
+
     private fun root(id: ValueId, parameter: Int) =
         SsaValueDefinition.Root(id, FrameValueKind.INT, ValueOrigin.Parameter(parameter))
 

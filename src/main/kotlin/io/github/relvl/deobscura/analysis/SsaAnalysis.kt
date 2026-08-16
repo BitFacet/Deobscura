@@ -7,6 +7,7 @@ data class SsaAnalysis(
     val operations: List<ValueOperation>,
     val phiNodes: List<SsaPhiNode>,
     val uses: Map<ValueId, List<SsaValueUse>>,
+    val constants: Map<ValueId, SsaConstant> = emptyMap(),
     val eliminatedLocalInstructionCount: Int,
 ) {
     val localPhiCount: Int

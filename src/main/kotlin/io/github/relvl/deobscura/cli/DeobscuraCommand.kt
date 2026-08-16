@@ -242,10 +242,46 @@ class DeobscuraCommand : Callable<Int> {
                         }
                         logger.info("SSA phi density: maximum {} phi node(s) in one basic block.", ssa.maxPhiNodesPerBlock)
                         logger.info(
-                            "SSA simplification propagated {} value alias(es) and removed {} trivial phi node(s).",
-                            ssa.propagatedAliasCount,
-                            ssa.simplifiedPhiCount,
+                            "SSA optimization reached fixed point for {} method(s): maximum {} iteration(s), {} method(s) required multiple iterations.",
+                            ssa.methodCount,
+                            ssa.maxOptimizationIterationCount,
+                            ssa.multiIterationMethodCount,
                         )
+                        logger.info(
+                            "SSA optimization resolved {} conditional branch(es) and {} switch(es): {} CFG edge(s) eliminated, {} additional block(s) became unreachable.",
+                            ssa.resolvedConstantBranchCount,
+                            ssa.resolvedConstantSwitchCount,
+                            ssa.eliminatedConstantEdgeCount,
+                            ssa.constantNewlyUnreachableBlockCount,
+                        )
+                        logger.info(
+                            "SSA optimization removed {} operation(s), {} value(s), {} phi node(s), and {} phi input(s); propagated {} value alias(es).",
+                            ssa.prunedOperationCount,
+                            ssa.prunedValueCount,
+                            ssa.prunedPhiNodeCount,
+                            ssa.prunedPhiInputCount,
+                            ssa.propagatedAliasCount,
+                        )
+                        logger.info(
+                            "SSA optimization finished with {} constant value(s): {} literal(s), {} operation(s) folded, {} phi result(s) resolved, {} newly exposed after pruning.",
+                            ssa.constantValueCount,
+                            ssa.literalConstantCount,
+                            ssa.foldedConstantOperationCount,
+                            ssa.constantPhiCount,
+                            ssa.newlyExposedConstantCount,
+                        )
+                        if (
+                            ssa.retainedExceptionalProvenanceOperationCount > 0 ||
+                            ssa.retainedExceptionalProvenancePhiCount > 0 ||
+                            ssa.conservativelyRetainedPhiCount > 0
+                        ) {
+                            logger.debug(
+                                "SSA CFG pruning retained {} unreachable operation(s), {} unreachable phi node(s), and left {} exception-related phi node(s) conservative.",
+                                ssa.retainedExceptionalProvenanceOperationCount,
+                                ssa.retainedExceptionalProvenancePhiCount,
+                                ssa.conservativelyRetainedPhiCount,
+                            )
+                        }
                         logger.info(
                             "SSA analysis completed with {} failure(s): {} inconsistent state(s).",
                             ssa.failureCount,
