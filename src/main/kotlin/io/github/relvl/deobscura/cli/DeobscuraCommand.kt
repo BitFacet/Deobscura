@@ -9,6 +9,7 @@ import io.github.relvl.deobscura.resolution.ClassResolver
 import io.github.relvl.deobscura.resolution.ResolutionDiagnostics
 import io.github.relvl.deobscura.resolution.ReferenceKind
 import io.github.relvl.deobscura.resolution.RuntimeClassSource
+import io.github.relvl.deobscura.raw.ClassImporter
 import org.slf4j.LoggerFactory
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
@@ -64,6 +65,15 @@ class DeobscuraCommand : Callable<Int> {
                         val classResolver = ClassResolver(result, runtimeSource)
                         val diagnostics = ResolutionDiagnostics().inspect(result, classResolver)
                         diagnostics.warnings.forEach { logger.warn(it) }
+
+                        val rawImport = ClassImporter().importInput(result)
+                        rawImport.warnings.forEach { logger.warn(it) }
+                        if (rawImport.unknownInstructionCount > 0) {
+                            logger.warn(
+                                "Raw importer encountered {} instruction(s) with an unknown representation.",
+                                rawImport.unknownInstructionCount,
+                            )
+                        }
                         diagnostics.unresolved.forEach { unresolved ->
                             logger.warn(
                                 "Unresolved class '{}' [{}] referenced by {}.",
@@ -101,6 +111,19 @@ class DeobscuraCommand : Callable<Int> {
                                 diagnostics.count(ReferenceKind.CONSTANT_POOL),
                             )
                         }
+                        logger.info(
+                            "Imported {} input classes into raw model: {} fields, {} methods ({} with code), {} instructions.",
+                            rawImport.classes.size,
+                            rawImport.fieldCount,
+                            rawImport.methodCount,
+                            rawImport.methodsWithCode,
+                            rawImport.instructionCount,
+                        )
+                        logger.info(
+                            "Raw import completed with {} parse failure(s) and {} unknown instruction(s).",
+                            rawImport.parseFailureCount,
+                            rawImport.unknownInstructionCount,
+                        )
                     }
                     EXIT_SUCCESS
                 }
