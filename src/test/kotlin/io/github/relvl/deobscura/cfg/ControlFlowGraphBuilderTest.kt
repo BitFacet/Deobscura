@@ -85,6 +85,10 @@ class ControlFlowGraphBuilderTest {
         )
 
         assertEquals(1, builder.unreachableBlockCount(graph))
+        val unreachable = builder.unreachableBlocks(graph).single()
+        assertEquals(BasicBlockId(1), unreachable.id)
+        assertEquals(1, unreachable.startInstructionIndex)
+        assertEquals(2, unreachable.endInstructionIndexExclusive)
     }
 
     private fun code(

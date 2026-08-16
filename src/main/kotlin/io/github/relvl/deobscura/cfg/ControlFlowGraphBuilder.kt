@@ -194,8 +194,8 @@ class ControlFlowGraphBuilder {
         return ControlFlowGraph(code, blocks, edges, BasicBlockId(0))
     }
 
-    fun unreachableBlockCount(graph: ControlFlowGraph): Int {
-        val entry = graph.entryBlock ?: return 0
+    fun unreachableBlocks(graph: ControlFlowGraph): List<BasicBlock> {
+        val entry = graph.entryBlock ?: return graph.blocks
         val reachable = mutableSetOf<BasicBlockId>()
         val queue = ArrayDeque<BasicBlockId>()
         queue.addLast(entry)
@@ -206,8 +206,10 @@ class ControlFlowGraphBuilder {
             graph.block(current).successors.forEach(queue::addLast)
         }
 
-        return graph.blocks.size - reachable.size
+        return graph.blocks.filter { it.id !in reachable }
     }
+
+    fun unreachableBlockCount(graph: ControlFlowGraph): Int = unreachableBlocks(graph).size
 
     private fun addLeaderAfterTerminator(index: Int, instructionCount: Int, leaders: MutableSet<Int>) {
         if (index + 1 < instructionCount) leaders += index + 1

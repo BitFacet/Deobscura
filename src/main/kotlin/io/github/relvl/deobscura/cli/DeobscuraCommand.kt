@@ -1,6 +1,8 @@
 package io.github.relvl.deobscura.cli
 
 import io.github.relvl.deobscura.analysis.FrameDiagnostics
+import io.github.relvl.deobscura.analysis.SsaDiagnostics
+import io.github.relvl.deobscura.analysis.ValueFlowDiagnostics
 import io.github.relvl.deobscura.cfg.ControlFlowDiagnostics
 import io.github.relvl.deobscura.config.ConfigException
 import io.github.relvl.deobscura.config.ConfigLoadResult
@@ -86,6 +88,10 @@ class DeobscuraCommand : Callable<Int> {
                         legacySubroutines.warnings.forEach { logger.warn(it) }
                         val frameAnalysis = FrameDiagnostics().inspect(rawImport)
                         frameAnalysis.warnings.forEach { logger.warn(it) }
+                        val valueFlow = ValueFlowDiagnostics().inspect(rawImport)
+                        valueFlow.warnings.forEach { logger.warn(it) }
+                        val ssa = SsaDiagnostics().inspect(rawImport)
+                        ssa.warnings.forEach { logger.warn(it) }
 
                         logger.info("Runtime: {} (Java {})", resolution.config.runtime, resolution.config.runtimeVersion)
                         logger.info("Loaded {} classes from input JAR.", result.inputClassCount)
@@ -135,6 +141,31 @@ class DeobscuraCommand : Callable<Int> {
                             controlFlow.unreachableBlockCount,
                         )
                         logger.info("CFG construction completed with {} failure(s).", controlFlow.failureCount)
+                        if (controlFlow.unreachableBlocks.isNotEmpty()) {
+                            val shown = controlFlow.unreachableBlocks.take(MAX_UNREACHABLE_BLOCK_DETAILS)
+                            shown.forEach { block ->
+                                logger.debug(
+                                    "Unreachable block: {} block={}, instructions={}..{}, lines={}, incoming={}, opcodes={}",
+                                    block.methodName,
+                                    block.blockId,
+                                    block.startInstructionIndex,
+                                    block.endInstructionIndexExclusive - 1,
+                                    block.sourceLines?.let { if (it.first == it.last) it.first.toString() else "${it.first}..${it.last}" } ?: "?",
+                                    if (block.incomingEdges.isEmpty()) {
+                                        "none"
+                                    } else {
+                                        block.incomingEdges.joinToString { "${it.fromBlockId}:${it.kind}" }
+                                    },
+                                    formatOpcodes(block.opcodes),
+                                )
+                            }
+                            if (controlFlow.unreachableBlocks.size > shown.size) {
+                                logger.debug(
+                                    "Unreachable block details truncated: {} more block(s) not shown.",
+                                    controlFlow.unreachableBlocks.size - shown.size,
+                                )
+                            }
+                        }
                         logger.info(
                             "Normalized legacy JSR/RET in {} method(s): {} JSR call site(s), {} cloned basic block(s), {} normalized instruction(s).",
                             legacySubroutines.methodCount,
@@ -157,6 +188,68 @@ class DeobscuraCommand : Callable<Int> {
                             frameAnalysis.failureCount,
                             frameAnalysis.stackInconsistencyCount,
                             frameAnalysis.unsupportedInstructionCount,
+                        )
+
+                        logger.info(
+                            "Built explicit value flow for {} method(s): {} values, {} operation(s), {} merge value(s), {} stack instruction(s) eliminated.",
+                            valueFlow.methodCount,
+                            valueFlow.valueCount,
+                            valueFlow.operationCount,
+                            valueFlow.mergeValueCount,
+                            valueFlow.eliminatedStackInstructionCount,
+                        )
+                        if (valueFlow.unanalyzedBlockCount > 0) {
+                            logger.debug(
+                                "Value flow excluded {} unreachable basic block(s).",
+                                valueFlow.unanalyzedBlockCount,
+                            )
+                        }
+                        logger.info(
+                            "Value-flow analysis completed with {} failure(s): {} inconsistent state(s), {} unsupported instruction case(s).",
+                            valueFlow.failureCount,
+                            valueFlow.inconsistencyCount,
+                            valueFlow.unsupportedInstructionCount,
+                        )
+
+                        logger.info(
+                            "Built SSA for {} method(s): {} values, {} operation(s), {} phi node(s) ({} local, {} stack), {} def-use edge(s), {} local load/store instruction(s) eliminated.",
+                            ssa.methodCount,
+                            ssa.valueCount,
+                            ssa.operationCount,
+                            ssa.phiCount,
+                            ssa.localPhiCount,
+                            ssa.stackPhiCount,
+                            ssa.useEdgeCount,
+                            ssa.eliminatedLocalInstructionCount,
+                        )
+                        logger.info(
+                            "SSA phi placement: {} block(s), {} trivial phi node(s), {} phi node(s) in {} block(s) with at most one CFG predecessor ({} with no predecessor).",
+                            ssa.phiBlockCount,
+                            ssa.trivialPhiCount,
+                            ssa.singlePredecessorPhiCount,
+                            ssa.singlePredecessorPhiBlockCount,
+                            ssa.zeroPredecessorPhiCount,
+                        )
+                        logger.info(
+                            "SSA single-predecessor phi classification: {} phi node(s) in {} exception-related block(s), {} phi node(s) in {} non-exception block(s).",
+                            ssa.singlePredecessorExceptionPhiCount,
+                            ssa.singlePredecessorExceptionPhiBlockCount,
+                            ssa.singlePredecessorNonExceptionPhiCount,
+                            ssa.singlePredecessorNonExceptionPhiBlockCount,
+                        )
+                        ssa.nonExceptionSinglePredecessorPhiDetails.forEach { detail ->
+                            logger.debug("SSA non-exception single-predecessor phi: {}", detail)
+                        }
+                        logger.info("SSA phi density: maximum {} phi node(s) in one basic block.", ssa.maxPhiNodesPerBlock)
+                        logger.info(
+                            "SSA simplification propagated {} value alias(es) and removed {} trivial phi node(s).",
+                            ssa.propagatedAliasCount,
+                            ssa.simplifiedPhiCount,
+                        )
+                        logger.info(
+                            "SSA analysis completed with {} failure(s): {} inconsistent state(s).",
+                            ssa.failureCount,
+                            ssa.inconsistencyCount,
                         )
 
                         val unresolvedAnalysisUses = classResolver.unresolvedAnalysisUses
@@ -192,6 +285,18 @@ class DeobscuraCommand : Callable<Int> {
         }
     }
 
+    private fun formatOpcodes(opcodes: List<String>): String {
+        val shown = opcodes.take(MAX_OPCODES_IN_UNREACHABLE_BLOCK)
+        return buildString {
+            append(shown.joinToString(" "))
+            if (opcodes.size > shown.size) {
+                append(" ... (+")
+                append(opcodes.size - shown.size)
+                append(" more)")
+            }
+        }
+    }
+
     private fun formatAnalysisRequests(
         requests: List<ResolutionRequest>,
     ): String {
@@ -218,6 +323,8 @@ class DeobscuraCommand : Callable<Int> {
         const val EXIT_FAILURE = 1
         const val EXIT_CONFIGURATION_REQUIRED = 2
         const val MAX_ANALYSIS_REQUESTS_IN_WARNING = 5
+        const val MAX_UNREACHABLE_BLOCK_DETAILS = 32
+        const val MAX_OPCODES_IN_UNREACHABLE_BLOCK = 16
 
         val logger = LoggerFactory.getLogger(DeobscuraCommand::class.java)
     }
