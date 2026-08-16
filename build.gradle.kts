@@ -2,6 +2,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
     kotlin("jvm") version "2.3.20"
+    application
 }
 
 group = "io.github.relvl"
@@ -38,4 +39,7 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+}
+application {
+    mainClass.set("io.github.relvl.deobscura.MainKt")
 }
