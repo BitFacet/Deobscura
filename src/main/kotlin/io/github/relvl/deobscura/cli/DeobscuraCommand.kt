@@ -1,5 +1,6 @@
 package io.github.relvl.deobscura.cli
 
+import io.github.relvl.deobscura.cfg.ControlFlowDiagnostics
 import io.github.relvl.deobscura.config.ConfigException
 import io.github.relvl.deobscura.config.ConfigLoadResult
 import io.github.relvl.deobscura.config.ConfigRepository
@@ -74,6 +75,9 @@ class DeobscuraCommand : Callable<Int> {
                                 rawImport.unknownInstructionCount,
                             )
                         }
+                        val controlFlow = ControlFlowDiagnostics().inspect(rawImport)
+                        controlFlow.warnings.forEach { logger.warn(it) }
+
                         diagnostics.unresolved.forEach { unresolved ->
                             logger.warn(
                                 "Unresolved class '{}' [{}] referenced by {}.",
@@ -124,6 +128,15 @@ class DeobscuraCommand : Callable<Int> {
                             rawImport.parseFailureCount,
                             rawImport.unknownInstructionCount,
                         )
+                        logger.info(
+                            "Built CFG for {} method(s): {} basic blocks, {} edges ({} exception), {} unreachable blocks.",
+                            controlFlow.methodCount,
+                            controlFlow.blockCount,
+                            controlFlow.edgeCount,
+                            controlFlow.exceptionEdgeCount,
+                            controlFlow.unreachableBlockCount,
+                        )
+                        logger.info("CFG construction completed with {} failure(s).", controlFlow.failureCount)
                     }
                     EXIT_SUCCESS
                 }
