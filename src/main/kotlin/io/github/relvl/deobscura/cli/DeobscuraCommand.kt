@@ -5,6 +5,10 @@ import io.github.relvl.deobscura.config.ConfigLoadResult
 import io.github.relvl.deobscura.config.ConfigRepository
 import io.github.relvl.deobscura.config.ConfigResolver
 import io.github.relvl.deobscura.jar.JarLoader
+import io.github.relvl.deobscura.resolution.ClassResolver
+import io.github.relvl.deobscura.resolution.ResolutionDiagnostics
+import io.github.relvl.deobscura.resolution.ReferenceKind
+import io.github.relvl.deobscura.resolution.RuntimeClassSource
 import org.slf4j.LoggerFactory
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
@@ -56,21 +60,48 @@ class DeobscuraCommand : Callable<Int> {
                     val result = JarLoader().load(resolution.config)
                     result.warnings.forEach { logger.warn(it) }
 
-                    logger.info("Working directory: {}", workingDirectory)
-                    logger.info("Input JAR: {}", resolution.config.input)
-                    logger.info("Runtime: {} (Java {})", resolution.config.runtime, resolution.config.runtimeVersion)
-                    logger.info("Loaded {} classes from input JAR.", result.inputClassCount)
-                    logger.info(
-                        "Loaded {} classes from {} classpath JAR(s).",
-                        result.classpathClassCount,
-                        resolution.config.classpath.size,
-                    )
-                    logger.info(
-                        "Classpath contributed {} classes to the resolved set; {} classpath classes were shadowed by the input JAR.",
-                        result.classpathOnlyClassCount,
-                        result.shadowedClasspathClassCount,
-                    )
-                    logger.info("Resolved class set contains {} classes.", result.classes.size)
+                    RuntimeClassSource(resolution.config.runtime).use { runtimeSource ->
+                        val classResolver = ClassResolver(result, runtimeSource)
+                        val diagnostics = ResolutionDiagnostics().inspect(result, classResolver)
+                        diagnostics.warnings.forEach { logger.warn(it) }
+                        diagnostics.unresolved.forEach { unresolved ->
+                            logger.warn(
+                                "Unresolved class '{}' [{}] referenced by {}.",
+                                unresolved.internalName,
+                                unresolved.kind,
+                                formatReferrers(unresolved.referrers),
+                            )
+                        }
+
+                        logger.info("Working directory: {}", workingDirectory)
+                        logger.info("Input JAR: {}", resolution.config.input)
+                        logger.info("Runtime: {} (Java {})", resolution.config.runtime, resolution.config.runtimeVersion)
+                        logger.info("Loaded {} classes from input JAR.", result.inputClassCount)
+                        logger.info(
+                            "Loaded {} classes from {} classpath JAR(s).",
+                            result.classpathClassCount,
+                            resolution.config.classpath.size,
+                        )
+                        logger.info(
+                            "Classpath contributed {} classes to the resolved set; {} classpath classes were shadowed by the input JAR.",
+                            result.classpathOnlyClassCount,
+                            result.shadowedClasspathClassCount,
+                        )
+                        logger.info("Application class set contains {} classes.", result.classes.size)
+                        logger.info(
+                            "Resolved {} referenced classes from the runtime; {} class(es) remain unresolved.",
+                            classResolver.resolvedRuntimeClassCount,
+                            diagnostics.unresolved.size,
+                        )
+                        if (diagnostics.unresolved.isNotEmpty()) {
+                            logger.info(
+                                "Unresolved classes by reference kind: {} structural, {} signature, {} constant-pool.",
+                                diagnostics.count(ReferenceKind.STRUCTURAL),
+                                diagnostics.count(ReferenceKind.SIGNATURE),
+                                diagnostics.count(ReferenceKind.CONSTANT_POOL),
+                            )
+                        }
+                    }
                     EXIT_SUCCESS
                 }
             }
@@ -84,6 +115,18 @@ class DeobscuraCommand : Callable<Int> {
         }
     }
 
+    private fun formatReferrers(referrers: List<String>): String {
+        val shown = referrers.take(MAX_REFERRERS_IN_WARNING)
+        return buildString {
+            append(shown.joinToString())
+            if (referrers.size > shown.size) {
+                append(" (+")
+                append(referrers.size - shown.size)
+                append(" more)")
+            }
+        }
+    }
+
     private fun resolveAgainst(base: Path, value: String): Path {
         val path = Path.of(value)
         return (if (path.isAbsolute) path else base.resolve(path)).normalize()
@@ -94,6 +137,7 @@ class DeobscuraCommand : Callable<Int> {
         const val EXIT_SUCCESS = 0
         const val EXIT_FAILURE = 1
         const val EXIT_CONFIGURATION_REQUIRED = 2
+        const val MAX_REFERRERS_IN_WARNING = 5
 
         val logger = LoggerFactory.getLogger(DeobscuraCommand::class.java)
     }

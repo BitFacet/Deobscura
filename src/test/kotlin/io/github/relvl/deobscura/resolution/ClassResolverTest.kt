@@ -1,0 +1,63 @@
+package io.github.relvl.deobscura.resolution
+
+import io.github.relvl.deobscura.jar.ClassOrigin
+import io.github.relvl.deobscura.jar.JarLoadResult
+import io.github.relvl.deobscura.jar.JarRole
+import io.github.relvl.deobscura.jar.LoadedClass
+import java.nio.file.Path
+import kotlin.test.Test
+import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+
+class ClassResolverTest {
+    @Test
+    fun `application class takes priority over runtime class`() {
+        val applicationBytes = byteArrayOf(1, 2, 3)
+        val loadedClass = LoadedClass(
+            internalName = "java/lang/String",
+            bytes = applicationBytes,
+            origin = ClassOrigin(
+                jar = Path.of("input.jar"),
+                entry = "java/lang/String.class",
+                role = JarRole.INPUT,
+            ),
+        )
+        val jarResult = JarLoadResult(
+            classes = mapOf(loadedClass.internalName to loadedClass),
+            inputClassCount = 1,
+            classpathClassCount = 0,
+            classpathOnlyClassCount = 0,
+            shadowedClasspathClassCount = 0,
+            warnings = emptyList(),
+        )
+
+        RuntimeClassSource(Path.of(System.getProperty("java.home"))).use { runtimeSource ->
+            val resolved = ClassResolver(jarResult, runtimeSource).findClass("java/lang/String")!!
+
+            assertContentEquals(applicationBytes, resolved.bytes)
+            assertIs<ClassOrigin.Input>(resolved.origin)
+        }
+    }
+
+    @Test
+    fun `falls back to runtime when application class is absent`() {
+        val jarResult = JarLoadResult(
+            classes = emptyMap(),
+            inputClassCount = 0,
+            classpathClassCount = 0,
+            classpathOnlyClassCount = 0,
+            shadowedClasspathClassCount = 0,
+            warnings = emptyList(),
+        )
+
+        RuntimeClassSource(Path.of(System.getProperty("java.home"))).use { runtimeSource ->
+            val resolver = ClassResolver(jarResult, runtimeSource)
+            val resolved = resolver.findClass("java/lang/String")!!
+
+            assertIs<ClassOrigin.Runtime>(resolved.origin)
+            assertEquals("java.base", resolved.origin.module)
+            assertEquals(1, resolver.resolvedRuntimeClassCount)
+        }
+    }
+}
