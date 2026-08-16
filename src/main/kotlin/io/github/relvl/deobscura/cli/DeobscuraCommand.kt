@@ -1,5 +1,6 @@
 package io.github.relvl.deobscura.cli
 
+import io.github.relvl.deobscura.analysis.FrameDiagnostics
 import io.github.relvl.deobscura.cfg.ControlFlowDiagnostics
 import io.github.relvl.deobscura.config.ConfigException
 import io.github.relvl.deobscura.config.ConfigLoadResult
@@ -77,6 +78,8 @@ class DeobscuraCommand : Callable<Int> {
                         }
                         val controlFlow = ControlFlowDiagnostics().inspect(rawImport)
                         controlFlow.warnings.forEach { logger.warn(it) }
+                        val frameAnalysis = FrameDiagnostics().inspect(rawImport)
+                        frameAnalysis.warnings.forEach { logger.warn(it) }
 
                         diagnostics.unresolved.forEach { unresolved ->
                             logger.warn(
@@ -137,6 +140,18 @@ class DeobscuraCommand : Callable<Int> {
                             controlFlow.unreachableBlockCount,
                         )
                         logger.info("CFG construction completed with {} failure(s).", controlFlow.failureCount)
+                        logger.info(
+                            "Analyzed JVM frames for {} method(s): {} frame merge(s), {} value merge(s).",
+                            frameAnalysis.methodCount,
+                            frameAnalysis.frameMergeCount,
+                            frameAnalysis.valueMergeCount,
+                        )
+                        logger.info(
+                            "Frame analysis completed with {} failure(s): {} stack/local inconsistency(s), {} unsupported instruction case(s).",
+                            frameAnalysis.failureCount,
+                            frameAnalysis.stackInconsistencyCount,
+                            frameAnalysis.unsupportedInstructionCount,
+                        )
                     }
                     EXIT_SUCCESS
                 }

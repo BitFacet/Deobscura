@@ -1,0 +1,154 @@
+package io.github.relvl.deobscura.analysis
+
+import io.github.relvl.deobscura.cfg.ControlFlowGraphBuilder
+import io.github.relvl.deobscura.raw.ClassImporter
+import io.github.relvl.deobscura.raw.JvmComputationalType
+import io.github.relvl.deobscura.raw.JvmMethodDescriptor
+import io.github.relvl.deobscura.raw.JvmOpcode
+import io.github.relvl.deobscura.raw.LocalOperation
+import io.github.relvl.deobscura.raw.RawBranchInstruction
+import io.github.relvl.deobscura.raw.RawCode
+import io.github.relvl.deobscura.raw.RawLabel
+import io.github.relvl.deobscura.raw.RawLabelId
+import io.github.relvl.deobscura.raw.RawLocalInstruction
+import io.github.relvl.deobscura.raw.RawMethod
+import io.github.relvl.deobscura.raw.RawNewObjectInstruction
+import io.github.relvl.deobscura.raw.RawRetInstruction
+import io.github.relvl.deobscura.raw.RawReturnInstruction
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+class FrameAnalyzerTest {
+    private val importer = ClassImporter()
+    private val graphBuilder = ControlFlowGraphBuilder()
+    private val analyzer = FrameAnalyzer()
+
+    @Test
+    fun `propagates and merges values through branches`() {
+        val rawClass = importFixture()
+        val method = rawClass.methods.single { it.name == "choose" }
+        val graph = graphBuilder.build(requireNotNull(method.code))
+
+        val analysis = analyzer.analyze(rawClass.internalName, method, graph)
+
+        assertEquals(graph.blocks.size, analysis.entryFrames.size)
+        assertTrue(analysis.frameMergeCount > 0)
+        assertTrue(analysis.valueMergeCount > 0)
+    }
+
+    @Test
+    fun `handles array length wide values and exception handlers`() {
+        val rawClass = importFixture()
+
+        listOf("wideAndArray", "withHandler").forEach { methodName ->
+            val method = rawClass.methods.single { it.name == methodName }
+            val graph = graphBuilder.build(requireNotNull(method.code))
+            val analysis = analyzer.analyze(rawClass.internalName, method, graph)
+
+            assertTrue(analysis.entryFrames.isNotEmpty())
+        }
+    }
+
+    @Test
+    fun `merges incompatible local kinds to unavailable`() {
+        val elseLabel = RawLabelId(1)
+        val joinLabel = RawLabelId(2)
+        val instructions = listOf(
+            RawLocalInstruction(JvmOpcode("iload"), LocalOperation.LOAD, JvmComputationalType.INT, 0),
+            RawBranchInstruction(JvmOpcode("ifeq"), elseLabel),
+            RawLocalInstruction(JvmOpcode("iload"), LocalOperation.LOAD, JvmComputationalType.INT, 0),
+            RawLocalInstruction(JvmOpcode("istore"), LocalOperation.STORE, JvmComputationalType.INT, 1),
+            RawBranchInstruction(JvmOpcode("goto"), joinLabel),
+            RawNewObjectInstruction(JvmOpcode("new"), "java/lang/Object"),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 1),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+        )
+        val code = RawCode(
+            maxStack = 1,
+            maxLocals = 2,
+            bytecodeLength = null,
+            instructions = instructions,
+            labels = listOf(
+                RawLabel(elseLabel, instructionIndex = 5, bytecodeOffset = null),
+                RawLabel(joinLabel, instructionIndex = 7, bytecodeOffset = null),
+            ),
+            exceptionHandlers = emptyList(),
+            lineNumbers = emptyList(),
+        )
+        val method = RawMethod(
+            name = "reuseLocal",
+            descriptor = "(Z)V",
+            type = JvmMethodDescriptor.parse("(Z)V"),
+            accessFlags = 0x0008,
+            exceptions = emptyList(),
+            code = code,
+        )
+        val graph = graphBuilder.build(code)
+
+        val analysis = analyzer.analyze("test/Owner", method, graph)
+        val joinBlock = graph.blocks.single { it.startInstructionIndex == 7 }
+
+        assertEquals(null, analysis.entryFrames.getValue(joinBlock.id).locals[1])
+    }
+
+    @Test
+    fun `analyzes legacy jsr ret subroutines`() {
+        val subroutineLabel = RawLabelId(1)
+        val instructions = listOf(
+            RawBranchInstruction(JvmOpcode("jsr"), subroutineLabel),
+            RawBranchInstruction(JvmOpcode("jsr"), subroutineLabel),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 0),
+            RawRetInstruction(JvmOpcode("ret"), 0),
+        )
+        val code = RawCode(
+            maxStack = 1,
+            maxLocals = 1,
+            bytecodeLength = null,
+            instructions = instructions,
+            labels = listOf(RawLabel(subroutineLabel, instructionIndex = 3, bytecodeOffset = null)),
+            exceptionHandlers = emptyList(),
+            lineNumbers = emptyList(),
+        )
+        val method = RawMethod(
+            name = "legacyFinally",
+            descriptor = "()V",
+            type = JvmMethodDescriptor.parse("()V"),
+            accessFlags = 0x0008,
+            exceptions = emptyList(),
+            code = code,
+        )
+        val graph = graphBuilder.build(code)
+
+        val analysis = analyzer.analyze("test/Owner", method, graph)
+
+        val firstReturnSite = graph.blocks.single { it.startInstructionIndex == 1 }
+        val secondReturnSite = graph.blocks.single { it.startInstructionIndex == 2 }
+        assertTrue(firstReturnSite.id in analysis.entryFrames)
+        assertTrue(secondReturnSite.id in analysis.entryFrames)
+        assertEquals(emptyList(), analysis.entryFrames.getValue(secondReturnSite.id).stack)
+    }
+
+    private fun importFixture(): io.github.relvl.deobscura.raw.RawClass {
+        val type = FrameFixture::class.java
+        val internalName = type.name.replace('.', '/')
+        val bytes = requireNotNull(type.getResourceAsStream("/$internalName.class")).use { it.readAllBytes() }
+        return importer.importClass(bytes)
+    }
+}
+
+private class FrameFixture {
+    fun choose(flag: Boolean): Int {
+        val value = if (flag) 10 else 20
+        return value + 1
+    }
+
+    fun wideAndArray(values: IntArray, base: Long): Long = values.size.toLong() + base
+
+    fun withHandler(value: String?): Int = try {
+        value!!.length
+    } catch (_: NullPointerException) {
+        -1
+    }
+}
