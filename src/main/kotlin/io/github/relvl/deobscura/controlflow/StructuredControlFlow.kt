@@ -18,6 +18,20 @@ data class StructuredControlFlowAnalysis(
     val switchCount: Int,
     /** Compiler-generated boolean materialization diamonds folded into their consuming condition. */
     val booleanConditionFolds: List<BooleanConditionFold> = emptyList(),
+    /** Linear JVM branch chains folded into source-level short-circuit boolean conditions. */
+    val shortCircuitConditionFolds: List<ShortCircuitConditionFold> = emptyList(),
+    /** Regular if regions whose empty conditional arm was normalized by inverting the condition. */
+    val emptyArmNormalizationCount: Int = 0,
+    /** If regions recognized because one source arm terminates instead of reaching a common join. */
+    val terminalIfRegionCount: Int = 0,
+    /** If regions whose source arm is proven to continue the innermost containing loop. */
+    val continueIfRegionCount: Int = 0,
+    /** If regions whose source arm is proven to break from the innermost containing loop. */
+    val breakIfRegionCount: Int = 0,
+    /** If regions reconstructed from sequential regions inside a natural-loop body. */
+    val loopBodyIfRegionCount: Int = 0,
+    /** Loop-transfer ifs whose normal continuation was recovered from bytecode region layout. */
+    val loopContinuationIfRegionCount: Int = 0,
     /** Headers intentionally left in block/goto form, with the first proven rejection reason. */
     val unstructured: List<UnstructuredControlFlowDiagnostic> = emptyList(),
 ) {
@@ -38,6 +52,24 @@ data class BooleanConditionFold(
     val condition: BranchCondition,
     val materializationBlocks: Set<BasicBlockId>,
 )
+
+/**
+ * A linear chain of conditional blocks that implements Java short-circuit evaluation. The
+ * canonical CFG is preserved, while the structured view treats the root as one compound branch.
+ */
+data class ShortCircuitConditionFold(
+    val rootHeader: BasicBlockId,
+    val foldedHeaders: Set<BasicBlockId>,
+    val condition: StructuredCondition,
+    val conditionalTarget: BasicBlockId,
+    val fallthroughTarget: BasicBlockId,
+)
+
+sealed interface StructuredCondition {
+    data class Atomic(val condition: BranchCondition) : StructuredCondition
+    data class And(val terms: List<StructuredCondition>) : StructuredCondition
+    data class Or(val terms: List<StructuredCondition>) : StructuredCondition
+}
 
 enum class UnstructuredControlFlowKind {
     CONDITIONAL,
@@ -70,18 +102,39 @@ data class UnstructuredControlFlowDiagnostic(
     val reason: UnstructuredControlFlowReason,
 )
 
+enum class StructuredArmExitKind {
+    RETURN_OR_THROW,
+    CONTINUE,
+    BREAK,
+}
+
+data class StructuredArmExit(
+    val kind: StructuredArmExitKind,
+    /** Control-flow target represented by CONTINUE/BREAK; null for return/throw. */
+    val target: BasicBlockId? = null,
+)
+
 sealed interface StructuredRegion {
     val header: BasicBlockId
     val coveredBlocks: Set<BasicBlockId>
 
     data class If(
         override val header: BasicBlockId,
-        val condition: BranchCondition,
+        val condition: StructuredCondition,
         val thenEntry: BasicBlockId?,
         val thenBlocks: Set<BasicBlockId>,
         val elseEntry: BasicBlockId?,
         val elseBlocks: Set<BasicBlockId>,
-        val join: BasicBlockId,
+        /** First block executed after the if when control continues normally. */
+        val continuation: BasicBlockId,
+        /** Non-fallthrough source transfer performed by the then arm, if any. */
+        val thenExit: StructuredArmExit? = null,
+        /** Non-fallthrough source transfer performed by the else arm, if any. */
+        val elseExit: StructuredArmExit? = null,
+        /** True when this local continuation was reconstructed relative to a containing loop. */
+        val loopBodyRegional: Boolean = false,
+        /** True when the loop's normal continuation was selected from the forward region layout. */
+        val loopContinuationSpine: Boolean = false,
     ) : StructuredRegion {
         override val coveredBlocks: Set<BasicBlockId> = linkedSetOf<BasicBlockId>().apply {
             add(header)
@@ -92,13 +145,15 @@ sealed interface StructuredRegion {
 
     data class While(
         override val header: BasicBlockId,
-        val condition: BranchCondition,
+        val condition: StructuredCondition,
         /** True when the JVM branch condition denotes leaving the loop rather than entering it. */
         val negateCondition: Boolean,
         val bodyEntry: BasicBlockId,
         val bodyBlocks: Set<BasicBlockId>,
         val exit: BasicBlockId,
         val latches: Set<BasicBlockId>,
+        /** Body edges that leave the loop through its canonical source-level exit. */
+        val breakEdges: Set<Pair<BasicBlockId, BasicBlockId>> = emptySet(),
     ) : StructuredRegion {
         override val coveredBlocks: Set<BasicBlockId> = linkedSetOf<BasicBlockId>().apply {
             add(header)

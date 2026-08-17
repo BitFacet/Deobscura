@@ -65,6 +65,15 @@ internal class StructuredControlFlowDiagnosticStats {
     private var unstructuredConditionalCount = 0L
     private var switchCount = 0L
     private var booleanConditionFoldCount = 0L
+    private var shortCircuitConditionFoldCount = 0L
+    private var shortCircuitFoldedHeaderCount = 0L
+    private var emptyArmNormalizationCount = 0L
+    private var terminalIfRegionCount = 0L
+    private var continueIfRegionCount = 0L
+    private var breakIfRegionCount = 0L
+    private var loopBodyIfRegionCount = 0L
+    private var loopContinuationIfRegionCount = 0L
+    private var loopBreakEdgeCount = 0L
     private val unstructuredReasonCounts = linkedMapOf<io.github.relvl.deobscura.controlflow.UnstructuredControlFlowReason, Long>()
     var inconsistencyCount = 0
     var failureCount = 0
@@ -74,6 +83,15 @@ internal class StructuredControlFlowDiagnosticStats {
         conditionalBranchCount += analysis.conditionalBranchCount
         switchCount += analysis.switchCount
         booleanConditionFoldCount += analysis.booleanConditionFolds.size
+        shortCircuitConditionFoldCount += analysis.shortCircuitConditionFolds.size
+        shortCircuitFoldedHeaderCount += analysis.shortCircuitConditionFolds.sumOf { it.foldedHeaders.size.toLong() }
+        emptyArmNormalizationCount += analysis.emptyArmNormalizationCount
+        terminalIfRegionCount += analysis.terminalIfRegionCount
+        continueIfRegionCount += analysis.continueIfRegionCount
+        breakIfRegionCount += analysis.breakIfRegionCount
+        loopBodyIfRegionCount += analysis.loopBodyIfRegionCount
+        loopContinuationIfRegionCount += analysis.loopContinuationIfRegionCount
+        loopBreakEdgeCount += analysis.regions.filterIsInstance<StructuredRegion.While>().sumOf { it.breakEdges.size.toLong() }
         analysis.unstructured.forEach { diagnostic ->
             if (diagnostic.kind == io.github.relvl.deobscura.controlflow.UnstructuredControlFlowKind.CONDITIONAL) {
                 unstructuredReasonCounts[diagnostic.reason] = unstructuredReasonCounts.getOrDefault(diagnostic.reason, 0L) + 1L
@@ -84,7 +102,7 @@ internal class StructuredControlFlowDiagnosticStats {
         ifRegionCount += ifs
         whileRegionCount += whiles
         unstructuredConditionalCount += analysis.unstructuredConditionalCount
-        if (ifs + whiles + analysis.booleanConditionFolds.size > 0) structuredMethodCount++
+        if (ifs + whiles + analysis.booleanConditionFolds.size + analysis.shortCircuitConditionFolds.size > 0) structuredMethodCount++
     }
 
     fun log(logger: Logger) {
@@ -98,14 +116,26 @@ internal class StructuredControlFlowDiagnosticStats {
         )
         logger.info(
             "Control-flow structuring classified {}/{} conditional branch header(s); {} remain block-based, {} switch(es) deferred.",
-            ifRegionCount + whileRegionCount + booleanConditionFoldCount,
+            ifRegionCount + whileRegionCount + booleanConditionFoldCount + shortCircuitFoldedHeaderCount,
             conditionalBranchCount,
             unstructuredConditionalCount,
             switchCount,
         )
         logger.info(
-            "Control-flow normalization folded {} boolean materialization diamond(s) into consuming condition(s).",
+            "Control-flow normalization folded {} boolean materialization diamond(s) and {} short-circuit chain(s) ({} condition header(s)), normalized {} empty if arm(s), recognized {} terminal-arm if region(s), {} continue if region(s), {} break if region(s), {} loop-body regional if(s), and {} loop-continuation if(s).",
             booleanConditionFoldCount,
+            shortCircuitConditionFoldCount,
+            shortCircuitFoldedHeaderCount,
+            emptyArmNormalizationCount,
+            terminalIfRegionCount,
+            continueIfRegionCount,
+            breakIfRegionCount,
+            loopBodyIfRegionCount,
+            loopContinuationIfRegionCount,
+        )
+        logger.info(
+            "Loop structuring recognized {} body edge(s) to canonical loop exits as break transfer(s).",
+            loopBreakEdgeCount,
         )
         if (unstructuredReasonCounts.isNotEmpty()) {
             logger.info(

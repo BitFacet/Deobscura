@@ -14,7 +14,7 @@ import io.github.relvl.deobscura.expression.ExpressionNode
 import io.github.relvl.deobscura.expression.ExpressionStatement
 import java.util.ArrayDeque
 
-/** Recognizes conservative single-entry reducible `if` and natural `while` regions. */
+/** Recognizes conservative single-entry reducible `if`, terminal-arm `if`, and natural `while` regions. */
 class StructuredControlFlowAnalyzer {
     fun analyze(
         graph: ControlFlowGraph,
@@ -30,6 +30,7 @@ class StructuredControlFlowAnalyzer {
         val instructionToBlock = instructionToBlock(graph)
         val originalBranches = branchesByBlock(graph, expression, blocks, instructionToBlock)
         val switchHeaders = switchesByBlock(expression, blocks, instructionToBlock)
+        val explicitTerminalBlocks = explicitTerminalBlocks(expression, blocks, instructionToBlock, outgoing)
         val folds = findBooleanConditionFolds(
             expression = expression,
             branches = originalBranches,
@@ -41,19 +42,56 @@ class StructuredControlFlowAnalyzer {
         val branches = originalBranches.asSequence()
             .filter { (header, _) -> header !in foldedProducerHeaders }
             .associate { (header, branch) -> header to (foldedConditions[header]?.let { branch.copy(condition = it) } ?: branch) }
-
         if (branches.isEmpty()) {
             val diagnostics = switchHeaders.map {
                 UnstructuredControlFlowDiagnostic(it, UnstructuredControlFlowKind.SWITCH, UnstructuredControlFlowReason.SWITCH_DEFERRED)
             }
-            return StructuredControlFlowAnalysis(emptyList(), originalBranches.size, switchHeaders.size, folds, diagnostics)
+            return StructuredControlFlowAnalysis(
+                regions = emptyList(),
+                conditionalBranchCount = originalBranches.size,
+                switchCount = switchHeaders.size,
+                booleanConditionFolds = folds,
+                shortCircuitConditionFolds = emptyList(),
+                unstructured = diagnostics,
+            )
         }
 
         val dominators = dominators(blocks, requireNotNull(flow.entryBlock), predecessors)
         val loopRecognition = findNaturalLoops(normalEdges, outgoing, predecessors, branches, dominators)
         val loopHeaders = loopRecognition.regions.mapTo(hashSetOf()) { it.header }
+        val shortCircuitFolds = findShortCircuitConditionFolds(
+            expression = expression,
+            branches = branches,
+            outgoing = outgoing,
+            predecessors = predecessors,
+            instructionToBlock = instructionToBlock,
+            excludedHeaders = loopHeaders,
+        )
+        val shortCircuitByRoot = shortCircuitFolds.associateBy { it.rootHeader }
+        val shortCircuitFoldedHeaders = shortCircuitFolds.flatMapTo(hashSetOf()) { it.foldedHeaders }
+        val loopContexts = loopRecognition.regions.associate { loop ->
+            loop.header to LoopFlowContext(
+                loop = loop,
+                continueTargets = transparentLoopContinueTargets(
+                    loop = loop,
+                    outgoing = outgoing,
+                    expression = expression,
+                    instructionToBlock = instructionToBlock,
+                ),
+            )
+        }
         val postDominators = postDominators(blocks, outgoing)
-        val ifRecognition = findIfRegions(blocks, outgoing, predecessors, branches, postDominators, loopHeaders)
+        val ifRecognition = findIfRegions(
+            blocks = blocks,
+            outgoing = outgoing,
+            predecessors = predecessors,
+            branches = branches,
+            postDominators = postDominators,
+            excludedHeaders = loopHeaders + shortCircuitFoldedHeaders,
+            explicitTerminalBlocks = explicitTerminalBlocks,
+            loopContexts = loopContexts.values.toList(),
+            shortCircuitByRoot = shortCircuitByRoot,
+        )
 
         val regions = (loopRecognition.regions + ifRecognition.regions).sortedWith(
             compareBy<StructuredRegion> { it.header.value }
@@ -61,6 +99,7 @@ class StructuredControlFlowAnalyzer {
         )
         val recognizedHeaders = regions.mapTo(hashSetOf()) { it.header }
         recognizedHeaders += foldedProducerHeaders
+        recognizedHeaders += shortCircuitFoldedHeaders
 
         val diagnostics = buildList {
             originalBranches.keys.sortedBy { it.value }.forEach { header ->
@@ -74,7 +113,20 @@ class StructuredControlFlowAnalyzer {
                 add(UnstructuredControlFlowDiagnostic(header, UnstructuredControlFlowKind.SWITCH, UnstructuredControlFlowReason.SWITCH_DEFERRED))
             }
         }
-        return StructuredControlFlowAnalysis(regions, originalBranches.size, switchHeaders.size, folds, diagnostics)
+        return StructuredControlFlowAnalysis(
+            regions = regions,
+            conditionalBranchCount = originalBranches.size,
+            switchCount = switchHeaders.size,
+            booleanConditionFolds = folds,
+            shortCircuitConditionFolds = shortCircuitFolds,
+            emptyArmNormalizationCount = ifRecognition.emptyArmNormalizationCount,
+            terminalIfRegionCount = ifRecognition.terminalIfRegionCount,
+            continueIfRegionCount = ifRecognition.continueIfRegionCount,
+            breakIfRegionCount = ifRecognition.breakIfRegionCount,
+            loopBodyIfRegionCount = ifRecognition.loopBodyIfRegionCount,
+            loopContinuationIfRegionCount = ifRecognition.loopContinuationIfRegionCount,
+            unstructured = diagnostics,
+        )
     }
 
     private fun instructionToBlock(graph: ControlFlowGraph): Array<BasicBlockId?> =
@@ -116,6 +168,18 @@ class StructuredControlFlowAnalyzer {
         .filterIsInstance<ExpressionStatement.Switch>()
         .mapNotNull { instructionToBlock.getOrNull(it.instructionIndex) }
         .filter { it in blocks }
+        .toCollection(linkedSetOf())
+
+    /** Blocks whose normal flow ends in an explicit source-level return or throw. */
+    private fun explicitTerminalBlocks(
+        expression: ExpressionAnalysis,
+        blocks: Set<BasicBlockId>,
+        instructionToBlock: Array<BasicBlockId?>,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+    ): Set<BasicBlockId> = expression.statements.asSequence()
+        .filter { it is ExpressionStatement.Return || it is ExpressionStatement.Throw }
+        .mapNotNull { instructionToBlock.getOrNull(it.instructionIndex) }
+        .filter { it in blocks && outgoing[it].orEmpty().isEmpty() }
         .toCollection(linkedSetOf())
 
     /**
@@ -214,6 +278,129 @@ class StructuredControlFlowAnalyzer {
         }
     }
 
+    /**
+     * Recognizes linear short-circuit chains such as `a || b || c` or their negated `&&` form.
+     * Intermediate condition-only blocks stay in the canonical CFG, but are hidden from the
+     * structured view and the root branch receives a compound source condition.
+     */
+    private fun findShortCircuitConditionFolds(
+        expression: ExpressionAnalysis,
+        branches: Map<BasicBlockId, ExpressionStatement.Branch>,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        predecessors: Map<BasicBlockId, List<BasicBlockId>>,
+        instructionToBlock: Array<BasicBlockId?>,
+        excludedHeaders: Set<BasicBlockId> = emptySet(),
+    ): List<ShortCircuitConditionFold> {
+        if (branches.size < 2) return emptyList()
+        val valuesByBlock = expression.values.values.asSequence()
+            .filter { it.instructionIndices.isNotEmpty() }
+            .groupBy { instructionToBlock.getOrNull(it.instructionIndices.last()) }
+        val statementsByBlock = expression.statements.groupBy { instructionToBlock.getOrNull(it.instructionIndex) }
+        val occupied = hashSetOf<BasicBlockId>()
+        val result = mutableListOf<ShortCircuitConditionFold>()
+
+        for (root in branches.keys.sortedBy { it.value }) {
+            if (root in occupied || root in excludedHeaders) continue
+            val rootTargets = branchTargets(root, outgoing) ?: continue
+            var best: ShortCircuitConditionFold? = null
+            for (commonTarget in listOf(rootTargets.first, rootTargets.second).distinct()) {
+                val terms = mutableListOf<StructuredCondition>()
+                val folded = linkedSetOf<BasicBlockId>()
+                var current = root
+                var previous: BasicBlockId? = null
+                var finalOther: BasicBlockId? = null
+                var valid = true
+
+                while (true) {
+                    val branch = branches[current]
+                    if (branch == null) { valid = false; break }
+                    val condition = branch.condition
+                    if (condition == null) { valid = false; break }
+                    val targets = branchTargets(current, outgoing)
+                    if (targets == null) { valid = false; break }
+                    val toCommon = when (commonTarget) {
+                        targets.first -> StructuredCondition.Atomic(condition)
+                        targets.second -> StructuredCondition.Atomic(condition.negated())
+                        else -> null
+                    }
+                    if (toCommon == null) { valid = false; break }
+                    terms += toCommon
+                    val other = if (targets.first == commonTarget) targets.second else targets.first
+
+                    val nextBranch = branches[other]
+                    val nextTargets = nextBranch?.let { branchTargets(other, outgoing) }
+                    val canContinue = nextBranch != null &&
+                        nextTargets != null &&
+                        commonTarget in listOf(nextTargets.first, nextTargets.second) &&
+                        other !in occupied &&
+                        other !in excludedHeaders &&
+                        predecessors[other].orEmpty().distinct() == listOf(current) &&
+                        isTransparentConditionHeader(other, valuesByBlock, statementsByBlock, expression)
+                    if (!canContinue) {
+                        finalOther = other
+                        break
+                    }
+                    if (previous != null) folded += current
+                    previous = current
+                    current = other
+                    if (current == root || folded.size > 64) {
+                        valid = false
+                        break
+                    }
+                }
+
+                // At least two branch headers must participate. The root itself is retained; every
+                // later header is source-transparent and is recorded as folded.
+                if (!valid || terms.size < 2 || finalOther == null) continue
+                folded.clear()
+                var cursor = root
+                repeat(terms.size - 1) {
+                    val targets = branchTargets(cursor, outgoing) ?: return@repeat
+                    val other = if (targets.first == commonTarget) targets.second else targets.first
+                    folded += other
+                    cursor = other
+                }
+                if (folded.any { it in occupied }) continue
+                val candidate = ShortCircuitConditionFold(
+                    rootHeader = root,
+                    foldedHeaders = folded,
+                    condition = StructuredCondition.Or(terms),
+                    conditionalTarget = commonTarget,
+                    fallthroughTarget = finalOther,
+                )
+                if (best == null || candidate.foldedHeaders.size > best.foldedHeaders.size) best = candidate
+            }
+            best?.let { fold ->
+                result += fold
+                occupied += fold.foldedHeaders
+            }
+        }
+        return result
+    }
+
+    private fun branchTargets(
+        header: BasicBlockId,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+    ): Pair<BasicBlockId, BasicBlockId>? {
+        val edges = outgoing[header].orEmpty()
+        val conditional = edges.firstOrNull { it.kind == ControlFlowEdgeKind.CONDITIONAL }?.to ?: return null
+        val fallthrough = edges.firstOrNull { it.kind == ControlFlowEdgeKind.FALLTHROUGH }?.to ?: return null
+        if (conditional == fallthrough) return null
+        return conditional to fallthrough
+    }
+
+    private fun isTransparentConditionHeader(
+        block: BasicBlockId,
+        valuesByBlock: Map<BasicBlockId?, List<io.github.relvl.deobscura.expression.ExpressionValue>>,
+        statementsByBlock: Map<BasicBlockId?, List<ExpressionStatement>>,
+        expression: ExpressionAnalysis,
+    ): Boolean {
+        if (valuesByBlock[block].orEmpty().any { it.id !in expression.materialization.inlineValues }) return false
+        val statements = statementsByBlock[block].orEmpty()
+        return statements.size == 1 && statements.single() is ExpressionStatement.Branch &&
+            (statements.single() as ExpressionStatement.Branch).condition != null
+    }
+
     private fun findNaturalLoops(
         edges: List<ControlFlowEdge>,
         outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
@@ -262,10 +449,17 @@ class StructuredControlFlowAnalyzer {
                 .flatMap { outgoing[it].orEmpty().asSequence() }
                 .filter { it.to !in loopBlocks }
                 .toList()
-            if (externalExits.any { it.from != header || it.to != exitEdge.to }) {
+            // An edge from the loop body to the same exit selected by the header is a source-level
+            // `break`, not a reason to reject the natural loop. Exits to any other block remain
+            // unsupported because they may represent labeled transfers or a more complex region.
+            if (externalExits.any { it.to != exitEdge.to }) {
                 rejections[header] = UnstructuredControlFlowReason.LOOP_HAS_ADDITIONAL_EXIT
                 return@forEach
             }
+            val breakEdges = externalExits.asSequence()
+                .filter { it.from != header }
+                .map { it.from to it.to }
+                .toCollection(linkedSetOf())
 
             val body = loopBlocks - header
             if (body.any { block -> predecessors[block].orEmpty().any { it !in loopBlocks } }) {
@@ -281,12 +475,13 @@ class StructuredControlFlowAnalyzer {
             val negate = conditionalTarget != bodyEdge.to
             regions += StructuredRegion.While(
                 header = header,
-                condition = condition,
+                condition = StructuredCondition.Atomic(condition),
                 negateCondition = negate,
                 bodyEntry = bodyEdge.to,
                 bodyBlocks = body.sortedBy { it.value }.toCollection(linkedSetOf()),
                 exit = exitEdge.to,
                 latches = latchesEdges.mapTo(linkedSetOf()) { it.from },
+                breakEdges = breakEdges,
             )
         }
         return LoopRecognition(regions, rejections)
@@ -299,12 +494,23 @@ class StructuredControlFlowAnalyzer {
         branches: Map<BasicBlockId, ExpressionStatement.Branch>,
         postDominators: Map<BasicBlockId, Set<BasicBlockId>>,
         excludedHeaders: Set<BasicBlockId>,
+        explicitTerminalBlocks: Set<BasicBlockId>,
+        loopContexts: List<LoopFlowContext>,
+        shortCircuitByRoot: Map<BasicBlockId, ShortCircuitConditionFold>,
     ): IfRecognition {
         val regions = mutableListOf<StructuredRegion.If>()
         val rejections = linkedMapOf<BasicBlockId, UnstructuredControlFlowReason>()
+        var emptyArmNormalizationCount = 0
+        var terminalIfRegionCount = 0
+        var continueIfRegionCount = 0
+        var breakIfRegionCount = 0
+        var loopBodyIfRegionCount = 0
+        var loopContinuationIfRegionCount = 0
         branches.forEach { (header, branch) ->
             if (header in excludedHeaders) return@forEach
-            val condition = branch.condition ?: return@forEach
+            val branchCondition = branch.condition ?: return@forEach
+            val shortCircuitFold = shortCircuitByRoot[header]
+            val condition = shortCircuitFold?.condition ?: StructuredCondition.Atomic(branchCondition)
             val edges = outgoing[header].orEmpty()
             val conditional = edges.firstOrNull { it.kind == ControlFlowEdgeKind.CONDITIONAL }
             val fallthrough = edges.firstOrNull { it.kind == ControlFlowEdgeKind.FALLTHROUGH }
@@ -312,14 +518,75 @@ class StructuredControlFlowAnalyzer {
                 rejections[header] = UnstructuredControlFlowReason.MISSING_BRANCH_EDGES
                 return@forEach
             }
-            if (conditional.to == fallthrough.to) {
+            val conditionalTarget = shortCircuitFold?.conditionalTarget ?: conditional.to
+            val fallthroughTarget = shortCircuitFold?.fallthroughTarget ?: fallthrough.to
+            val ignoredArmPredecessors = shortCircuitFold?.foldedHeaders.orEmpty()
+            if (conditionalTarget == fallthroughTarget) {
                 rejections[header] = UnstructuredControlFlowReason.IDENTICAL_SUCCESSORS
                 return@forEach
             }
 
+            val containingLoop = loopContexts.asSequence()
+                .filter { header in it.loop.bodyBlocks }
+                .minByOrNull { it.loop.bodyBlocks.size }
+            if (containingLoop != null) {
+                val loopTransferRegion = recognizeLoopTransferIf(
+                    header = header,
+                    condition = condition,
+                    conditionalTarget = conditionalTarget,
+                    fallthroughTarget = fallthroughTarget,
+                    context = containingLoop,
+                    outgoing = outgoing,
+                    predecessors = predecessors,
+                    ignoredPredecessors = ignoredArmPredecessors,
+                )
+                if (loopTransferRegion != null) {
+                    regions += loopTransferRegion.region
+                    when (loopTransferRegion.exit.kind) {
+                        StructuredArmExitKind.CONTINUE -> continueIfRegionCount++
+                        StructuredArmExitKind.BREAK -> breakIfRegionCount++
+                        StructuredArmExitKind.RETURN_OR_THROW -> error("Unexpected terminal exit in loop-transfer recognition")
+                    }
+                    if (loopTransferRegion.usedContinuationSpine) loopContinuationIfRegionCount++
+                    return@forEach
+                }
+
+                val regionalIf = recognizeLoopBodyRegionalIf(
+                    header = header,
+                    condition = condition,
+                    conditionalTarget = conditionalTarget,
+                    fallthroughTarget = fallthroughTarget,
+                    context = containingLoop,
+                    outgoing = outgoing,
+                    predecessors = predecessors,
+                    ignoredPredecessors = ignoredArmPredecessors,
+                )
+                if (regionalIf != null) {
+                    regions += regionalIf
+                    loopBodyIfRegionCount++
+                    return@forEach
+                }
+            }
+
             val join = immediatePostDominator(header, postDominators)
             if (join == null) {
-                rejections[header] = UnstructuredControlFlowReason.NO_COMMON_POST_DOMINATOR
+                val terminalRegion = recognizeTerminalIf(
+                    header = header,
+                    condition = condition,
+                    conditionalTarget = conditionalTarget,
+                    fallthroughTarget = fallthroughTarget,
+                    blocks = blocks,
+                    outgoing = outgoing,
+                    predecessors = predecessors,
+                    explicitTerminalBlocks = explicitTerminalBlocks,
+                    ignoredPredecessors = ignoredArmPredecessors,
+                )
+                if (terminalRegion != null) {
+                    regions += terminalRegion
+                    terminalIfRegionCount++
+                } else {
+                    rejections[header] = UnstructuredControlFlowReason.NO_COMMON_POST_DOMINATOR
+                }
                 return@forEach
             }
             if (join == header) {
@@ -327,12 +594,12 @@ class StructuredControlFlowAnalyzer {
                 return@forEach
             }
 
-            val thenAttempt = collectArm(conditional.to, join, header, blocks, outgoing)
+            val thenAttempt = collectArm(conditionalTarget, join, header, blocks, outgoing)
             if (thenAttempt is ArmCollection.Rejected) {
                 rejections[header] = thenAttempt.reason
                 return@forEach
             }
-            val elseAttempt = collectArm(fallthrough.to, join, header, blocks, outgoing)
+            val elseAttempt = collectArm(fallthroughTarget, join, header, blocks, outgoing)
             if (elseAttempt is ArmCollection.Rejected) {
                 rejections[header] = elseAttempt.reason
                 return@forEach
@@ -343,22 +610,485 @@ class StructuredControlFlowAnalyzer {
                 rejections[header] = UnstructuredControlFlowReason.OVERLAPPING_ARMS
                 return@forEach
             }
-            if (!singleEntryArm(thenBlocks, header, predecessors) || !singleEntryArm(elseBlocks, header, predecessors)) {
+            if (!singleEntryArm(thenBlocks, header, predecessors, ignoredArmPredecessors) ||
+                !singleEntryArm(elseBlocks, header, predecessors, ignoredArmPredecessors)
+            ) {
                 rejections[header] = UnstructuredControlFlowReason.EXTERNAL_ARM_ENTRY
                 return@forEach
             }
 
-            regions += StructuredRegion.If(
+            if (thenBlocks.isEmpty() && elseBlocks.isNotEmpty()) {
+                // Prefer a non-empty `then` arm in the source view. This removes shapes such as
+                // `if (!condition) {} else { body }` without touching the canonical CFG.
+                regions += StructuredRegion.If(
+                    header = header,
+                    condition = condition.negated(),
+                    thenEntry = fallthroughTarget.takeUnless { it == join },
+                    thenBlocks = elseBlocks,
+                    elseEntry = null,
+                    elseBlocks = emptySet(),
+                    continuation = join,
+                )
+                emptyArmNormalizationCount++
+            } else {
+                regions += StructuredRegion.If(
+                    header = header,
+                    condition = condition,
+                    thenEntry = conditionalTarget.takeUnless { it == join },
+                    thenBlocks = thenBlocks,
+                    elseEntry = fallthroughTarget.takeUnless { it == join },
+                    elseBlocks = elseBlocks,
+                    continuation = join,
+                )
+            }
+        }
+        return IfRecognition(
+            regions,
+            rejections,
+            emptyArmNormalizationCount,
+            terminalIfRegionCount,
+            continueIfRegionCount,
+            breakIfRegionCount,
+            loopBodyIfRegionCount,
+            loopContinuationIfRegionCount,
+        )
+    }
+
+    /**
+     * Finds source-transparent loop-tail blocks that are semantically equivalent to reaching the
+     * loop header. A compiler may target such a latch instead of the header directly for
+     * `continue`; accepting only transparent tails keeps the source transfer semantics sound.
+     */
+    private fun transparentLoopContinueTargets(
+        loop: StructuredRegion.While,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        expression: ExpressionAnalysis,
+        instructionToBlock: Array<BasicBlockId?>,
+    ): Set<BasicBlockId> {
+        val valuesByBlock = expression.values.values.asSequence()
+            .filter { it.instructionIndices.isNotEmpty() }
+            .groupBy { instructionToBlock.getOrNull(it.instructionIndices.last()) }
+        val statementsByBlock = expression.statements.groupBy { instructionToBlock.getOrNull(it.instructionIndex) }
+        val result = linkedSetOf(loop.header)
+        var changed: Boolean
+        do {
+            changed = false
+            for (block in loop.bodyBlocks) {
+                if (block in result || !isTransparentTransferBlock(block, valuesByBlock, statementsByBlock, expression)) continue
+                val targets = outgoing[block].orEmpty().distinctTargets().map { it.to }
+                if (targets.size == 1 && targets.single() in result) {
+                    result += block
+                    changed = true
+                }
+            }
+        } while (changed)
+        return result
+    }
+
+    private fun isTransparentTransferBlock(
+        block: BasicBlockId,
+        valuesByBlock: Map<BasicBlockId?, List<io.github.relvl.deobscura.expression.ExpressionValue>>,
+        statementsByBlock: Map<BasicBlockId?, List<ExpressionStatement>>,
+        expression: ExpressionAnalysis,
+    ): Boolean {
+        if (valuesByBlock[block].orEmpty().any { it.id !in expression.materialization.inlineValues }) return false
+        // An unconditional JVM branch is only the physical transfer to the loop header/latch.
+        // It has no source-level statement semantics and must not make an otherwise empty tail
+        // visible to structured control-flow reconstruction.
+        return statementsByBlock[block].orEmpty().all {
+            it is ExpressionStatement.Branch && it.condition == null
+        }
+    }
+
+    /**
+     * Reconstructs an if nested in a natural-loop body when one successor is the next sequential
+     * region and the other arm may also contain a proven loop transfer. This covers compiler CFGs
+     * such as `if (...) { if (...) continue; body; } if (...) ...`, where the loop header is the
+     * global post-dominator but is too coarse to be the source-level continuation of the first if.
+     */
+    private fun recognizeLoopBodyRegionalIf(
+        header: BasicBlockId,
+        condition: StructuredCondition,
+        conditionalTarget: BasicBlockId,
+        fallthroughTarget: BasicBlockId,
+        context: LoopFlowContext,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        predecessors: Map<BasicBlockId, List<BasicBlockId>>,
+        ignoredPredecessors: Set<BasicBlockId>,
+    ): StructuredRegion.If? {
+        val loop = context.loop
+        val transferTargets = context.continueTargets + loop.exit
+        val candidates = buildList {
+            if (reachableWithinLoop(conditionalTarget, fallthroughTarget, loop, outgoing, transferTargets)) {
+                add(Triple(conditionalTarget, fallthroughTarget, condition))
+            }
+            if (reachableWithinLoop(fallthroughTarget, conditionalTarget, loop, outgoing, transferTargets)) {
+                add(Triple(fallthroughTarget, conditionalTarget, condition.negated()))
+            }
+        }
+        for ((armStart, continuation, sourceCondition) in candidates) {
+            val arm = collectLoopBodyRegionalArm(
+                start = armStart,
+                continuation = continuation,
                 header = header,
-                condition = condition,
-                thenEntry = conditional.to.takeUnless { it == join },
-                thenBlocks = thenBlocks,
-                elseEntry = fallthrough.to.takeUnless { it == join },
-                elseBlocks = elseBlocks,
-                join = join,
+                loop = loop,
+                outgoing = outgoing,
+                transferTargets = transferTargets,
+            )
+            if (arm !is ArmCollection.Success || arm.blocks.isEmpty()) continue
+            if (!singleEntryArm(arm.blocks, header, predecessors, ignoredPredecessors)) continue
+            return StructuredRegion.If(
+                header = header,
+                condition = sourceCondition,
+                thenEntry = armStart,
+                thenBlocks = arm.blocks,
+                elseEntry = null,
+                elseBlocks = emptySet(),
+                continuation = continuation,
+                loopBodyRegional = true,
             )
         }
-        return IfRecognition(regions, rejections)
+        return null
+    }
+
+    private fun reachableWithinLoop(
+        start: BasicBlockId,
+        target: BasicBlockId,
+        loop: StructuredRegion.While,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        transferTargets: Set<BasicBlockId>,
+    ): Boolean {
+        if (start == target) return true
+        val seen = hashSetOf<BasicBlockId>()
+        val queue = ArrayDeque<BasicBlockId>()
+        queue.addLast(start)
+        while (queue.isNotEmpty()) {
+            val block = queue.removeFirst()
+            if (!seen.add(block)) continue
+            if (block != start && block in transferTargets) continue
+            if (block !in loop.bodyBlocks) continue
+            for (next in outgoing[block].orEmpty().distinctTargets().map { it.to }) {
+                if (next == target) return true
+                if (next in loop.bodyBlocks && next !in transferTargets) queue.addLast(next)
+            }
+        }
+        return false
+    }
+
+    private fun collectLoopBodyRegionalArm(
+        start: BasicBlockId,
+        continuation: BasicBlockId,
+        header: BasicBlockId,
+        loop: StructuredRegion.While,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        transferTargets: Set<BasicBlockId>,
+    ): ArmCollection {
+        val result = linkedSetOf<BasicBlockId>()
+        val queue = ArrayDeque<BasicBlockId>()
+        var continuationSeen = false
+        queue.addLast(start)
+        while (queue.isNotEmpty()) {
+            val block = queue.removeFirst()
+            if (block == continuation) {
+                continuationSeen = true
+                continue
+            }
+            if (block in transferTargets) continue
+            if (block == header) return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_REENTERS_HEADER)
+            if (block !in loop.bodyBlocks) return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_LEAVES_REACHABLE_FLOW)
+            if (!result.add(block)) continue
+            val successors = outgoing[block].orEmpty().distinctTargets().map { it.to }
+            if (successors.isEmpty()) return ArmCollection.Rejected(UnstructuredControlFlowReason.TERMINAL_ARM)
+            successors.forEach(queue::addLast)
+        }
+        if (!continuationSeen) return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_HAS_OTHER_EXIT)
+        return ArmCollection.Success(result)
+    }
+
+    /**
+     * Recognizes an if arm that exits the innermost containing loop with `continue` or `break`.
+     * The other successor becomes the normal continuation of the if. This is deliberately limited
+     * to the loop header and the loop's canonical exit so labeled/non-local transfers remain
+     * block-based.
+     */
+    private fun recognizeLoopTransferIf(
+        header: BasicBlockId,
+        condition: StructuredCondition,
+        conditionalTarget: BasicBlockId,
+        fallthroughTarget: BasicBlockId,
+        context: LoopFlowContext,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        predecessors: Map<BasicBlockId, List<BasicBlockId>>,
+        ignoredPredecessors: Set<BasicBlockId> = emptySet(),
+    ): LoopTransferRecognition? {
+        val loop = context.loop
+        // Prefer an explicit edge to the canonical loop exit over describing the opposite arm as
+        // `continue`; `if (x) break` is the direct source shape and leaves the remaining body as
+        // the normal continuation.
+        val candidates = listOf(
+            StructuredArmExit(StructuredArmExitKind.BREAK, loop.exit),
+            StructuredArmExit(StructuredArmExitKind.CONTINUE, loop.header),
+        )
+        for (exit in candidates) {
+            val transferTargets = when (exit.kind) {
+                StructuredArmExitKind.BREAK -> setOf(loop.exit)
+                StructuredArmExitKind.CONTINUE -> context.continueTargets.ifEmpty { setOf(loop.header) }
+                StructuredArmExitKind.RETURN_OR_THROW -> error("Unexpected terminal loop transfer")
+            }
+            val conditionalArm = collectTransferArm(
+                start = conditionalTarget,
+                continuation = fallthroughTarget,
+                transferTargets = transferTargets,
+                header = header,
+                allowedBlocks = loop.bodyBlocks,
+                outgoing = outgoing,
+            )
+            val conditionalTransfers = conditionalArm is ArmCollection.Success &&
+                singleEntryArm(conditionalArm.blocks, header, predecessors, ignoredPredecessors)
+
+            val fallthroughArm = collectTransferArm(
+                start = fallthroughTarget,
+                continuation = conditionalTarget,
+                transferTargets = transferTargets,
+                header = header,
+                allowedBlocks = loop.bodyBlocks,
+                outgoing = outgoing,
+            )
+            val fallthroughTransfers = fallthroughArm is ArmCollection.Success &&
+                singleEntryArm(fallthroughArm.blocks, header, predecessors, ignoredPredecessors)
+
+            var effectiveConditionalTransfers = conditionalTransfers
+            var effectiveFallthroughTransfers = fallthroughTransfers
+            var usedContinuationSpine = false
+            if (conditionalTransfers && fallthroughTransfers) {
+                if (exit.kind != StructuredArmExitKind.CONTINUE) continue
+                when (
+                    selectLoopContinuation(
+                        conditionalTarget = conditionalTarget,
+                        conditionalArm = (conditionalArm as ArmCollection.Success).blocks,
+                        fallthroughTarget = fallthroughTarget,
+                        fallthroughArm = (fallthroughArm as ArmCollection.Success).blocks,
+                        context = context,
+                    )
+                ) {
+                    LoopContinuation.CONDITIONAL -> effectiveConditionalTransfers = false
+                    LoopContinuation.FALLTHROUGH -> effectiveFallthroughTransfers = false
+                    LoopContinuation.AMBIGUOUS -> continue
+                    LoopContinuation.CONDITIONAL_SPINE -> {
+                        effectiveConditionalTransfers = false
+                        usedContinuationSpine = true
+                    }
+                    LoopContinuation.FALLTHROUGH_SPINE -> {
+                        effectiveFallthroughTransfers = false
+                        usedContinuationSpine = true
+                    }
+                }
+            }
+
+            if (effectiveConditionalTransfers) {
+                val arm = conditionalArm as ArmCollection.Success
+                return LoopTransferRecognition(
+                    StructuredRegion.If(
+                        header = header,
+                        condition = condition,
+                        thenEntry = conditionalTarget,
+                        thenBlocks = arm.blocks,
+                        elseEntry = null,
+                        elseBlocks = emptySet(),
+                        continuation = fallthroughTarget,
+                        thenExit = exit,
+                        loopContinuationSpine = usedContinuationSpine,
+                    ),
+                    exit,
+                    usedContinuationSpine,
+                )
+            }
+
+            if (effectiveFallthroughTransfers) {
+                val arm = fallthroughArm as ArmCollection.Success
+                return LoopTransferRecognition(
+                    StructuredRegion.If(
+                        header = header,
+                        condition = condition.negated(),
+                        thenEntry = fallthroughTarget,
+                        thenBlocks = arm.blocks,
+                        elseEntry = null,
+                        elseBlocks = emptySet(),
+                        continuation = conditionalTarget,
+                        thenExit = exit,
+                        loopContinuationSpine = usedContinuationSpine,
+                    ),
+                    exit,
+                    usedContinuationSpine,
+                )
+            }
+        }
+        return null
+    }
+
+    /**
+     * Chooses the ordinary continuation when both successors eventually reach the same loop-end
+     * transfer. Direct transparent tails are authoritative. Otherwise, use the physical forward
+     * layout only when one complete transfer arm lies before the opposite successor: this is the
+     * canonical JVM shape of `if (...) { ...; continue; } nextStatement`. The transformation is
+     * semantics-preserving even when the original source used an equivalent two-arm form, while
+     * avoiding arbitrary choices for symmetric transfer arms.
+     */
+    private fun selectLoopContinuation(
+        conditionalTarget: BasicBlockId,
+        conditionalArm: Set<BasicBlockId>,
+        fallthroughTarget: BasicBlockId,
+        fallthroughArm: Set<BasicBlockId>,
+        context: LoopFlowContext,
+    ): LoopContinuation {
+        val conditionalIsNaturalTail = conditionalTarget != context.loop.header && conditionalTarget in context.continueTargets
+        val fallthroughIsNaturalTail = fallthroughTarget != context.loop.header && fallthroughTarget in context.continueTargets
+        if (conditionalIsNaturalTail != fallthroughIsNaturalTail) {
+            return if (conditionalIsNaturalTail) LoopContinuation.CONDITIONAL else LoopContinuation.FALLTHROUGH
+        }
+        if (conditionalIsNaturalTail && fallthroughIsNaturalTail) return LoopContinuation.AMBIGUOUS
+
+        val conditionalEndsBeforeFallthrough = armIsForwardPrefix(conditionalTarget, conditionalArm, fallthroughTarget)
+        val fallthroughEndsBeforeConditional = armIsForwardPrefix(fallthroughTarget, fallthroughArm, conditionalTarget)
+        return when {
+            conditionalEndsBeforeFallthrough && !fallthroughEndsBeforeConditional -> LoopContinuation.FALLTHROUGH_SPINE
+            fallthroughEndsBeforeConditional && !conditionalEndsBeforeFallthrough -> LoopContinuation.CONDITIONAL_SPINE
+            else -> LoopContinuation.AMBIGUOUS
+        }
+    }
+
+    private fun armIsForwardPrefix(
+        entry: BasicBlockId,
+        blocks: Set<BasicBlockId>,
+        continuation: BasicBlockId,
+    ): Boolean {
+        if (blocks.isEmpty() || entry !in blocks) return false
+        if (entry.value >= continuation.value) return false
+        return blocks.all { it.value >= entry.value && it.value < continuation.value }
+    }
+
+    private fun collectTransferArm(
+        start: BasicBlockId,
+        continuation: BasicBlockId,
+        transferTargets: Set<BasicBlockId>,
+        header: BasicBlockId,
+        allowedBlocks: Set<BasicBlockId>,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+    ): ArmCollection {
+        if (start == continuation) return ArmCollection.Rejected(UnstructuredControlFlowReason.IDENTICAL_SUCCESSORS)
+        if (start in transferTargets) return ArmCollection.Success(emptySet())
+        val result = linkedSetOf<BasicBlockId>()
+        val queue = ArrayDeque<BasicBlockId>()
+        var transferSeen = false
+        queue.add(start)
+        while (queue.isNotEmpty()) {
+            val block = queue.removeFirst()
+            if (block in transferTargets) {
+                transferSeen = true
+                continue
+            }
+            if (block == continuation) return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_HAS_OTHER_EXIT)
+            if (block == header) return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_REENTERS_HEADER)
+            if (block !in allowedBlocks) return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_LEAVES_REACHABLE_FLOW)
+            if (!result.add(block)) continue
+
+            val successors = outgoing[block].orEmpty().distinctTargets().map { it.to }
+            if (successors.isEmpty()) return ArmCollection.Rejected(UnstructuredControlFlowReason.TERMINAL_ARM)
+            successors.forEach(queue::addLast)
+        }
+        if (!transferSeen) return ArmCollection.Rejected(UnstructuredControlFlowReason.UNSUPPORTED_SHAPE)
+        return ArmCollection.Success(result)
+    }
+
+    /**
+     * Recognizes `if (condition) { return/throw ... } continuation` when the two successors cannot
+     * have a common post-dominator precisely because one side is a closed terminal region.
+     */
+    private fun recognizeTerminalIf(
+        header: BasicBlockId,
+        condition: StructuredCondition,
+        conditionalTarget: BasicBlockId,
+        fallthroughTarget: BasicBlockId,
+        blocks: Set<BasicBlockId>,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        predecessors: Map<BasicBlockId, List<BasicBlockId>>,
+        explicitTerminalBlocks: Set<BasicBlockId>,
+        ignoredPredecessors: Set<BasicBlockId> = emptySet(),
+    ): StructuredRegion.If? {
+        val conditionalArm = collectTerminalArm(
+            start = conditionalTarget,
+            continuation = fallthroughTarget,
+            header = header,
+            blocks = blocks,
+            outgoing = outgoing,
+            explicitTerminalBlocks = explicitTerminalBlocks,
+        )
+        if (conditionalArm is ArmCollection.Success && singleEntryArm(conditionalArm.blocks, header, predecessors, ignoredPredecessors)) {
+            return StructuredRegion.If(
+                header = header,
+                condition = condition,
+                thenEntry = conditionalTarget,
+                thenBlocks = conditionalArm.blocks,
+                elseEntry = null,
+                elseBlocks = emptySet(),
+                continuation = fallthroughTarget,
+                thenExit = StructuredArmExit(StructuredArmExitKind.RETURN_OR_THROW),
+            )
+        }
+
+        val fallthroughArm = collectTerminalArm(
+            start = fallthroughTarget,
+            continuation = conditionalTarget,
+            header = header,
+            blocks = blocks,
+            outgoing = outgoing,
+            explicitTerminalBlocks = explicitTerminalBlocks,
+        )
+        if (fallthroughArm is ArmCollection.Success && singleEntryArm(fallthroughArm.blocks, header, predecessors, ignoredPredecessors)) {
+            return StructuredRegion.If(
+                header = header,
+                condition = condition.negated(),
+                thenEntry = fallthroughTarget,
+                thenBlocks = fallthroughArm.blocks,
+                elseEntry = null,
+                elseBlocks = emptySet(),
+                continuation = conditionalTarget,
+                thenExit = StructuredArmExit(StructuredArmExitKind.RETURN_OR_THROW),
+            )
+        }
+        return null
+    }
+
+    private fun collectTerminalArm(
+        start: BasicBlockId,
+        continuation: BasicBlockId,
+        header: BasicBlockId,
+        blocks: Set<BasicBlockId>,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        explicitTerminalBlocks: Set<BasicBlockId>,
+    ): ArmCollection {
+        if (start == continuation) return ArmCollection.Rejected(UnstructuredControlFlowReason.IDENTICAL_SUCCESSORS)
+        val result = linkedSetOf<BasicBlockId>()
+        val queue = ArrayDeque<BasicBlockId>()
+        var explicitTerminalSeen = false
+        queue.add(start)
+        while (queue.isNotEmpty()) {
+            val block = queue.removeFirst()
+            if (block == continuation) return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_HAS_OTHER_EXIT)
+            if (block == header) return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_REENTERS_HEADER)
+            if (block !in blocks) return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_LEAVES_REACHABLE_FLOW)
+            if (!result.add(block)) continue
+
+            val successors = outgoing[block].orEmpty().distinctTargets().map { it.to }
+            if (successors.isEmpty()) {
+                if (block !in explicitTerminalBlocks) return ArmCollection.Rejected(UnstructuredControlFlowReason.TERMINAL_ARM)
+                explicitTerminalSeen = true
+                continue
+            }
+            successors.forEach(queue::addLast)
+        }
+        if (!explicitTerminalSeen) return ArmCollection.Rejected(UnstructuredControlFlowReason.TERMINAL_ARM)
+        return ArmCollection.Success(result)
     }
 
     private fun collectArm(
@@ -395,7 +1125,10 @@ class StructuredControlFlowAnalyzer {
         arm: Set<BasicBlockId>,
         header: BasicBlockId,
         predecessors: Map<BasicBlockId, List<BasicBlockId>>,
-    ): Boolean = arm.all { block -> predecessors[block].orEmpty().all { it == header || it in arm } }
+        ignoredPredecessors: Set<BasicBlockId> = emptySet(),
+    ): Boolean = arm.all { block ->
+        predecessors[block].orEmpty().all { it == header || it in arm || it in ignoredPredecessors }
+    }
 
     private fun dominators(
         blocks: Set<BasicBlockId>,
@@ -458,6 +1191,12 @@ class StructuredControlFlowAnalyzer {
         }
     }
 
+    private fun StructuredCondition.negated(): StructuredCondition = when (this) {
+        is StructuredCondition.Atomic -> copy(condition = condition.negated())
+        is StructuredCondition.And -> StructuredCondition.Or(terms.map { it.negated() })
+        is StructuredCondition.Or -> StructuredCondition.And(terms.map { it.negated() })
+    }
+
     private fun BranchCondition.negated(): BranchCondition = copy(operator = operator.negated())
 
     private fun ComparisonOperator.negated(): ComparisonOperator = when (this) {
@@ -476,9 +1215,34 @@ class StructuredControlFlowAnalyzer {
         val rejections: Map<BasicBlockId, UnstructuredControlFlowReason>,
     )
 
+    private data class LoopFlowContext(
+        val loop: StructuredRegion.While,
+        val continueTargets: Set<BasicBlockId>,
+    )
+
+    private enum class LoopContinuation {
+        CONDITIONAL,
+        FALLTHROUGH,
+        CONDITIONAL_SPINE,
+        FALLTHROUGH_SPINE,
+        AMBIGUOUS,
+    }
+
+    private data class LoopTransferRecognition(
+        val region: StructuredRegion.If,
+        val exit: StructuredArmExit,
+        val usedContinuationSpine: Boolean,
+    )
+
     private data class IfRecognition(
         val regions: List<StructuredRegion.If>,
         val rejections: Map<BasicBlockId, UnstructuredControlFlowReason>,
+        val emptyArmNormalizationCount: Int,
+        val terminalIfRegionCount: Int,
+        val continueIfRegionCount: Int,
+        val breakIfRegionCount: Int,
+        val loopBodyIfRegionCount: Int,
+        val loopContinuationIfRegionCount: Int,
     )
 
     private sealed interface ArmCollection {
