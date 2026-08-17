@@ -8,6 +8,7 @@ import io.github.relvl.deobscura.analysis.SsaOptimizationResult
 import io.github.relvl.deobscura.analysis.ValueFlowAnalysis
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.expression.ExpressionAnalysis
+import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
 import io.github.relvl.deobscura.raw.RawClass
 import io.github.relvl.deobscura.raw.RawMethod
@@ -84,6 +85,14 @@ object TechnicalIrService {
 
     fun captureExpression(ownerInternalName: String, method: RawMethod, expression: ExpressionAnalysis) {
         method(ownerInternalName, method)?.expression = expression
+    }
+
+    fun captureStructuredControlFlow(
+        ownerInternalName: String,
+        method: RawMethod,
+        structuredControlFlow: StructuredControlFlowAnalysis,
+    ) {
+        method(ownerInternalName, method)?.structuredControlFlow = structuredControlFlow
     }
 
     fun captureFailure(ownerInternalName: String, method: RawMethod, exception: MethodAnalysisException) {
@@ -187,7 +196,7 @@ object TechnicalIrService {
     private fun formatElapsed(nanos: Long): String =
         String.format(Locale.ROOT, "%.1f s", nanos / 1_000_000_000.0)
 
-    const val FORMAT_VERSION = 4
+    const val FORMAT_VERSION = 6
     const val MANIFEST_FILE = "_manifest.txt"
     private const val PROGRESS_INTERVAL_NANOS = 5_000_000_000L
 }
@@ -213,6 +222,7 @@ internal class MethodSnapshot(
     var initialSsa: SsaAnalysis? = null
     var optimization: SsaOptimizationResult? = null
     var expression: ExpressionAnalysis? = null
+    var structuredControlFlow: StructuredControlFlowAnalysis? = null
     var failure: MethodAnalysisException? = null
 
     fun completeAnalysis(): MethodAnalysis? {
@@ -223,6 +233,7 @@ internal class MethodSnapshot(
         val currentInitialSsa = initialSsa ?: return null
         val currentOptimization = optimization ?: return null
         val currentExpression = expression ?: return null
+        val currentStructuredControlFlow = structuredControlFlow ?: return null
         val currentNormalization = normalization ?: return null
         return MethodAnalysis(
             method = method,
@@ -232,6 +243,7 @@ internal class MethodSnapshot(
             initialSsa = currentInitialSsa,
             optimization = currentOptimization,
             expression = currentExpression,
+            structuredControlFlow = currentStructuredControlFlow,
             normalization = currentNormalization,
         )
     }

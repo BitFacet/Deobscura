@@ -8,6 +8,8 @@ import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizer
 import io.github.relvl.deobscura.raw.RawMethod
 import io.github.relvl.deobscura.expression.ExpressionAnalysis
 import io.github.relvl.deobscura.expression.ExpressionBuilder
+import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
+import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalyzer
 
 /** Runs the complete low-level analysis pipeline for one method. */
 class MethodAnalyzer(
@@ -17,6 +19,7 @@ class MethodAnalyzer(
     private val ssaAnalyzer: SsaAnalyzer = SsaAnalyzer(),
     private val ssaOptimizer: SsaOptimizer = SsaOptimizer(),
     private val expressionBuilder: ExpressionBuilder = ExpressionBuilder(),
+    private val structuredControlFlowAnalyzer: StructuredControlFlowAnalyzer = StructuredControlFlowAnalyzer(),
     private val legacySubroutineNormalizer: LegacySubroutineNormalizer = LegacySubroutineNormalizer(),
 ) {
     fun analyze(ownerInternalName: String, method: RawMethod): MethodAnalysis {
@@ -86,6 +89,23 @@ class MethodAnalyzer(
         }
         TechnicalIrService.captureExpression(ownerInternalName, method, expression)
 
+        val structuredControlFlow = try {
+            structuredControlFlowAnalyzer.analyze(graph, optimization.controlFlow, expression)
+        } catch (exception: Exception) {
+            throw failure(
+                ownerInternalName,
+                method,
+                MethodAnalysisStage.STRUCTURED_CONTROL_FLOW,
+                normalization,
+                frames,
+                valueFlow,
+                initialSsa,
+                optimization,
+                exception,
+            )
+        }
+        TechnicalIrService.captureStructuredControlFlow(ownerInternalName, method, structuredControlFlow)
+
         return MethodAnalysis(
             method = normalizedMethod,
             graph = graph,
@@ -94,6 +114,7 @@ class MethodAnalyzer(
             initialSsa = initialSsa,
             optimization = optimization,
             expression = expression,
+            structuredControlFlow = structuredControlFlow,
             normalization = normalization,
         )
     }
@@ -127,6 +148,7 @@ data class MethodAnalysis(
     val initialSsa: SsaAnalysis,
     val optimization: SsaOptimizationResult,
     val expression: ExpressionAnalysis,
+    val structuredControlFlow: StructuredControlFlowAnalysis,
     val normalization: LegacySubroutineNormalizationResult,
 ) {
     val ssa: SsaAnalysis
@@ -139,6 +161,7 @@ enum class MethodAnalysisStage {
     VALUE_FLOW,
     SSA,
     EXPRESSION,
+    STRUCTURED_CONTROL_FLOW,
 }
 
 class MethodAnalysisException(

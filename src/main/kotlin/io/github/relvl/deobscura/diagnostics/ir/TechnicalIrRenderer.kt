@@ -13,6 +13,7 @@ import io.github.relvl.deobscura.raw.*
 /** Human-readable, deterministic dump of the current technical IR. */
 class TechnicalIrRenderer(
     private val expressionRenderer: ExpressionIrRenderer = ExpressionIrRenderer(),
+    private val structuredControlFlowRenderer: StructuredControlFlowRenderer = StructuredControlFlowRenderer(expressionRenderer),
 ) {
     fun renderClassHeader(rawClass: RawClass): String = buildString {
         appendLine("# Deobscura technical IR v${TechnicalIrService.FORMAT_VERSION}")
@@ -98,6 +99,10 @@ class TechnicalIrRenderer(
 
         appendLine("  expression-ir:")
         append(expressionRenderer.render(analysis))
+        appendLine()
+
+        appendLine("  structured-control-flow:")
+        append(structuredControlFlowRenderer.render(analysis.structuredControlFlow, analysis.expression))
         appendLine()
 
         appendLine("  roots:")

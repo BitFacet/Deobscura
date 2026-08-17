@@ -175,27 +175,41 @@ class ExpressionIrRenderer {
         return "switch (${ref(selector, expression)}) [$cases]"
     }
 
-    private fun renderCondition(condition: BranchCondition, expression: ExpressionAnalysis): String {
-        val left = expression.values[condition.left]
-        val isBoolean = condition.left in expression.materialization.booleanValues ||
+    internal fun renderCondition(
+        condition: BranchCondition,
+        expression: ExpressionAnalysis,
+        negate: Boolean = false,
+    ): String {
+        val effective = if (negate) condition.copy(operator = condition.operator.negated()) else condition
+        val left = expression.values[effective.left]
+        val isBoolean = effective.left in expression.materialization.booleanValues ||
             left?.type == JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.BOOLEAN)
-        if (isBoolean && condition.right == BranchOperand.Zero) {
-            return when (condition.operator) {
-                ComparisonOperator.EQ -> "!${parenthesizeBoolean(condition.left, expression)}"
-                ComparisonOperator.NE -> renderValue(condition.left, expression, PRECEDENCE_CONDITIONAL)
-                else -> "${ref(condition.left, expression)} ${condition.operator.symbol} 0"
+        if (isBoolean && effective.right == BranchOperand.Zero) {
+            return when (effective.operator) {
+                ComparisonOperator.EQ -> "!${parenthesizeBoolean(effective.left, expression)}"
+                ComparisonOperator.NE -> renderValue(effective.left, expression, PRECEDENCE_CONDITIONAL)
+                else -> "${ref(effective.left, expression)} ${effective.operator.symbol} 0"
             }
         }
-        val comparisonPrecedence = when (condition.operator) {
+        val comparisonPrecedence = when (effective.operator) {
             ComparisonOperator.EQ, ComparisonOperator.NE -> PRECEDENCE_EQUALITY
             else -> PRECEDENCE_RELATIONAL
         }
-        val renderedLeft = renderValue(condition.left, expression, comparisonPrecedence)
-        return "$renderedLeft ${condition.operator.symbol} " + when (val right = condition.right) {
+        val renderedLeft = renderValue(effective.left, expression, comparisonPrecedence)
+        return "$renderedLeft ${effective.operator.symbol} " + when (val right = effective.right) {
             is BranchOperand.Value -> renderValue(right.value, expression, comparisonPrecedence + 1)
             BranchOperand.Zero -> "0"
             BranchOperand.Null -> "null"
         }
+    }
+
+    private fun ComparisonOperator.negated(): ComparisonOperator = when (this) {
+        ComparisonOperator.EQ -> ComparisonOperator.NE
+        ComparisonOperator.NE -> ComparisonOperator.EQ
+        ComparisonOperator.LT -> ComparisonOperator.GE
+        ComparisonOperator.LE -> ComparisonOperator.GT
+        ComparisonOperator.GT -> ComparisonOperator.LE
+        ComparisonOperator.GE -> ComparisonOperator.LT
     }
 
     private fun renderCall(

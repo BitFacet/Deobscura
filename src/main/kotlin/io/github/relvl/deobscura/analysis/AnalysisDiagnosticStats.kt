@@ -5,6 +5,8 @@ import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
 import io.github.relvl.deobscura.expression.ExpressionAnalysis
 import io.github.relvl.deobscura.expression.ExpressionNode
 import io.github.relvl.deobscura.expression.ExpressionStatement
+import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
+import io.github.relvl.deobscura.controlflow.StructuredRegion
 import org.slf4j.Logger
 
 internal class AnalysisDiagnosticStats {
@@ -13,6 +15,7 @@ internal class AnalysisDiagnosticStats {
     val valueFlow = ValueFlowDiagnosticStats()
     val ssa = SsaDiagnosticStats()
     val expression = ExpressionDiagnosticStats()
+    val structuredControlFlow = StructuredControlFlowDiagnosticStats()
     var preparationFailureCount = 0
 
     fun startMethod() {
@@ -20,6 +23,7 @@ internal class AnalysisDiagnosticStats {
         valueFlow.methodCount++
         ssa.methodCount++
         expression.methodCount++
+        structuredControlFlow.methodCount++
     }
 
     fun record(methodName: String, analysis: MethodAnalysis) {
@@ -28,6 +32,7 @@ internal class AnalysisDiagnosticStats {
         valueFlow.record(analysis.valueFlow)
         ssa.record(methodName, analysis.graph, analysis.initialSsa, analysis.optimization)
         expression.record(analysis.expression)
+        structuredControlFlow.record(analysis.structuredControlFlow)
     }
 
     fun recordProgress(progress: MethodAnalysisProgress) {
@@ -46,6 +51,75 @@ internal class AnalysisDiagnosticStats {
         valueFlow.log(logger)
         ssa.log(logger)
         expression.log(logger)
+        structuredControlFlow.log(logger)
+    }
+}
+
+internal class StructuredControlFlowDiagnosticStats {
+    var methodCount = 0
+    private var analyzedMethodCount = 0
+    private var structuredMethodCount = 0
+    private var conditionalBranchCount = 0L
+    private var ifRegionCount = 0L
+    private var whileRegionCount = 0L
+    private var unstructuredConditionalCount = 0L
+    private var switchCount = 0L
+    private var booleanConditionFoldCount = 0L
+    private val unstructuredReasonCounts = linkedMapOf<io.github.relvl.deobscura.controlflow.UnstructuredControlFlowReason, Long>()
+    var inconsistencyCount = 0
+    var failureCount = 0
+
+    fun record(analysis: StructuredControlFlowAnalysis) {
+        analyzedMethodCount++
+        conditionalBranchCount += analysis.conditionalBranchCount
+        switchCount += analysis.switchCount
+        booleanConditionFoldCount += analysis.booleanConditionFolds.size
+        analysis.unstructured.forEach { diagnostic ->
+            if (diagnostic.kind == io.github.relvl.deobscura.controlflow.UnstructuredControlFlowKind.CONDITIONAL) {
+                unstructuredReasonCounts[diagnostic.reason] = unstructuredReasonCounts.getOrDefault(diagnostic.reason, 0L) + 1L
+            }
+        }
+        val ifs = analysis.regions.count { it is StructuredRegion.If }
+        val whiles = analysis.regions.count { it is StructuredRegion.While }
+        ifRegionCount += ifs
+        whileRegionCount += whiles
+        unstructuredConditionalCount += analysis.unstructuredConditionalCount
+        if (ifs + whiles + analysis.booleanConditionFolds.size > 0) structuredMethodCount++
+    }
+
+    fun log(logger: Logger) {
+        logger.info(
+            "Structured control flow for {}/{} method(s): {} if region(s), {} natural while loop(s) in {} method(s).",
+            analyzedMethodCount,
+            methodCount,
+            ifRegionCount,
+            whileRegionCount,
+            structuredMethodCount,
+        )
+        logger.info(
+            "Control-flow structuring classified {}/{} conditional branch header(s); {} remain block-based, {} switch(es) deferred.",
+            ifRegionCount + whileRegionCount + booleanConditionFoldCount,
+            conditionalBranchCount,
+            unstructuredConditionalCount,
+            switchCount,
+        )
+        logger.info(
+            "Control-flow normalization folded {} boolean materialization diamond(s) into consuming condition(s).",
+            booleanConditionFoldCount,
+        )
+        if (unstructuredReasonCounts.isNotEmpty()) {
+            logger.info(
+                "Unstructured conditional reasons: {}.",
+                unstructuredReasonCounts.entries
+                    .sortedByDescending { it.value }
+                    .joinToString { (reason, count) -> "${reason.diagnosticName}=$count" },
+            )
+        }
+        logger.info(
+            "Structured control-flow analysis completed with {} failure(s): {} inconsistent state(s).",
+            failureCount,
+            inconsistencyCount,
+        )
     }
 }
 

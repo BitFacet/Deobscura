@@ -129,6 +129,16 @@ class AnalysisDiagnostics(
                     logger.warn("Failed expression IR construction for '{}': {}.{}", methodName, cause.message, ir)
                 }
             }
+
+            MethodAnalysisStage.STRUCTURED_CONTROL_FLOW -> {
+                stats.structuredControlFlow.failureCount++
+                if (cause is io.github.relvl.deobscura.controlflow.StructuredControlFlowInconsistencyException) {
+                    stats.structuredControlFlow.inconsistencyCount++
+                    logger.warn("Structured control-flow analysis found inconsistent state in '{}': {}.{}", methodName, cause.message, ir)
+                } else {
+                    logger.warn("Failed structured control-flow analysis for '{}': {}.{}", methodName, cause.message, ir)
+                }
+            }
         }
     }
 }
