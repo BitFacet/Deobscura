@@ -11,7 +11,7 @@ internal class StructuredSwitchRecognizer(
 ) {
     fun recognize(
         facts: ControlFlowFacts,
-        loopContexts: List<LoopFlowContext>,
+        loopContexts: List<NaturalLoopFlowContext>,
     ): SwitchRecognition {
         val regions = mutableListOf<StructuredRegion.Switch>()
         val rejections = linkedMapOf<BasicBlockId, UnstructuredControlFlowReason>()
@@ -24,10 +24,10 @@ internal class StructuredSwitchRecognizer(
             }
 
             val entries = switchEdges.mapTo(linkedSetOf()) { it.to }
-            val continuation = switchContinuation(header, entries, facts)
             val containingLoop = loopContexts
-                .filter { header in it.loop.bodyBlocks }
-                .minByOrNull { it.loop.bodyBlocks.size }
+                .filter { it.contains(header) || it.header == header }
+                .minByOrNull { it.blocks.size }
+            val continuation = switchContinuation(header, entries, facts, containingLoop)
 
             val collected = linkedMapOf<BasicBlockId, Set<BasicBlockId>>()
             for (entry in entries) {
@@ -41,7 +41,9 @@ internal class StructuredSwitchRecognizer(
                     continuation = continuation,
                     caseEntries = entries,
                     facts = facts,
-                    continueTargets = containingLoop?.continueTargets.orEmpty(),
+                    boundaryTargets = containingLoop?.let { context ->
+                        context.continueTargets + listOfNotNull(context.exit)
+                    }.orEmpty(),
                 )) {
                     is SwitchCaseCollection.Success -> collected[entry] = result.blocks
                     is SwitchCaseCollection.Rejected -> {
@@ -89,17 +91,28 @@ internal class StructuredSwitchRecognizer(
                 val labels = edges.mapNotNull { it.switchValue }.distinct().sorted()
                 val isDefault = edges.any { it.switchValue == null }
                 val caseBlocks = collected.getValue(entry)
-                val exit = transferClassifier.classifySwitchCaseExit(
+                val transfers = transferClassifier.classifySwitchCaseTransfers(
                     caseBlocks = caseBlocks,
                     entry = entry,
+                    header = header,
                     continuation = continuation,
                     caseEntries = entries,
                     outgoing = facts.outgoing,
                     explicitTerminalBlocks = facts.explicitTerminalBlocks,
-                    continueTargets = containingLoop?.continueTargets.orEmpty(),
+                    loopContext = containingLoop,
                 ) ?: if (caseBlocks.isEmpty() && entry == continuation) {
-                    StructuredSwitchCaseExit(StructuredSwitchCaseExitKind.NORMAL, continuation)
+                    listOf(
+                        StructuredRegionTransfer(
+                            from = entry,
+                            target = continuation,
+                            kind = StructuredRegionTransferKind.NORMAL_SWITCH_COMPLETION,
+                        ),
+                    )
                 } else {
+                    rejections[header] = UnstructuredControlFlowReason.SWITCH_UNSUPPORTED_EXIT
+                    return@forEach
+                }
+                if (transfers.isEmpty()) {
                     rejections[header] = UnstructuredControlFlowReason.SWITCH_UNSUPPORTED_EXIT
                     return@forEach
                 }
@@ -108,7 +121,7 @@ internal class StructuredSwitchRecognizer(
                     isDefault = isDefault,
                     entry = entry,
                     blocks = caseBlocks,
-                    exit = exit,
+                    transfers = transfers,
                 )
             }.sortedWith(compareBy<StructuredSwitchCase> { it.entry.value }.thenBy { it.labels.firstOrNull() ?: Int.MAX_VALUE })
 
@@ -136,19 +149,21 @@ internal class StructuredSwitchRecognizer(
         fun exitsSwitch(entry: BasicBlockId, visiting: MutableSet<BasicBlockId>): Boolean {
             memo[entry]?.let { return it }
             if (!visiting.add(entry)) return false
-            val exit = byEntry[entry]?.exit
-            val result = when (exit?.kind) {
-                StructuredSwitchCaseExitKind.RETURN_OR_THROW,
-                StructuredSwitchCaseExitKind.CONTINUE,
-                -> true
+            val transfers = byEntry[entry]?.transfers.orEmpty()
+            val result = transfers.isNotEmpty() && transfers.all { transfer ->
+                when (transfer.kind) {
+                    StructuredRegionTransferKind.RETURN_OR_THROW,
+                    StructuredRegionTransferKind.BREAK_LOOP,
+                    StructuredRegionTransferKind.CONTINUE_LOOP,
+                    -> true
 
-                StructuredSwitchCaseExitKind.FALLTHROUGH ->
-                    exit.target?.let { target -> target in byEntry && exitsSwitch(target, visiting) } == true
+                    StructuredRegionTransferKind.CASE_FALLTHROUGH ->
+                        transfer.target?.let { target -> target in byEntry && exitsSwitch(target, visiting) } == true
 
-                StructuredSwitchCaseExitKind.BREAK,
-                StructuredSwitchCaseExitKind.NORMAL,
-                null,
-                -> false
+                    StructuredRegionTransferKind.BREAK_SWITCH,
+                    StructuredRegionTransferKind.NORMAL_SWITCH_COMPLETION,
+                    -> false
+                }
             }
             visiting.remove(entry)
             memo[entry] = result
@@ -162,12 +177,19 @@ internal class StructuredSwitchRecognizer(
         header: BasicBlockId,
         entries: Set<BasicBlockId>,
         facts: ControlFlowFacts,
+        containingLoop: NaturalLoopFlowContext?,
     ): BasicBlockId? {
-        immediatePostDominator(header, facts.postDominators)?.let { return it }
+        fun isValidContinuation(candidate: BasicBlockId): Boolean =
+            (containingLoop == null || candidate in containingLoop.blocks) &&
+                !reachesOtherCaseEntryBeforeHeader(candidate, header, entries, facts.outgoing)
+
+        immediatePostDominator(header, facts.postDominators)?.let { candidate ->
+            if (isValidContinuation(candidate)) return candidate
+        }
 
         val reachableFromHeader = reachableFrom(header, facts.outgoing)
         val externallySharedEntries = entries.filter { candidate ->
-            facts.incoming[candidate].orEmpty().any { edge ->
+            isValidContinuation(candidate) && facts.incoming[candidate].orEmpty().any { edge ->
                 edge.from != header && edge.from !in reachableFromHeader
             }
         }
@@ -181,7 +203,7 @@ internal class StructuredSwitchRecognizer(
                 outgoing = facts.outgoing,
                 explicitTerminalBlocks = facts.explicitTerminalBlocks,
             ).forEach { candidate ->
-                if (candidate != header && candidate !in entries) {
+                if (candidate != header && candidate !in entries && isValidContinuation(candidate)) {
                     reachableSupport[candidate] = reachableSupport.getOrDefault(candidate, 0) + 1
                 }
             }
@@ -190,7 +212,8 @@ internal class StructuredSwitchRecognizer(
         if (maxReachableSupport >= 2) {
             val candidates = reachableSupport.filterValues { it == maxReachableSupport }.keys
             val earliest = candidates.filter { candidate ->
-                candidates.all { other -> other == candidate || other in reachableFrom(candidate, facts.outgoing) }
+                val reachableBeforeHeader = reachableBeforeHeader(candidate, header, facts.outgoing)
+                candidates.all { other -> other == candidate || other in reachableBeforeHeader }
             }
             if (earliest.size == 1) return earliest.single()
         }
@@ -198,6 +221,7 @@ internal class StructuredSwitchRecognizer(
         val externallySharedJoins = reachableFromHeader.filter { candidate ->
             candidate != header &&
                 candidate !in entries &&
+                isValidContinuation(candidate) &&
                 candidate !in facts.explicitTerminalBlocks &&
                 header !in reachableFrom(candidate, facts.outgoing) &&
                 facts.incoming[candidate].orEmpty().any { edge -> edge.from !in reachableFromHeader }
@@ -211,7 +235,11 @@ internal class StructuredSwitchRecognizer(
                 val hasBreakLikeIncoming = facts.incoming[candidate].orEmpty().any { edge ->
                     edge.from != header && edge.kind == ControlFlowEdgeKind.JUMP
                 }
-                if (candidate != header && (!isDirectSwitchEntry || hasBreakLikeIncoming)) {
+                if (
+                    candidate != header &&
+                    isValidContinuation(candidate) &&
+                    (!isDirectSwitchEntry || hasBreakLikeIncoming)
+                ) {
                     support[candidate] = support.getOrDefault(candidate, 0) + 1
                 }
             }
@@ -226,6 +254,23 @@ internal class StructuredSwitchRecognizer(
         }
     }
 
+    private fun reachesOtherCaseEntryBeforeHeader(
+        start: BasicBlockId,
+        header: BasicBlockId,
+        caseEntries: Set<BasicBlockId>,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+    ): Boolean {
+        val visited = linkedSetOf<BasicBlockId>()
+        val queue = ArrayDeque<BasicBlockId>()
+        outgoing[start].orEmpty().forEach { edge -> queue.addLast(edge.to) }
+        while (queue.isNotEmpty()) {
+            val block = queue.removeFirst()
+            if (block == header || !visited.add(block)) continue
+            if (block in caseEntries && block != start) return true
+            outgoing[block].orEmpty().forEach { edge -> queue.addLast(edge.to) }
+        }
+        return false
+    }
     private fun reachableUntilCaseOrTerminal(
         start: BasicBlockId,
         caseEntries: Set<BasicBlockId>,
@@ -240,6 +285,22 @@ internal class StructuredSwitchRecognizer(
             if (block != start && block in caseEntries) continue
             if (!result.add(block)) continue
             if (block in explicitTerminalBlocks) continue
+            outgoing[block].orEmpty().forEach { edge -> queue.addLast(edge.to) }
+        }
+        return result
+    }
+
+    private fun reachableBeforeHeader(
+        start: BasicBlockId,
+        header: BasicBlockId,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+    ): Set<BasicBlockId> {
+        val result = linkedSetOf<BasicBlockId>()
+        val queue = ArrayDeque<BasicBlockId>()
+        queue.add(start)
+        while (queue.isNotEmpty()) {
+            val block = queue.removeFirst()
+            if (block == header || !result.add(block)) continue
             outgoing[block].orEmpty().forEach { edge -> queue.addLast(edge.to) }
         }
         return result
@@ -266,14 +327,14 @@ internal class StructuredSwitchRecognizer(
         continuation: BasicBlockId?,
         caseEntries: Set<BasicBlockId>,
         facts: ControlFlowFacts,
-        continueTargets: Set<BasicBlockId>,
+        boundaryTargets: Set<BasicBlockId>,
     ): SwitchCaseCollection {
         val result = linkedSetOf<BasicBlockId>()
         val queue = ArrayDeque<BasicBlockId>()
         queue.add(start)
         while (queue.isNotEmpty()) {
             val block = queue.removeFirst()
-            if (block == continuation || (block != start && block in caseEntries) || block in continueTargets) continue
+            if (block == continuation || (block != start && block in caseEntries) || block in boundaryTargets) continue
             if (block == header) return SwitchCaseCollection.Rejected(UnstructuredControlFlowReason.ARM_REENTERS_HEADER)
             if (block !in facts.blocks) return SwitchCaseCollection.Rejected(UnstructuredControlFlowReason.ARM_LEAVES_REACHABLE_FLOW)
             if (!result.add(block)) continue
@@ -288,7 +349,7 @@ internal class StructuredSwitchRecognizer(
             successors.forEach { successor ->
                 if (
                     successor != continuation &&
-                    successor !in continueTargets &&
+                    successor !in boundaryTargets &&
                     (successor == start || successor !in caseEntries)
                 ) {
                     queue.addLast(successor)

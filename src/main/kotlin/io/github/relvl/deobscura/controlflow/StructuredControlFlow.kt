@@ -112,16 +112,36 @@ enum class StructuredArmExitKind {
     BREAK,
 }
 
+enum class StructuredRegionTransferKind {
+    /** Transfer from this case body into another case body. */
+    CASE_FALLTHROUGH,
+    /** Explicit `break` from this switch to its continuation. */
+    BREAK_SWITCH,
+    /** Natural completion of this case at the switch continuation. */
+    NORMAL_SWITCH_COMPLETION,
+    /** Transfer from this switch to the canonical exit of an enclosing loop. */
+    BREAK_LOOP,
+    /** Transfer from this switch to a proven continue target of an enclosing loop. */
+    CONTINUE_LOOP,
+    /** A return or throw terminates this path. */
+    RETURN_OR_THROW,
+}
+
+data class StructuredRegionTransfer(
+    val from: BasicBlockId,
+    val target: BasicBlockId? = null,
+    val kind: StructuredRegionTransferKind,
+)
+
+/**
+ * Legacy single-exit projection kept while downstream rendering migrates to region transfers.
+ * A case with multiple boundary transfers intentionally has no single `exit`.
+ */
 enum class StructuredSwitchCaseExitKind {
-    /** Explicit jump from the case body to the switch continuation. */
     BREAK,
-    /** Physical fallthrough from the case body to the switch continuation. */
     NORMAL,
-    /** Transfer into another case body. */
     FALLTHROUGH,
-    /** Transfer to a containing loop's continue target. */
     CONTINUE,
-    /** Every path represented by this case body terminates with return/throw. */
     RETURN_OR_THROW,
 }
 
@@ -135,8 +155,20 @@ data class StructuredSwitchCase(
     val isDefault: Boolean,
     val entry: BasicBlockId,
     val blocks: Set<BasicBlockId>,
-    val exit: StructuredSwitchCaseExit? = null,
-)
+    val transfers: List<StructuredRegionTransfer> = emptyList(),
+) {
+    val exit: StructuredSwitchCaseExit?
+        get() = transfers.singleOrNull()?.toLegacySwitchExit()
+}
+
+private fun StructuredRegionTransfer.toLegacySwitchExit(): StructuredSwitchCaseExit? = when (kind) {
+    StructuredRegionTransferKind.CASE_FALLTHROUGH -> StructuredSwitchCaseExit(StructuredSwitchCaseExitKind.FALLTHROUGH, target)
+    StructuredRegionTransferKind.BREAK_SWITCH -> StructuredSwitchCaseExit(StructuredSwitchCaseExitKind.BREAK, target)
+    StructuredRegionTransferKind.NORMAL_SWITCH_COMPLETION -> StructuredSwitchCaseExit(StructuredSwitchCaseExitKind.NORMAL, target)
+    StructuredRegionTransferKind.CONTINUE_LOOP -> StructuredSwitchCaseExit(StructuredSwitchCaseExitKind.CONTINUE, target)
+    StructuredRegionTransferKind.RETURN_OR_THROW -> StructuredSwitchCaseExit(StructuredSwitchCaseExitKind.RETURN_OR_THROW, target)
+    StructuredRegionTransferKind.BREAK_LOOP -> null
+}
 
 data class StructuredArmExit(
     val kind: StructuredArmExitKind,

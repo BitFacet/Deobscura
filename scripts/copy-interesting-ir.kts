@@ -3,14 +3,12 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 
 val interestingIr = listOf(
-    "class/HBBqdlMfAB.ir",
-    "class/jSouKVH2LN.ir",
-    "org/apache/xml/serialize/BaseMarkupSerializer.ir",
-    "org/apache/xerces/impl/xpath/regex/RegexParser.ir",
-    "com/google/gson/internal/bind/TypeAdapters$26.ir",
-    "de/matthiasmann/twl/utils/PNGDecoder.ir",
     "com/google/gson/stream/JsonReader.ir",
-    "com/jcraft/jorbis/Drft.ir"
+    "org/antlr/v4/runtime/tree/xpath/XPath.ir",
+    "org/apache/xml/serialize/BaseMarkupSerializer.ir",
+    "cz/vutbr/web/csskit/antlr4/CSSLexer.ir",
+    "de/matthiasmann/twl/utils/PNGDecoder.ir",
+    "org/apache/xerces/impl/XMLDocumentScannerImpl\$XMLDeclDispatcher.ir",
 )
 
 fun findProjectRoot(start: Path): Path {

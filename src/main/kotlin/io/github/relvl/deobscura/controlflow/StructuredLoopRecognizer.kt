@@ -101,8 +101,71 @@ internal class StructuredLoopRecognizer {
         )
     }
 
+    fun naturalContexts(
+        facts: ControlFlowFacts,
+        expression: ExpressionAnalysis,
+    ): List<NaturalLoopFlowContext> {
+        val backEdges = facts.normalEdges.filter { edge -> edge.to in facts.dominators[edge.from].orEmpty() }
+        return backEdges.groupBy { it.to }.mapNotNull { (header, latchEdges) ->
+            val loopBlocks = naturalLoopBlocks(header, latchEdges.map { it.from }, facts) ?: return@mapNotNull null
+            val exitTargets = loopBlocks.asSequence()
+                .flatMap { facts.outgoing[it].orEmpty().asSequence() }
+                .filter { it.to !in loopBlocks }
+                .map { it.to }
+                .distinct()
+                .toList()
+            val headerExitTargets = facts.outgoing[header].orEmpty().asSequence()
+                .map { it.to }
+                .filter { it !in loopBlocks }
+                .distinct()
+                .toList()
+            NaturalLoopFlowContext(
+                header = header,
+                blocks = loopBlocks,
+                exit = headerExitTargets.singleOrNull() ?: exitTargets.singleOrNull(),
+                continueTargets = transparentLoopContinueTargets(
+                    header = header,
+                    bodyBlocks = loopBlocks - header,
+                    facts = facts,
+                    expression = expression,
+                ),
+            )
+        }
+    }
+
+    private fun naturalLoopBlocks(
+        header: BasicBlockId,
+        latches: Collection<BasicBlockId>,
+        facts: ControlFlowFacts,
+    ): Set<BasicBlockId>? {
+        val loopBlocks = linkedSetOf(header)
+        val queue = ArrayDeque<BasicBlockId>()
+        latches.distinct().forEach {
+            if (loopBlocks.add(it)) queue.addLast(it)
+        }
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            facts.predecessors[current].orEmpty().forEach { predecessor ->
+                if (loopBlocks.add(predecessor) && predecessor != header) queue.addLast(predecessor)
+            }
+        }
+        return loopBlocks.takeIf { blocks -> blocks.all { header in facts.dominators[it].orEmpty() } }
+    }
+
     private fun transparentLoopContinueTargets(
         loop: StructuredRegion.While,
+        facts: ControlFlowFacts,
+        expression: ExpressionAnalysis,
+    ): Set<BasicBlockId> = transparentLoopContinueTargets(
+        header = loop.header,
+        bodyBlocks = loop.bodyBlocks,
+        facts = facts,
+        expression = expression,
+    )
+
+    private fun transparentLoopContinueTargets(
+        header: BasicBlockId,
+        bodyBlocks: Set<BasicBlockId>,
         facts: ControlFlowFacts,
         expression: ExpressionAnalysis,
     ): Set<BasicBlockId> {
@@ -110,11 +173,11 @@ internal class StructuredLoopRecognizer {
             .filter { it.instructionIndices.isNotEmpty() }
             .groupBy { facts.instructionToBlock.getOrNull(it.instructionIndices.last()) }
         val statementsByBlock = expression.statements.groupBy { facts.instructionToBlock.getOrNull(it.instructionIndex) }
-        val result = linkedSetOf(loop.header)
+        val result = linkedSetOf(header)
         var changed: Boolean
         do {
             changed = false
-            for (block in loop.bodyBlocks) {
+            for (block in bodyBlocks) {
                 if (block in result || !isTransparentTransferBlock(block, valuesByBlock, statementsByBlock, expression)) continue
                 val targets = facts.outgoing[block].orEmpty().distinctTargets().map { it.to }
                 if (targets.size == 1 && targets.single() in result) {

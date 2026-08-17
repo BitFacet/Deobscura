@@ -57,9 +57,10 @@ class StructuredControlFlowAnalyzer {
         val shortCircuitByRoot = shortCircuitFolds.associateBy { it.rootHeader }
         val shortCircuitFoldedHeaders = shortCircuitFolds.flatMapTo(hashSetOf()) { it.foldedHeaders }
         val loopContexts = loopRecognizer.contexts(loopRecognition.regions, facts, expression)
+        val naturalLoopContexts = loopRecognizer.naturalContexts(facts, expression)
         val switchRecognition = switchRecognizer.recognize(
             facts = facts,
-            loopContexts = loopContexts.values.toList(),
+            loopContexts = naturalLoopContexts,
         )
         val ifRecognition = conditionalRecognizer.recognize(
             facts = facts,
