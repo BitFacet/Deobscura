@@ -83,10 +83,13 @@ class SsaOptimizerTest {
         assertEquals(2, result.eliminatedEdges.size)
         assertEquals(2, result.stats.newlyUnreachableBlockCount)
         assertEquals(1, result.stats.propagatedAliasCount)
+        assertEquals(2, result.stats.removedControlFlowOperationCount)
         assertFalse(phi in result.analysis.values)
         assertFalse(right in result.analysis.values)
-        assertEquals(listOf(left), result.analysis.operations.single { it.instructionIndex == 6 }.inputs)
-        assertTrue(result.analysis.constants[left] == SsaConstant.IntValue(0))
+        assertTrue(result.analysis.operations.none { it.instruction is RawBranchInstruction })
+        assertTrue(result.analysis.values.isEmpty())
+        assertEquals(setOf(BasicBlockId(0), BasicBlockId(4)), result.controlFlow.blocks)
+        assertEquals(listOf(edge(0, 4, ControlFlowEdgeKind.JUMP)), result.controlFlow.edges)
     }
 
     @Test

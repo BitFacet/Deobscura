@@ -18,10 +18,22 @@ class SsaControlFlowPruner {
         graph: ControlFlowGraph,
         analysis: SsaAnalysis,
         branches: SsaConstantBranchResult,
+    ): SsaControlFlowPruningResult = prune(
+        graph = graph,
+        controlFlow = SsaControlFlowGraph.from(graph),
+        analysis = analysis,
+        branches = branches,
+    )
+
+    fun prune(
+        graph: ControlFlowGraph,
+        controlFlow: SsaControlFlowGraph,
+        analysis: SsaAnalysis,
+        branches: SsaConstantBranchResult,
     ): SsaControlFlowPruningResult {
         val reachableBlocks = branches.reachableBlocks
-        val eliminatedEdges = branches.eliminatedEdges
-        val incomingByBlock = graph.edges.groupBy { it.to }
+        val eliminatedEdges = branches.newlyEliminatedEdges
+        val incomingByBlock = controlFlow.edges.groupBy { it.to }
         val blockByInstruction = buildBlockIndex(graph)
 
         var removedPhiInputCount = 0
@@ -132,7 +144,7 @@ class SsaControlFlowPruner {
             }
         }
 
-        val uses = buildUses(values, keptOperations, keptPhiNodes)
+        val uses = rebuildSsaUses(values, keptOperations, keptPhiNodes, "Pruned")
         val constants = analysis.constants.filterKeys { it in values }
 
         return SsaControlFlowPruningResult(
@@ -143,7 +155,7 @@ class SsaControlFlowPruner {
                 uses = uses,
                 constants = constants,
             ),
-            removedUnreachableBlockCount = graph.blocks.count { it.id !in reachableBlocks },
+            removedUnreachableBlockCount = controlFlow.blocks.count { it !in reachableBlocks },
             removedOperationCount = analysis.operations.size - keptOperations.size,
             removedPhiNodeCount = analysis.phiNodes.size - keptPhiNodes.size,
             removedPhiInputCount = removedPhiInputCount,
@@ -164,42 +176,6 @@ class SsaControlFlowPruner {
         return result
     }
 
-    private fun buildUses(
-        values: Map<ValueId, SsaValueDefinition>,
-        operations: List<ValueOperation>,
-        phiNodes: List<SsaPhiNode>,
-    ): Map<ValueId, List<SsaValueUse>> {
-        val uses = linkedMapOf<ValueId, MutableList<SsaValueUse>>()
-
-        fun register(value: ValueId, use: SsaValueUse) {
-            if (value !in values) {
-                throw SsaInconsistencyException("Pruned SSA use refers to undefined value ${value.value}.")
-            }
-            uses.getOrPut(value) { mutableListOf() } += use
-        }
-
-        operations.forEach { operation ->
-            operation.output?.let { output ->
-                if (output !in values) {
-                    throw SsaInconsistencyException(
-                        "Pruned instruction ${operation.instructionIndex} defines unknown value ${output.value}.",
-                    )
-                }
-            }
-            operation.inputs.forEachIndexed { inputIndex, input ->
-                register(input, SsaValueUse.Operation(operation.instructionIndex, inputIndex))
-            }
-        }
-        phiNodes.forEach { phi ->
-            if (phi.output !in values) {
-                throw SsaInconsistencyException("Pruned phi defines unknown value ${phi.output.value}.")
-            }
-            phi.inputs.forEachIndexed { inputIndex, input ->
-                register(input, SsaValueUse.Phi(phi.output, inputIndex))
-            }
-        }
-        return uses.mapValues { it.value.toList() }
-    }
 }
 
 data class SsaControlFlowPruningResult(

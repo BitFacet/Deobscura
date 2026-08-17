@@ -42,6 +42,18 @@ internal class SsaDiagnosticStats {
     private var prunedPhiNodeCount = 0L
     private var prunedPhiInputCount = 0L
     private var prunedValueCount = 0L
+    private var deadOperationCount = 0L
+    private var deadValueCount = 0L
+    private var deadPhiNodeCount = 0L
+    private var canonicalizedPassthroughBlockCount = 0L
+    private var removedControlFlowOperationCount = 0L
+    private var removedGotoOperationCount = 0L
+    private var collapsedControlFlowOperationCount = 0L
+    private var collapsedControlFlowEdgeCount = 0L
+    private var redirectedControlFlowEdgeCount = 0L
+    private var canonicalizedMethodCount = 0L
+    private var deadCodeMethodCount = 0L
+    private var maxDeadOperationCountPerMethod = 0
     private var retainedExceptionalProvenanceOperationCount = 0L
     private var retainedExceptionalProvenancePhiCount = 0L
     private var conservativelyRetainedPhiCount = 0L
@@ -112,6 +124,20 @@ internal class SsaDiagnosticStats {
         prunedPhiNodeCount += stats.removedPhiNodeCount
         prunedPhiInputCount += stats.removedPhiInputCount
         prunedValueCount += stats.removedValueCount
+        deadOperationCount += stats.deadOperationCount
+        deadValueCount += stats.deadValueCount
+        deadPhiNodeCount += stats.deadPhiNodeCount
+        canonicalizedPassthroughBlockCount += stats.canonicalizedPassthroughBlockCount
+        removedControlFlowOperationCount += stats.removedControlFlowOperationCount
+        removedGotoOperationCount += stats.removedGotoOperationCount
+        collapsedControlFlowOperationCount += stats.collapsedControlFlowOperationCount
+        collapsedControlFlowEdgeCount += stats.collapsedControlFlowEdgeCount
+        redirectedControlFlowEdgeCount += stats.redirectedControlFlowEdgeCount
+        if (stats.canonicalizedPassthroughBlockCount > 0 || stats.removedControlFlowOperationCount > 0) {
+            canonicalizedMethodCount++
+        }
+        if (stats.deadOperationCount > 0) deadCodeMethodCount++
+        maxDeadOperationCountPerMethod = maxOf(maxDeadOperationCountPerMethod, stats.deadOperationCount)
         retainedExceptionalProvenanceOperationCount += stats.retainedUnreachableOperationCount
         retainedExceptionalProvenancePhiCount += stats.retainedUnreachablePhiCount
         conservativelyRetainedPhiCount += stats.conservativelyRetainedPhiCount
@@ -177,12 +203,30 @@ internal class SsaDiagnosticStats {
             constantNewlyUnreachableBlockCount,
         )
         logger.info(
-            "SSA optimization removed {} operation(s), {} value(s), {} phi node(s), and {} phi input(s); propagated {} value alias(es).",
+            "SSA CFG pruning removed {} operation(s), {} value(s), {} phi node(s), and {} phi input(s); propagated {} value alias(es).",
             prunedOperationCount,
             prunedValueCount,
             prunedPhiNodeCount,
             prunedPhiInputCount,
             propagatedAliasCount,
+        )
+        logger.info(
+            "SSA dead-value elimination removed {} operation(s), {} value(s), and {} phi node(s) in {} method(s); maximum {} operation(s) removed from one method.",
+            deadOperationCount,
+            deadValueCount,
+            deadPhiNodeCount,
+            deadCodeMethodCount,
+            maxDeadOperationCountPerMethod,
+        )
+        logger.info(
+            "SSA CFG canonicalization removed {} passthrough block(s) and {} redundant control-flow operation(s) in {} method(s): {} goto, {} resolved/redundant branch or switch; {} edge(s) collapsed, {} redirected.",
+            canonicalizedPassthroughBlockCount,
+            removedControlFlowOperationCount,
+            canonicalizedMethodCount,
+            removedGotoOperationCount,
+            collapsedControlFlowOperationCount,
+            collapsedControlFlowEdgeCount,
+            redirectedControlFlowEdgeCount,
         )
         logger.info(
             "SSA optimization finished with {} constant value(s): {} literal(s), {} operation(s) folded, {} phi result(s) resolved, {} newly exposed after pruning.",

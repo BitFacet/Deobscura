@@ -15,6 +15,8 @@ class SsaOptimizer(
     private val constantPropagator: SsaConstantPropagator = SsaConstantPropagator(),
     private val constantBranchAnalyzer: SsaConstantBranchAnalyzer = SsaConstantBranchAnalyzer(),
     private val controlFlowPruner: SsaControlFlowPruner = SsaControlFlowPruner(),
+    private val deadValueEliminator: SsaDeadValueEliminator = SsaDeadValueEliminator(),
+    private val controlFlowCanonicalizer: SsaControlFlowCanonicalizer = SsaControlFlowCanonicalizer(),
     private val maxIterations: Int = DEFAULT_MAX_ITERATIONS,
 ) {
     init {
@@ -24,6 +26,7 @@ class SsaOptimizer(
     fun optimize(graph: ControlFlowGraph, initialAnalysis: SsaAnalysis): SsaOptimizationResult {
         val initialSimplification = simplifier.simplify(initialAnalysis)
         var analysis = initialSimplification.analysis
+        var controlFlow = SsaControlFlowGraph.from(graph)
         var eliminatedEdges = emptySet<ControlFlowEdge>()
         var iterationCount = 0
 
@@ -35,6 +38,15 @@ class SsaOptimizer(
         var removedOperationCount = 0
         var removedValueCount = 0
         var removedPhiInputCount = 0
+        var deadOperationCount = 0
+        var deadValueCount = 0
+        var deadPhiNodeCount = 0
+        var canonicalizedPassthroughBlockCount = 0
+        var removedControlFlowOperationCount = 0
+        var removedGotoOperationCount = 0
+        var collapsedControlFlowOperationCount = 0
+        var collapsedControlFlowEdgeCount = 0
+        var redirectedControlFlowEdgeCount = 0
         var retainedUnreachableOperationCount = 0
         var retainedUnreachablePhiCount = 0
         var conservativelyRetainedPhiCount = 0
@@ -58,9 +70,21 @@ class SsaOptimizer(
                 newlyExposedConstantCount += constants.analysis.constants.keys.count { it !in constantsBefore }
             }
 
-            val branches = constantBranchAnalyzer.analyze(graph, constants.analysis, eliminatedEdges)
-            val pruning = controlFlowPruner.prune(graph, constants.analysis, branches)
+            val branches = constantBranchAnalyzer.analyze(graph, controlFlow, constants.analysis, eliminatedEdges)
+            val pruning = controlFlowPruner.prune(graph, controlFlow, constants.analysis, branches)
             val simplification = simplifier.simplify(pruning.analysis)
+            val controlFlowCleanup = controlFlowCanonicalizer.canonicalize(
+                graph,
+                branches.controlFlow,
+                simplification.analysis,
+            )
+            val deadValues = deadValueEliminator.eliminate(controlFlowCleanup.analysis)
+            val passthroughCleanup = controlFlowCanonicalizer.canonicalize(
+                graph,
+                controlFlowCleanup.controlFlow,
+                deadValues.analysis,
+            )
+            val canonicalizations = listOf(controlFlowCleanup, passthroughCleanup)
 
             resolvedConditionalBranchCount += branches.resolvedConditionalBranchCount
             resolvedSwitchCount += branches.resolvedSwitchCount
@@ -69,6 +93,15 @@ class SsaOptimizer(
             removedValueCount += pruning.removedValueCount
             removedPhiNodeCount += pruning.removedPhiNodeCount + simplification.removedPhiCount
             removedPhiInputCount += pruning.removedPhiInputCount
+            deadOperationCount += deadValues.removedOperationCount
+            deadValueCount += deadValues.removedValueCount
+            deadPhiNodeCount += deadValues.removedPhiNodeCount
+            canonicalizedPassthroughBlockCount += canonicalizations.sumOf { it.removedPassthroughBlockCount }
+            removedControlFlowOperationCount += canonicalizations.sumOf { it.removedControlFlowOperationCount }
+            removedGotoOperationCount += canonicalizations.sumOf { it.removedGotoOperationCount }
+            collapsedControlFlowOperationCount += canonicalizations.sumOf { it.collapsedControlFlowOperationCount }
+            collapsedControlFlowEdgeCount += canonicalizations.sumOf { it.collapsedEdgeCount }
+            redirectedControlFlowEdgeCount += canonicalizations.sumOf { it.redirectedEdgeCount }
             propagatedAliasCount += simplification.propagatedAliasCount
             retainedUnreachableOperationCount += pruning.retainedUnreachableOperationCount
             retainedUnreachablePhiCount += pruning.retainedUnreachablePhiCount
@@ -80,9 +113,14 @@ class SsaOptimizer(
                     pruning.removedPhiNodeCount > 0 ||
                     pruning.removedPhiInputCount > 0 ||
                     simplification.propagatedAliasCount > 0 ||
-                    simplification.removedPhiCount > 0
+                    simplification.removedPhiCount > 0 ||
+                    deadValues.removedValueCount > 0 ||
+                    canonicalizations.any {
+                        it.removedPassthroughBlockCount > 0 || it.removedControlFlowOperationCount > 0
+                    }
 
-            analysis = simplification.analysis
+            analysis = passthroughCleanup.analysis
+            controlFlow = passthroughCleanup.controlFlow
             eliminatedEdges = branches.eliminatedEdges
             finalConstantValueCount = constants.constantValueCount
             finalLiteralConstantCount = constants.literalConstantCount
@@ -94,6 +132,7 @@ class SsaOptimizer(
 
         return SsaOptimizationResult(
             analysis = analysis,
+            controlFlow = controlFlow,
             eliminatedEdges = eliminatedEdges,
             stats = SsaOptimizationStats(
                 iterationCount = iterationCount,
@@ -105,6 +144,15 @@ class SsaOptimizer(
                 removedOperationCount = removedOperationCount,
                 removedValueCount = removedValueCount,
                 removedPhiInputCount = removedPhiInputCount,
+                deadOperationCount = deadOperationCount,
+                deadValueCount = deadValueCount,
+                deadPhiNodeCount = deadPhiNodeCount,
+                canonicalizedPassthroughBlockCount = canonicalizedPassthroughBlockCount,
+                removedControlFlowOperationCount = removedControlFlowOperationCount,
+                removedGotoOperationCount = removedGotoOperationCount,
+                collapsedControlFlowOperationCount = collapsedControlFlowOperationCount,
+                collapsedControlFlowEdgeCount = collapsedControlFlowEdgeCount,
+                redirectedControlFlowEdgeCount = redirectedControlFlowEdgeCount,
                 constantValueCount = finalConstantValueCount,
                 literalConstantCount = finalLiteralConstantCount,
                 foldedConstantOperationCount = finalFoldedOperationCount,
@@ -124,6 +172,7 @@ class SsaOptimizer(
 
 data class SsaOptimizationResult(
     val analysis: SsaAnalysis,
+    val controlFlow: SsaControlFlowGraph,
     val eliminatedEdges: Set<ControlFlowEdge>,
     val stats: SsaOptimizationStats,
 )
@@ -138,6 +187,15 @@ data class SsaOptimizationStats(
     val removedOperationCount: Int,
     val removedValueCount: Int,
     val removedPhiInputCount: Int,
+    val deadOperationCount: Int,
+    val deadValueCount: Int,
+    val deadPhiNodeCount: Int,
+    val canonicalizedPassthroughBlockCount: Int,
+    val removedControlFlowOperationCount: Int,
+    val removedGotoOperationCount: Int,
+    val collapsedControlFlowOperationCount: Int,
+    val collapsedControlFlowEdgeCount: Int,
+    val redirectedControlFlowEdgeCount: Int,
     val constantValueCount: Int,
     val literalConstantCount: Int,
     val foldedConstantOperationCount: Int,

@@ -51,6 +51,7 @@ class SsaControlFlowPrunerTest {
         )
         val eliminated = graph.edges.first { it.from == BasicBlockId(0) && it.to == BasicBlockId(2) }
         val branchResult = SsaConstantBranchResult(
+            controlFlow = SsaControlFlowGraph.from(graph),
             eliminatedEdges = setOf(eliminated),
             reachableBlocks = setOf(BasicBlockId(0), BasicBlockId(1), BasicBlockId(3)),
             resolvedConditionalBranchCount = 1,

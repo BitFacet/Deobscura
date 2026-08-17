@@ -6,7 +6,6 @@ import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.raw.RawBranchInstruction
 import io.github.relvl.deobscura.raw.RawSwitchInstruction
-import java.util.*
 
 /**
  * Resolves conditional branches and switches whose operands are known numeric SSA constants.
@@ -20,12 +19,25 @@ class SsaConstantBranchAnalyzer {
         analysis: SsaAnalysis,
         previouslyEliminatedEdges: Set<ControlFlowEdge> = emptySet(),
     ): SsaConstantBranchResult {
+        val controlFlow = SsaControlFlowGraph.from(graph).retainReachable(
+            graph.edges.filter { it !in previouslyEliminatedEdges },
+        )
+        return analyze(graph, controlFlow, analysis, previouslyEliminatedEdges)
+    }
+
+    fun analyze(
+        graph: ControlFlowGraph,
+        controlFlow: SsaControlFlowGraph,
+        analysis: SsaAnalysis,
+        previouslyEliminatedEdges: Set<ControlFlowEdge> = emptySet(),
+    ): SsaConstantBranchResult {
         val operationsByInstruction = analysis.operations.associateBy { it.instructionIndex }
         val newlyEliminated = linkedSetOf<ControlFlowEdge>()
         var resolvedConditionalBranchCount = 0
         var resolvedSwitchCount = 0
 
         graph.blocks.forEach { block ->
+            if (block.id !in controlFlow.blocks) return@forEach
             if (block.endInstructionIndexExclusive <= block.startInstructionIndex) return@forEach
             val instructionIndex = block.endInstructionIndexExclusive - 1
             val operation = operationsByInstruction[instructionIndex] ?: return@forEach
@@ -34,10 +46,8 @@ class SsaConstantBranchAnalyzer {
                 is RawBranchInstruction -> {
                     val taken = evaluateConditional(instruction.opcode.mnemonic, operation.inputs, analysis.constants)
                         ?: return@forEach
-                    val outgoing = graph.edges.filter {
-                        it.from == block.id &&
-                                it.kind != ControlFlowEdgeKind.EXCEPTION &&
-                                it !in previouslyEliminatedEdges
+                    val outgoing = controlFlow.edges.filter {
+                        it.from == block.id && it.kind != ControlFlowEdgeKind.EXCEPTION
                     }
                     val retainedKind = if (taken) ControlFlowEdgeKind.CONDITIONAL else ControlFlowEdgeKind.FALLTHROUGH
                     if (outgoing.none { it.kind == retainedKind }) return@forEach
@@ -51,10 +61,8 @@ class SsaConstantBranchAnalyzer {
                 is RawSwitchInstruction -> {
                     val selector = operation.inputs.singleOrNull()?.let(analysis.constants::get) as? SsaConstant.IntValue
                         ?: return@forEach
-                    val outgoing = graph.edges.filter {
-                        it.from == block.id &&
-                                it.kind == ControlFlowEdgeKind.SWITCH &&
-                                it !in previouslyEliminatedEdges
+                    val outgoing = controlFlow.edges.filter {
+                        it.from == block.id && it.kind == ControlFlowEdgeKind.SWITCH
                     }
                     val matchingCase = outgoing.firstOrNull { it.switchValue == selector.value }
                     val retained = matchingCase ?: outgoing.firstOrNull { it.switchValue == null } ?: return@forEach
@@ -70,11 +78,14 @@ class SsaConstantBranchAnalyzer {
         }
 
         val eliminated = previouslyEliminatedEdges + newlyEliminated
-        val previouslyReachable = reachableBlocks(graph, previouslyEliminatedEdges)
-        val effectiveReachable = reachableBlocks(graph, eliminated)
+        val previouslyReachable = controlFlow.reachableBlocks()
+        val remainingEdges = controlFlow.edges.filter { it !in newlyEliminated }
+        val effectiveReachable = controlFlow.reachableBlocks(remainingEdges)
         val newlyUnreachable = previouslyReachable - effectiveReachable
+        val optimizedControlFlow = controlFlow.retainReachable(remainingEdges)
 
         return SsaConstantBranchResult(
+            controlFlow = optimizedControlFlow,
             eliminatedEdges = eliminated,
             newlyEliminatedEdges = newlyEliminated,
             reachableBlocks = effectiveReachable,
@@ -117,23 +128,10 @@ class SsaConstantBranchAnalyzer {
         val right = (inputs.getOrNull(1)?.let(constants::get) as? SsaConstant.IntValue)?.value ?: return null
         return predicate(left, right)
     }
-
-    private fun reachableBlocks(graph: ControlFlowGraph, eliminated: Set<ControlFlowEdge>): Set<BasicBlockId> {
-        val entry = graph.entryBlock ?: return emptySet()
-        val outgoing = graph.edges.asSequence().filter { it !in eliminated }.groupBy { it.from }
-        val reachable = linkedSetOf<BasicBlockId>()
-        val queue = ArrayDeque<BasicBlockId>()
-        queue.add(entry)
-        while (queue.isNotEmpty()) {
-            val block = queue.removeFirst()
-            if (!reachable.add(block)) continue
-            outgoing[block].orEmpty().forEach { queue.addLast(it.to) }
-        }
-        return reachable
-    }
 }
 
 data class SsaConstantBranchResult(
+    val controlFlow: SsaControlFlowGraph,
     val eliminatedEdges: Set<ControlFlowEdge>,
     val newlyEliminatedEdges: Set<ControlFlowEdge> = eliminatedEdges,
     val reachableBlocks: Set<BasicBlockId>,

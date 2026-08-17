@@ -81,7 +81,7 @@ class SsaSimplifier {
         val operations = analysis.operations.map { operation ->
             operation.copy(inputs = operation.inputs.map(::resolve))
         }
-        val uses = buildUses(values, operations, phiNodes)
+        val uses = rebuildSsaUses(values, operations, phiNodes, "Simplified")
         val constants = linkedMapOf<ValueId, SsaConstant>()
         analysis.constants.forEach { (id, constant) ->
             val canonical = resolve(id)
@@ -107,43 +107,6 @@ class SsaSimplifier {
         )
     }
 
-    private fun buildUses(
-        values: Map<ValueId, SsaValueDefinition>,
-        operations: List<ValueOperation>,
-        phiNodes: List<SsaPhiNode>,
-    ): Map<ValueId, List<SsaValueUse>> {
-        val uses = linkedMapOf<ValueId, MutableList<SsaValueUse>>()
-
-        fun register(value: ValueId, use: SsaValueUse) {
-            if (value !in values) {
-                throw SsaInconsistencyException("Simplified SSA use refers to undefined value ${value.value}.")
-            }
-            uses.getOrPut(value) { mutableListOf() } += use
-        }
-
-        operations.forEach { operation ->
-            operation.output?.let { output ->
-                if (output !in values) {
-                    throw SsaInconsistencyException(
-                        "Simplified instruction ${operation.instructionIndex} defines unknown value ${output.value}.",
-                    )
-                }
-            }
-            operation.inputs.forEachIndexed { inputIndex, input ->
-                register(input, SsaValueUse.Operation(operation.instructionIndex, inputIndex))
-            }
-        }
-        phiNodes.forEach { phi ->
-            if (phi.output !in values) {
-                throw SsaInconsistencyException("Simplified phi defines unknown value ${phi.output.value}.")
-            }
-            phi.inputs.forEachIndexed { inputIndex, input ->
-                register(input, SsaValueUse.Phi(phi.output, inputIndex))
-            }
-        }
-
-        return uses.mapValues { it.value.toList() }
-    }
 }
 
 data class SsaSimplificationResult(
