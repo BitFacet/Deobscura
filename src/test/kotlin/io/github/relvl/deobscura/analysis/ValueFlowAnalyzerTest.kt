@@ -132,6 +132,24 @@ class ValueFlowAnalyzerTest {
     }
 
     @Test
+    fun `types instanceof result as boolean`() {
+        val rawClass = importFixture()
+        val method = rawClass.methods.single { it.name == "isString" }
+        val code = requireNotNull(method.code)
+        val graph = graphBuilder.build(code)
+        val frames = frameAnalyzer.analyze(rawClass.internalName, method, graph)
+
+        val analysis = analyzer.analyze(graph, frames)
+        val instanceOfIndex = code.instructions.indexOfFirst {
+            it is RawTypeCheckInstruction && it.opcode.mnemonic == "instanceof"
+        }
+        val value = analysis.values.values.filterIsInstance<ValueDefinition.Instruction>()
+            .single { it.instructionIndex == instanceOfIndex }
+
+        assertEquals(JvmValueType.Computational(JvmComputationalType.BOOLEAN), value.type)
+    }
+
+    @Test
     fun `preserves intrinsic reference constant types`() {
         val rawClass = importFixture()
         val method = rawClass.methods.single { it.name == "referenceConstants" }
@@ -184,4 +202,6 @@ private class ValueFlowFixture {
     fun byteOrZero(buffer: java.nio.ByteBuffer, flag: Boolean): Int = if (flag) buffer.get().toInt() else 0
 
     fun referenceConstants(flag: Boolean): String? = if (flag) "literal" else null
+
+    fun isString(value: Any): Boolean = value is String
 }

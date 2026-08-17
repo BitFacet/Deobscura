@@ -6,6 +6,8 @@ import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizer
 import io.github.relvl.deobscura.raw.RawMethod
+import io.github.relvl.deobscura.expression.ExpressionAnalysis
+import io.github.relvl.deobscura.expression.ExpressionBuilder
 
 /** Runs the complete low-level analysis pipeline for one method. */
 class MethodAnalyzer(
@@ -14,6 +16,7 @@ class MethodAnalyzer(
     private val valueFlowAnalyzer: ValueFlowAnalyzer = ValueFlowAnalyzer(),
     private val ssaAnalyzer: SsaAnalyzer = SsaAnalyzer(),
     private val ssaOptimizer: SsaOptimizer = SsaOptimizer(),
+    private val expressionBuilder: ExpressionBuilder = ExpressionBuilder(),
     private val legacySubroutineNormalizer: LegacySubroutineNormalizer = LegacySubroutineNormalizer(),
 ) {
     fun analyze(ownerInternalName: String, method: RawMethod): MethodAnalysis {
@@ -60,9 +63,28 @@ class MethodAnalyzer(
         val optimization = try {
             ssaOptimizer.optimize(graph, initialSsa)
         } catch (exception: Exception) {
-            throw failure(ownerInternalName, method, MethodAnalysisStage.SSA, normalization, frames, valueFlow, initialSsa, exception)
+            throw failure(
+                ownerInternalName, method, MethodAnalysisStage.SSA, normalization, frames, valueFlow, initialSsa, cause = exception,
+            )
         }
         TechnicalIrService.captureOptimization(ownerInternalName, method, optimization)
+
+        val expression = try {
+            expressionBuilder.build(optimization.analysis)
+        } catch (exception: Exception) {
+            throw failure(
+                ownerInternalName,
+                method,
+                MethodAnalysisStage.EXPRESSION,
+                normalization,
+                frames,
+                valueFlow,
+                initialSsa,
+                optimization,
+                exception,
+            )
+        }
+        TechnicalIrService.captureExpression(ownerInternalName, method, expression)
 
         return MethodAnalysis(
             method = normalizedMethod,
@@ -71,6 +93,7 @@ class MethodAnalyzer(
             valueFlow = valueFlow,
             initialSsa = initialSsa,
             optimization = optimization,
+            expression = expression,
             normalization = normalization,
         )
     }
@@ -83,11 +106,12 @@ class MethodAnalyzer(
         frames: FrameAnalysis? = null,
         valueFlow: ValueFlowAnalysis? = null,
         initialSsa: SsaAnalysis? = null,
+        optimization: SsaOptimizationResult? = null,
         cause: Exception,
     ): MethodAnalysisException {
         val exception = MethodAnalysisException(
             stage = stage,
-            progress = MethodAnalysisProgress(normalization, frames, valueFlow, initialSsa),
+            progress = MethodAnalysisProgress(normalization, frames, valueFlow, initialSsa, optimization),
             cause = cause,
         )
         TechnicalIrService.captureFailure(ownerInternalName, method, exception)
@@ -102,6 +126,7 @@ data class MethodAnalysis(
     val valueFlow: ValueFlowAnalysis,
     val initialSsa: SsaAnalysis,
     val optimization: SsaOptimizationResult,
+    val expression: ExpressionAnalysis,
     val normalization: LegacySubroutineNormalizationResult,
 ) {
     val ssa: SsaAnalysis
@@ -113,6 +138,7 @@ enum class MethodAnalysisStage {
     FRAME,
     VALUE_FLOW,
     SSA,
+    EXPRESSION,
 }
 
 class MethodAnalysisException(
@@ -126,4 +152,5 @@ data class MethodAnalysisProgress(
     val frames: FrameAnalysis?,
     val valueFlow: ValueFlowAnalysis?,
     val initialSsa: SsaAnalysis?,
+    val optimization: SsaOptimizationResult?,
 )

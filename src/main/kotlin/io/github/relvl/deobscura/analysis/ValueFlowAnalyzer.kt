@@ -117,7 +117,7 @@ class ValueFlowAnalyzer {
             "instanceof" -> produce(
                 instruction,
                 index,
-                FrameValueKind.INT,
+                JvmValueType.of(JvmComputationalType.BOOLEAN),
                 listOf(state.pop(FrameValueKind.REFERENCE)),
                 state,
                 allocator,

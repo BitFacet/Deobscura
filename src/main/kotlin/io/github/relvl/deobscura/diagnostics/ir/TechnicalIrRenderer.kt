@@ -11,7 +11,9 @@ import io.github.relvl.deobscura.cfg.ControlFlowEdge
 import io.github.relvl.deobscura.raw.*
 
 /** Human-readable, deterministic dump of the current technical IR. */
-class TechnicalIrRenderer {
+class TechnicalIrRenderer(
+    private val expressionRenderer: ExpressionIrRenderer = ExpressionIrRenderer(),
+) {
     fun renderClassHeader(rawClass: RawClass): String = buildString {
         appendLine("# Deobscura technical IR v${TechnicalIrService.FORMAT_VERSION}")
         appendLine("class ${rawClass.internalName}")
@@ -92,6 +94,10 @@ class TechnicalIrRenderer {
                 appendLine("      @${operation.instructionIndex} $output${formatInstruction(operation.instruction)} $inputs")
             }
         }
+        appendLine()
+
+        appendLine("  expression-ir:")
+        append(expressionRenderer.render(analysis))
         appendLine()
 
         appendLine("  roots:")

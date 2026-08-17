@@ -2,6 +2,7 @@ package io.github.relvl.deobscura.analysis
 
 import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
 import io.github.relvl.deobscura.raw.RawImportResult
+import io.github.relvl.deobscura.expression.ExpressionIrInconsistencyException
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
@@ -118,6 +119,16 @@ class AnalysisDiagnostics(
                     logger.warn("Failed SSA analysis for '{}': {}.{}", methodName, cause.message, ir)
                 }
             }
+
+            MethodAnalysisStage.EXPRESSION -> {
+                stats.expression.failureCount++
+                if (cause is ExpressionIrInconsistencyException) {
+                    stats.expression.inconsistencyCount++
+                    logger.warn("Expression IR found inconsistent SSA state in '{}': {}.{}", methodName, cause.message, ir)
+                } else {
+                    logger.warn("Failed expression IR construction for '{}': {}.{}", methodName, cause.message, ir)
+                }
+            }
         }
     }
 }
@@ -137,7 +148,7 @@ private class MethodAnalysisProgressLogger(
         nextProgressAt = startedAt + PROGRESS_INTERVAL_NANOS
         val ir = if (technicalIrEnabled) "; technical IR snapshots enabled" else ""
         logger.info(
-            "Starting method analysis pipeline for {} method(s): legacy normalization, JVM frames, value flow, SSA optimization{}.",
+            "Starting method analysis pipeline for {} method(s): legacy normalization, JVM frames, value flow, SSA optimization, expression IR{}.",
             totalMethodCount,
             ir,
         )

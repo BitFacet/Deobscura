@@ -2,6 +2,9 @@ package io.github.relvl.deobscura.analysis
 
 import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
+import io.github.relvl.deobscura.expression.ExpressionAnalysis
+import io.github.relvl.deobscura.expression.ExpressionNode
+import io.github.relvl.deobscura.expression.ExpressionStatement
 import org.slf4j.Logger
 
 internal class AnalysisDiagnosticStats {
@@ -9,12 +12,14 @@ internal class AnalysisDiagnosticStats {
     val frame = FrameDiagnosticStats()
     val valueFlow = ValueFlowDiagnosticStats()
     val ssa = SsaDiagnosticStats()
+    val expression = ExpressionDiagnosticStats()
     var preparationFailureCount = 0
 
     fun startMethod() {
         frame.methodCount++
         valueFlow.methodCount++
         ssa.methodCount++
+        expression.methodCount++
     }
 
     fun record(methodName: String, analysis: MethodAnalysis) {
@@ -22,6 +27,7 @@ internal class AnalysisDiagnosticStats {
         frame.record(analysis.frames)
         valueFlow.record(analysis.valueFlow)
         ssa.record(methodName, analysis.graph, analysis.initialSsa, analysis.optimization)
+        expression.record(analysis.expression)
     }
 
     fun recordProgress(progress: MethodAnalysisProgress) {
@@ -39,6 +45,58 @@ internal class AnalysisDiagnosticStats {
         frame.log(logger)
         valueFlow.log(logger)
         ssa.log(logger)
+        expression.log(logger)
+    }
+}
+
+internal class ExpressionDiagnosticStats {
+    var methodCount = 0
+    private var analyzedMethodCount = 0
+    private var valueCount = 0L
+    private var statementCount = 0L
+    private var rawValueCount = 0L
+    private var rawStatementCount = 0L
+    private var constructedObjectCount = 0L
+    private var inlinedValueCount = 0L
+    private var discardedResultCount = 0L
+    private var booleanPhiCount = 0L
+    var inconsistencyCount = 0
+    var failureCount = 0
+
+    fun record(analysis: ExpressionAnalysis) {
+        analyzedMethodCount++
+        valueCount += analysis.values.size
+        statementCount += analysis.statements.size
+        rawValueCount += analysis.values.values.count { it.node is ExpressionNode.Raw }
+        rawStatementCount += analysis.statements.count { it is ExpressionStatement.Raw }
+        constructedObjectCount += analysis.values.values.count { it.node is ExpressionNode.ConstructObject }
+        inlinedValueCount += analysis.materialization.inlineValues.size
+        discardedResultCount += analysis.materialization.discardedResultValues.size
+        booleanPhiCount += analysis.materialization.booleanValues.size
+    }
+
+    fun log(logger: Logger) {
+        logger.info(
+            "Built expression IR for {}/{} method(s): {} value expression(s), {} statement(s), {} object construction(s).",
+            analyzedMethodCount,
+            methodCount,
+            valueCount,
+            statementCount,
+            constructedObjectCount,
+        )
+        logger.info(
+            "Expression materialization inlined {} pure single-use value(s), rendered {} unused result(s) as statement(s), and recognized {} boolean phi value(s).",
+            inlinedValueCount,
+            discardedResultCount,
+            booleanPhiCount,
+        )
+        logger.info(
+            "Expression IR completed with {} failure(s): {} inconsistent state(s), {} raw value node(s), {} raw statement node(s).",
+            failureCount,
+            inconsistencyCount,
+            rawValueCount,
+            rawStatementCount,
+        )
     }
 }
 

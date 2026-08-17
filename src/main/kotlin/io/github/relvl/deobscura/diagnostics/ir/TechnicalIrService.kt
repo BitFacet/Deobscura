@@ -7,6 +7,7 @@ import io.github.relvl.deobscura.analysis.SsaAnalysis
 import io.github.relvl.deobscura.analysis.SsaOptimizationResult
 import io.github.relvl.deobscura.analysis.ValueFlowAnalysis
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
+import io.github.relvl.deobscura.expression.ExpressionAnalysis
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
 import io.github.relvl.deobscura.raw.RawClass
 import io.github.relvl.deobscura.raw.RawMethod
@@ -79,6 +80,10 @@ object TechnicalIrService {
 
     fun captureOptimization(ownerInternalName: String, method: RawMethod, optimization: SsaOptimizationResult) {
         method(ownerInternalName, method)?.optimization = optimization
+    }
+
+    fun captureExpression(ownerInternalName: String, method: RawMethod, expression: ExpressionAnalysis) {
+        method(ownerInternalName, method)?.expression = expression
     }
 
     fun captureFailure(ownerInternalName: String, method: RawMethod, exception: MethodAnalysisException) {
@@ -182,7 +187,7 @@ object TechnicalIrService {
     private fun formatElapsed(nanos: Long): String =
         String.format(Locale.ROOT, "%.1f s", nanos / 1_000_000_000.0)
 
-    const val FORMAT_VERSION = 2
+    const val FORMAT_VERSION = 4
     const val MANIFEST_FILE = "_manifest.txt"
     private const val PROGRESS_INTERVAL_NANOS = 5_000_000_000L
 }
@@ -207,6 +212,7 @@ internal class MethodSnapshot(
     var valueFlow: ValueFlowAnalysis? = null
     var initialSsa: SsaAnalysis? = null
     var optimization: SsaOptimizationResult? = null
+    var expression: ExpressionAnalysis? = null
     var failure: MethodAnalysisException? = null
 
     fun completeAnalysis(): MethodAnalysis? {
@@ -216,6 +222,7 @@ internal class MethodSnapshot(
         val currentValueFlow = valueFlow ?: return null
         val currentInitialSsa = initialSsa ?: return null
         val currentOptimization = optimization ?: return null
+        val currentExpression = expression ?: return null
         val currentNormalization = normalization ?: return null
         return MethodAnalysis(
             method = method,
@@ -224,6 +231,7 @@ internal class MethodSnapshot(
             valueFlow = currentValueFlow,
             initialSsa = currentInitialSsa,
             optimization = currentOptimization,
+            expression = currentExpression,
             normalization = currentNormalization,
         )
     }

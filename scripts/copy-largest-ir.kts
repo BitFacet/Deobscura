@@ -25,7 +25,7 @@ val largestIr: Path = Files.walk(searchRoot).use { paths ->
     paths
         .filter { Files.isRegularFile(it) }
         .filter { it.fileName.toString().endsWith(".ir", ignoreCase = true) }
-        .max(Comparator.comparingLong<Path> { Files.size(it) })
+        .max(Comparator.comparingLong { Files.size(it) })
         .orElseThrow { IllegalStateException("No .ir files found under $searchRoot") }
 }
 
