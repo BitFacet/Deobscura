@@ -1,5 +1,6 @@
 package io.github.relvl.deobscura.analysis
 
+import io.github.relvl.deobscura.controlflow.UnstructuredControlFlowKind
 import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
 import io.github.relvl.deobscura.raw.RawImportResult
 import io.github.relvl.deobscura.expression.ExpressionIrInconsistencyException
@@ -32,6 +33,17 @@ class AnalysisDiagnostics(
 
                 try {
                     val analysis = methodAnalyzer.analyze(rawClass.internalName, method)
+                    analysis.structuredControlFlow.unstructured
+                        .filter { it.kind == UnstructuredControlFlowKind.SWITCH }
+                        .forEach { diagnostic ->
+                            logger.warn(
+                                "Unstructured switch in '{}': B{} ({}).{}",
+                                methodName,
+                                diagnostic.header.value,
+                                diagnostic.reason.diagnosticName,
+                                TechnicalIrService.methodHint(rawClass.internalName, method.name, method.descriptor),
+                            )
+                        }
                     stats.record(methodName, analysis)
                 } catch (exception: MethodAnalysisException) {
                     stats.recordProgress(exception.progress)

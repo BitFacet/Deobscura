@@ -62,7 +62,9 @@ internal class StructuredControlFlowDiagnosticStats {
     private var conditionalBranchCount = 0L
     private var ifRegionCount = 0L
     private var whileRegionCount = 0L
+    private var switchRegionCount = 0L
     private var unstructuredConditionalCount = 0L
+    private var unstructuredSwitchCount = 0L
     private var switchCount = 0L
     private var booleanConditionFoldCount = 0L
     private var shortCircuitConditionFoldCount = 0L
@@ -93,33 +95,39 @@ internal class StructuredControlFlowDiagnosticStats {
         loopContinuationIfRegionCount += analysis.loopContinuationIfRegionCount
         loopBreakEdgeCount += analysis.regions.filterIsInstance<StructuredRegion.While>().sumOf { it.breakEdges.size.toLong() }
         analysis.unstructured.forEach { diagnostic ->
-            if (diagnostic.kind == io.github.relvl.deobscura.controlflow.UnstructuredControlFlowKind.CONDITIONAL) {
-                unstructuredReasonCounts[diagnostic.reason] = unstructuredReasonCounts.getOrDefault(diagnostic.reason, 0L) + 1L
-            }
+            unstructuredReasonCounts[diagnostic.reason] = unstructuredReasonCounts.getOrDefault(diagnostic.reason, 0L) + 1L
         }
         val ifs = analysis.regions.count { it is StructuredRegion.If }
         val whiles = analysis.regions.count { it is StructuredRegion.While }
+        val switches = analysis.regions.count { it is StructuredRegion.Switch }
         ifRegionCount += ifs
         whileRegionCount += whiles
+        switchRegionCount += switches
         unstructuredConditionalCount += analysis.unstructuredConditionalCount
-        if (ifs + whiles + analysis.booleanConditionFolds.size + analysis.shortCircuitConditionFolds.size > 0) structuredMethodCount++
+        unstructuredSwitchCount += analysis.unstructured.count {
+            it.kind == io.github.relvl.deobscura.controlflow.UnstructuredControlFlowKind.SWITCH
+        }
+        if (ifs + whiles + switches + analysis.booleanConditionFolds.size + analysis.shortCircuitConditionFolds.size > 0) structuredMethodCount++
     }
 
     fun log(logger: Logger) {
         logger.info(
-            "Structured control flow for {}/{} method(s): {} if region(s), {} natural while loop(s) in {} method(s).",
+            "Structured control flow for {}/{} method(s): {} if region(s), {} natural while loop(s), {} switch region(s) in {} method(s).",
             analyzedMethodCount,
             methodCount,
             ifRegionCount,
             whileRegionCount,
+            switchRegionCount,
             structuredMethodCount,
         )
         logger.info(
-            "Control-flow structuring classified {}/{} conditional branch header(s); {} remain block-based, {} switch(es) deferred.",
+            "Control-flow structuring classified {}/{} conditional branch header(s); {} remain block-based. Structured {}/{} switch(es); {} remain block-based.",
             ifRegionCount + whileRegionCount + booleanConditionFoldCount + shortCircuitFoldedHeaderCount,
             conditionalBranchCount,
             unstructuredConditionalCount,
+            switchRegionCount,
             switchCount,
+            unstructuredSwitchCount,
         )
         logger.info(
             "Control-flow normalization folded {} boolean materialization diamond(s) and {} short-circuit chain(s) ({} condition header(s)), normalized {} empty if arm(s), recognized {} terminal-arm if region(s), {} continue if region(s), {} break if region(s), {} loop-body regional if(s), and {} loop-continuation if(s).",
@@ -139,7 +147,7 @@ internal class StructuredControlFlowDiagnosticStats {
         )
         if (unstructuredReasonCounts.isNotEmpty()) {
             logger.info(
-                "Unstructured conditional reasons: {}.",
+                "Unstructured control-flow reasons: {}.",
                 unstructuredReasonCounts.entries
                     .sortedByDescending { it.value }
                     .joinToString { (reason, count) -> "${reason.diagnosticName}=$count" },

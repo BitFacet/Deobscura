@@ -26,10 +26,12 @@ class StructuredControlFlowAnalyzer {
 
         val normalEdges = flow.edges.filter { it.kind != ControlFlowEdgeKind.EXCEPTION && it.from in blocks && it.to in blocks }
         val outgoing = normalEdges.groupBy { it.from }
-        val predecessors = normalEdges.groupBy { it.to }.mapValues { (_, edges) -> edges.map { it.from }.distinct() }
+        val incoming = normalEdges.groupBy { it.to }
+        val predecessors = incoming.mapValues { (_, edges) -> edges.map { it.from }.distinct() }
         val instructionToBlock = instructionToBlock(graph)
         val originalBranches = branchesByBlock(graph, expression, blocks, instructionToBlock)
-        val switchHeaders = switchesByBlock(expression, blocks, instructionToBlock)
+        val switches = switchesByBlock(expression, blocks, instructionToBlock)
+        val switchHeaders = switches.keys
         val explicitTerminalBlocks = explicitTerminalBlocks(expression, blocks, instructionToBlock, outgoing)
         val folds = findBooleanConditionFolds(
             expression = expression,
@@ -42,20 +44,6 @@ class StructuredControlFlowAnalyzer {
         val branches = originalBranches.asSequence()
             .filter { (header, _) -> header !in foldedProducerHeaders }
             .associate { (header, branch) -> header to (foldedConditions[header]?.let { branch.copy(condition = it) } ?: branch) }
-        if (branches.isEmpty()) {
-            val diagnostics = switchHeaders.map {
-                UnstructuredControlFlowDiagnostic(it, UnstructuredControlFlowKind.SWITCH, UnstructuredControlFlowReason.SWITCH_DEFERRED)
-            }
-            return StructuredControlFlowAnalysis(
-                regions = emptyList(),
-                conditionalBranchCount = originalBranches.size,
-                switchCount = switchHeaders.size,
-                booleanConditionFolds = folds,
-                shortCircuitConditionFolds = emptyList(),
-                unstructured = diagnostics,
-            )
-        }
-
         val dominators = dominators(blocks, requireNotNull(flow.entryBlock), predecessors)
         val loopRecognition = findNaturalLoops(normalEdges, outgoing, predecessors, branches, dominators)
         val loopHeaders = loopRecognition.regions.mapTo(hashSetOf()) { it.header }
@@ -81,6 +69,16 @@ class StructuredControlFlowAnalyzer {
             )
         }
         val postDominators = postDominators(blocks, outgoing)
+        val switchRecognition = findSwitchRegions(
+            switches = switches,
+            blocks = blocks,
+            outgoing = outgoing,
+            predecessors = predecessors,
+            incoming = incoming,
+            postDominators = postDominators,
+            explicitTerminalBlocks = explicitTerminalBlocks,
+            loopContexts = loopContexts.values.toList(),
+        )
         val ifRecognition = findIfRegions(
             blocks = blocks,
             outgoing = outgoing,
@@ -93,9 +91,15 @@ class StructuredControlFlowAnalyzer {
             shortCircuitByRoot = shortCircuitByRoot,
         )
 
-        val regions = (loopRecognition.regions + ifRecognition.regions).sortedWith(
+        val regions = (loopRecognition.regions + switchRecognition.regions + ifRecognition.regions).sortedWith(
             compareBy<StructuredRegion> { it.header.value }
-                .thenBy { if (it is StructuredRegion.While) 0 else 1 },
+                .thenBy {
+                    when (it) {
+                        is StructuredRegion.While -> 0
+                        is StructuredRegion.Switch -> 1
+                        is StructuredRegion.If -> 2
+                    }
+                },
         )
         val recognizedHeaders = regions.mapTo(hashSetOf()) { it.header }
         recognizedHeaders += foldedProducerHeaders
@@ -110,7 +114,14 @@ class StructuredControlFlowAnalyzer {
                 add(UnstructuredControlFlowDiagnostic(header, UnstructuredControlFlowKind.CONDITIONAL, reason))
             }
             switchHeaders.sortedBy { it.value }.forEach { header ->
-                add(UnstructuredControlFlowDiagnostic(header, UnstructuredControlFlowKind.SWITCH, UnstructuredControlFlowReason.SWITCH_DEFERRED))
+                if (header in recognizedHeaders) return@forEach
+                add(
+                    UnstructuredControlFlowDiagnostic(
+                        header,
+                        UnstructuredControlFlowKind.SWITCH,
+                        switchRecognition.rejections[header] ?: UnstructuredControlFlowReason.UNSUPPORTED_SHAPE,
+                    ),
+                )
             }
         }
         return StructuredControlFlowAnalysis(
@@ -164,11 +175,21 @@ class StructuredControlFlowAnalyzer {
         expression: ExpressionAnalysis,
         blocks: Set<BasicBlockId>,
         instructionToBlock: Array<BasicBlockId?>,
-    ): Set<BasicBlockId> = expression.statements.asSequence()
+    ): Map<BasicBlockId, ExpressionStatement.Switch> = expression.statements.asSequence()
         .filterIsInstance<ExpressionStatement.Switch>()
-        .mapNotNull { instructionToBlock.getOrNull(it.instructionIndex) }
-        .filter { it in blocks }
-        .toCollection(linkedSetOf())
+        .mapNotNull { statement ->
+            val block = instructionToBlock.getOrNull(statement.instructionIndex) ?: return@mapNotNull null
+            block.takeIf { it in blocks }?.let { it to statement }
+        }
+        .groupBy({ it.first }, { it.second })
+        .mapValues { (block, statements) ->
+            if (statements.size != 1) {
+                throw StructuredControlFlowInconsistencyException(
+                    "Basic block B${block.value} contains ${statements.size} switch statements.",
+                )
+            }
+            statements.single()
+        }
 
     /** Blocks whose normal flow ends in an explicit source-level return or throw. */
     private fun explicitTerminalBlocks(
@@ -485,6 +506,424 @@ class StructuredControlFlowAnalyzer {
             )
         }
         return LoopRecognition(regions, rejections)
+    }
+
+
+    private fun findSwitchRegions(
+        switches: Map<BasicBlockId, ExpressionStatement.Switch>,
+        blocks: Set<BasicBlockId>,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        predecessors: Map<BasicBlockId, List<BasicBlockId>>,
+        incoming: Map<BasicBlockId, List<ControlFlowEdge>>,
+        postDominators: Map<BasicBlockId, Set<BasicBlockId>>,
+        explicitTerminalBlocks: Set<BasicBlockId>,
+        loopContexts: List<LoopFlowContext>,
+    ): SwitchRecognition {
+        val regions = mutableListOf<StructuredRegion.Switch>()
+        val rejections = linkedMapOf<BasicBlockId, UnstructuredControlFlowReason>()
+
+        switches.forEach { (header, statement) ->
+            val switchEdges = outgoing[header].orEmpty().filter { it.kind == ControlFlowEdgeKind.SWITCH }
+            if (switchEdges.isEmpty() || switchEdges.none { it.switchValue == null }) {
+                rejections[header] = UnstructuredControlFlowReason.SWITCH_MISSING_EDGES
+                return@forEach
+            }
+
+            val entries = switchEdges.mapTo(linkedSetOf()) { it.to }
+            val continuation = switchContinuation(
+                header = header,
+                entries = entries,
+                incoming = incoming,
+                outgoing = outgoing,
+                postDominators = postDominators,
+                explicitTerminalBlocks = explicitTerminalBlocks,
+            )
+            val containingLoop = loopContexts
+                .filter { header in it.loop.bodyBlocks }
+                .minByOrNull { it.loop.bodyBlocks.size }
+
+            val collected = linkedMapOf<BasicBlockId, Set<BasicBlockId>>()
+            for (entry in entries) {
+                if (entry == continuation) {
+                    collected[entry] = emptySet()
+                    continue
+                }
+                when (val result = collectSwitchCase(
+                    start = entry,
+                    header = header,
+                    continuation = continuation,
+                    caseEntries = entries,
+                    blocks = blocks,
+                    outgoing = outgoing,
+                    explicitTerminalBlocks = explicitTerminalBlocks,
+                    continueTargets = containingLoop?.continueTargets.orEmpty(),
+                )) {
+                    is SwitchCaseCollection.Success -> collected[entry] = result.blocks
+                    is SwitchCaseCollection.Rejected -> {
+                        rejections[header] = result.reason
+                        break
+                    }
+                }
+            }
+            if (header in rejections) return@forEach
+
+            detachSharedTerminalBlocks(
+                collected = collected,
+                header = header,
+                continuation = continuation,
+                caseEntries = entries,
+                predecessors = predecessors,
+                explicitTerminalBlocks = explicitTerminalBlocks,
+            )
+
+            val nonEmptyCaseBlocks = collected.values.filter { it.isNotEmpty() }
+            for (i in nonEmptyCaseBlocks.indices) {
+                for (j in i + 1 until nonEmptyCaseBlocks.size) {
+                    if (nonEmptyCaseBlocks[i].intersect(nonEmptyCaseBlocks[j]).isNotEmpty()) {
+                        rejections[header] = UnstructuredControlFlowReason.SWITCH_OVERLAPPING_CASES
+                        return@forEach
+                    }
+                }
+            }
+
+            val allCaseBlocks = collected.values.flatten().toSet()
+            val allowedEntryPredecessors = allCaseBlocks + header
+            val hasExternalEntry = collected.any { (entry, caseBlocks) ->
+                caseBlocks.any { block ->
+                    predecessors[block].orEmpty().any { predecessor ->
+                        predecessor !in allowedEntryPredecessors && !(block == entry && predecessor in entries)
+                    }
+                }
+            }
+            if (hasExternalEntry) {
+                rejections[header] = UnstructuredControlFlowReason.SWITCH_EXTERNAL_ENTRY
+                return@forEach
+            }
+
+            val cases = switchEdges.groupBy { it.to }.map { (entry, edges) ->
+                val labels = edges.mapNotNull { it.switchValue }.distinct().sorted()
+                val isDefault = edges.any { it.switchValue == null }
+                val caseBlocks = collected.getValue(entry)
+                val exit = classifySwitchCaseExit(
+                    caseBlocks = caseBlocks,
+                    entry = entry,
+                    continuation = continuation,
+                    caseEntries = entries,
+                    outgoing = outgoing,
+                    explicitTerminalBlocks = explicitTerminalBlocks,
+                    continueTargets = containingLoop?.continueTargets.orEmpty(),
+                ) ?: if (caseBlocks.isEmpty() && entry == continuation) {
+                    StructuredSwitchCaseExit(StructuredSwitchCaseExitKind.NORMAL, continuation)
+                } else {
+                    rejections[header] = UnstructuredControlFlowReason.SWITCH_UNSUPPORTED_EXIT
+                    return@forEach
+                }
+                StructuredSwitchCase(
+                    labels = labels,
+                    isDefault = isDefault,
+                    entry = entry,
+                    blocks = caseBlocks,
+                    exit = exit,
+                )
+            }.sortedWith(compareBy<StructuredSwitchCase> { it.entry.value }.thenBy { it.labels.firstOrNull() ?: Int.MAX_VALUE })
+
+            if (header in rejections) return@forEach
+            if (continuation == null && !switchCasesNeedNoContinuation(cases)) {
+                rejections[header] = UnstructuredControlFlowReason.SWITCH_NO_CONTINUATION
+                return@forEach
+            }
+
+            regions += StructuredRegion.Switch(
+                header = header,
+                selector = statement.selector,
+                cases = cases,
+                continuation = continuation,
+            )
+        }
+
+        return SwitchRecognition(regions, rejections)
+    }
+
+    /**
+     * A switch does not need a common continuation when every case transfers control out of the
+     * switch: directly through return/throw/continue, or through a chain of source fallthroughs
+     * that eventually reaches such a case. This is common when the final/default case terminates.
+     */
+    private fun switchCasesNeedNoContinuation(cases: List<StructuredSwitchCase>): Boolean {
+        val byEntry = cases.associateBy { it.entry }
+        val memo = mutableMapOf<BasicBlockId, Boolean>()
+
+        fun exitsSwitch(entry: BasicBlockId, visiting: MutableSet<BasicBlockId>): Boolean {
+            memo[entry]?.let { return it }
+            if (!visiting.add(entry)) return false
+            val exit = byEntry[entry]?.exit
+            val result = when (exit?.kind) {
+                StructuredSwitchCaseExitKind.RETURN_OR_THROW,
+                StructuredSwitchCaseExitKind.CONTINUE,
+                -> true
+
+                StructuredSwitchCaseExitKind.FALLTHROUGH ->
+                    exit.target?.let { target -> target in byEntry && exitsSwitch(target, visiting) } == true
+
+                StructuredSwitchCaseExitKind.BREAK,
+                StructuredSwitchCaseExitKind.NORMAL,
+                null,
+                -> false
+            }
+            visiting.remove(entry)
+            memo[entry] = result
+            return result
+        }
+
+        return cases.all { exitsSwitch(it.entry, linkedSetOf()) }
+    }
+
+    private fun switchContinuation(
+        header: BasicBlockId,
+        entries: Set<BasicBlockId>,
+        incoming: Map<BasicBlockId, List<ControlFlowEdge>>,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        postDominators: Map<BasicBlockId, Set<BasicBlockId>>,
+        explicitTerminalBlocks: Set<BasicBlockId>,
+    ): BasicBlockId? {
+        immediatePostDominator(header, postDominators)?.let { return it }
+
+        // A switch target that is also reachable without passing through the switch header cannot
+        // be an ordinary source-level case body. It is a shared continuation reached both by the
+        // switch default/empty case and by surrounding control flow. This shape is common after
+        // chains of early-return tests followed by a switch with an empty default arm.
+        val reachableFromHeader = reachableFrom(header, outgoing)
+        val externallySharedEntries = entries.filter { candidate ->
+            incoming[candidate].orEmpty().any { edge ->
+                edge.from != header && edge.from !in reachableFromHeader
+            }
+        }
+        if (externallySharedEntries.size == 1) return externallySharedEntries.single()
+
+        // Local return/throw paths inside a case prevent an otherwise ordinary post-switch join
+        // from post-dominating that case entry. Prefer the earliest join reached by multiple cases
+        // before considering joins with surrounding control flow: a later outer join is not the
+        // switch continuation when the cases already reconverged locally.
+        val reachableSupport = linkedMapOf<BasicBlockId, Int>()
+        entries.forEach { entry ->
+            reachableUntilCaseOrTerminal(
+                start = entry,
+                caseEntries = entries,
+                outgoing = outgoing,
+                explicitTerminalBlocks = explicitTerminalBlocks,
+            ).forEach { candidate ->
+                if (candidate != header && candidate !in entries) {
+                    reachableSupport[candidate] = reachableSupport.getOrDefault(candidate, 0) + 1
+                }
+            }
+        }
+        val maxReachableSupport = reachableSupport.values.maxOrNull() ?: 0
+        if (maxReachableSupport >= 2) {
+            val candidates = reachableSupport.filterValues { it == maxReachableSupport }.keys
+            val earliest = candidates.filter { candidate ->
+                candidates.all { other -> other == candidate || other in reachableFrom(candidate, outgoing) }
+            }
+            if (earliest.size == 1) return earliest.single()
+        }
+
+        // The continuation does not have to be a switch target. A nested switch frequently has
+        // one continuing case and a terminal default, while the continuing path joins surrounding
+        // control flow immediately after the switch. That join is visible as a reachable block
+        // with a predecessor that cannot be reached from this switch header. This is weaker evidence
+        // than a join shared by multiple cases, so it is considered only afterwards.
+        val externallySharedJoins = reachableFromHeader.filter { candidate ->
+            candidate != header &&
+                candidate !in entries &&
+                candidate !in explicitTerminalBlocks &&
+                header !in reachableFrom(candidate, outgoing) &&
+                incoming[candidate].orEmpty().any { edge -> edge.from !in reachableFromHeader }
+        }
+        if (externallySharedJoins.size == 1) return externallySharedJoins.single()
+
+        // A terminal case prevents the post-switch continuation from post-dominating the switch
+        // header. Recover the join from the largest subset of case entries that does continue.
+        // The continuation may itself be a switch target for an empty `case: break;`; accept such
+        // entries only when another case reaches them through an explicit jump, so ordinary source
+        // fallthrough into a later case is not mistaken for the post-switch continuation.
+        val support = linkedMapOf<BasicBlockId, Int>()
+        entries.forEach { entry ->
+            postDominators[entry].orEmpty().forEach { candidate ->
+                val isDirectSwitchEntry = candidate in entries
+                val hasBreakLikeIncoming = incoming[candidate].orEmpty().any { edge ->
+                    edge.from != header && edge.kind == ControlFlowEdgeKind.JUMP
+                }
+                if (candidate != header && (!isDirectSwitchEntry || hasBreakLikeIncoming)) {
+                    support[candidate] = support.getOrDefault(candidate, 0) + 1
+                }
+            }
+        }
+        val maxSupport = support.values.maxOrNull() ?: return null
+        if (maxSupport < 2) return null
+        val candidates = support.filterValues { it == maxSupport }.keys
+        return candidates.firstOrNull { candidate ->
+            candidates.none { other ->
+                other != candidate && candidate in postDominators[other].orEmpty()
+            }
+        }
+    }
+
+    private fun reachableUntilCaseOrTerminal(
+        start: BasicBlockId,
+        caseEntries: Set<BasicBlockId>,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        explicitTerminalBlocks: Set<BasicBlockId>,
+    ): Set<BasicBlockId> {
+        val result = linkedSetOf<BasicBlockId>()
+        val queue = ArrayDeque<BasicBlockId>()
+        queue.add(start)
+        while (queue.isNotEmpty()) {
+            val block = queue.removeFirst()
+            if (block != start && block in caseEntries) continue
+            if (!result.add(block)) continue
+            if (block in explicitTerminalBlocks) continue
+            outgoing[block].orEmpty().forEach { edge -> queue.addLast(edge.to) }
+        }
+        return result
+    }
+
+    private fun reachableFrom(
+        start: BasicBlockId,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+    ): Set<BasicBlockId> {
+        val result = linkedSetOf<BasicBlockId>()
+        val queue = ArrayDeque<BasicBlockId>()
+        queue.add(start)
+        while (queue.isNotEmpty()) {
+            val block = queue.removeFirst()
+            if (!result.add(block)) continue
+            outgoing[block].orEmpty().forEach { edge -> queue.addLast(edge.to) }
+        }
+        return result
+    }
+
+    private fun collectSwitchCase(
+        start: BasicBlockId,
+        header: BasicBlockId,
+        continuation: BasicBlockId?,
+        caseEntries: Set<BasicBlockId>,
+        blocks: Set<BasicBlockId>,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        explicitTerminalBlocks: Set<BasicBlockId>,
+        continueTargets: Set<BasicBlockId>,
+    ): SwitchCaseCollection {
+        val result = linkedSetOf<BasicBlockId>()
+        val queue = ArrayDeque<BasicBlockId>()
+        queue.add(start)
+        while (queue.isNotEmpty()) {
+            val block = queue.removeFirst()
+            if (block == continuation || (block != start && block in caseEntries) || block in continueTargets) continue
+            if (block == header) return SwitchCaseCollection.Rejected(UnstructuredControlFlowReason.ARM_REENTERS_HEADER)
+            if (block !in blocks) return SwitchCaseCollection.Rejected(UnstructuredControlFlowReason.ARM_LEAVES_REACHABLE_FLOW)
+            if (!result.add(block)) continue
+
+            val successors = outgoing[block].orEmpty().distinctTargets().map { it.to }
+            if (successors.isEmpty()) {
+                if (block !in explicitTerminalBlocks) {
+                    return SwitchCaseCollection.Rejected(UnstructuredControlFlowReason.SWITCH_UNSUPPORTED_EXIT)
+                }
+                continue
+            }
+            successors.forEach { successor ->
+                if (
+                    successor != continuation &&
+                    successor !in continueTargets &&
+                    (successor == start || successor !in caseEntries)
+                ) {
+                    queue.addLast(successor)
+                }
+            }
+        }
+        return SwitchCaseCollection.Success(result)
+    }
+
+    /**
+     * Keeps terminal blocks inside a case when they are part of that case's own control flow, but
+     * factors out terminal tails that are genuinely shared between cases or with surrounding flow.
+     * The latter are source-level transfers rather than owned case-body blocks.
+     */
+    private fun detachSharedTerminalBlocks(
+        collected: MutableMap<BasicBlockId, Set<BasicBlockId>>,
+        header: BasicBlockId,
+        continuation: BasicBlockId?,
+        caseEntries: Set<BasicBlockId>,
+        predecessors: Map<BasicBlockId, List<BasicBlockId>>,
+        explicitTerminalBlocks: Set<BasicBlockId>,
+    ) {
+        val allCaseBlocks = collected.values.flatten().toSet()
+        val owners = linkedMapOf<BasicBlockId, MutableSet<BasicBlockId>>()
+        collected.forEach { (entry, caseBlocks) ->
+            caseBlocks.forEach { block ->
+                if (block in explicitTerminalBlocks) {
+                    owners.getOrPut(block) { linkedSetOf() } += entry
+                }
+            }
+        }
+
+        val sharedTerminalBlocks = owners.filter { (block, blockOwners) ->
+            block != continuation &&
+                block !in caseEntries &&
+                (
+                    blockOwners.size > 1 ||
+                        predecessors[block].orEmpty().any { predecessor ->
+                            predecessor != header && predecessor !in allCaseBlocks
+                        }
+                    )
+        }.keys
+        if (sharedTerminalBlocks.isEmpty()) return
+
+        collected.entries.forEach { entry ->
+            if (entry.value.any { it in sharedTerminalBlocks }) {
+                entry.setValue(entry.value.filterTo(linkedSetOf()) { it !in sharedTerminalBlocks })
+            }
+        }
+    }
+
+    private fun classifySwitchCaseExit(
+        caseBlocks: Set<BasicBlockId>,
+        entry: BasicBlockId,
+        continuation: BasicBlockId?,
+        caseEntries: Set<BasicBlockId>,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        explicitTerminalBlocks: Set<BasicBlockId>,
+        continueTargets: Set<BasicBlockId>,
+    ): StructuredSwitchCaseExit? {
+        if (caseBlocks.isEmpty()) return null
+        val exits = caseBlocks.flatMap { block ->
+            outgoing[block].orEmpty().distinctTargets().filter { edge -> edge.to !in caseBlocks }
+        }
+        val targets = exits.mapTo(linkedSetOf()) { it.to }
+
+        if (targets.isEmpty()) {
+            return if (caseBlocks.any { it in explicitTerminalBlocks }) {
+                StructuredSwitchCaseExit(StructuredSwitchCaseExitKind.RETURN_OR_THROW)
+            } else null
+        }
+        if (targets.size != 1) return null
+        val target = targets.single()
+
+        if (target in caseEntries && target != entry) {
+            return StructuredSwitchCaseExit(StructuredSwitchCaseExitKind.FALLTHROUGH, target)
+        }
+        if (target in continueTargets) {
+            return StructuredSwitchCaseExit(StructuredSwitchCaseExitKind.CONTINUE, target)
+        }
+        if (target == continuation) {
+            val kind = if (exits.all { it.kind == ControlFlowEdgeKind.JUMP }) {
+                StructuredSwitchCaseExitKind.BREAK
+            } else {
+                StructuredSwitchCaseExitKind.NORMAL
+            }
+            return StructuredSwitchCaseExit(kind, target)
+        }
+        if (target in explicitTerminalBlocks) {
+            return StructuredSwitchCaseExit(StructuredSwitchCaseExitKind.RETURN_OR_THROW, target)
+        }
+        return null
     }
 
     private fun findIfRegions(
@@ -1233,6 +1672,16 @@ class StructuredControlFlowAnalyzer {
         val exit: StructuredArmExit,
         val usedContinuationSpine: Boolean,
     )
+
+    private data class SwitchRecognition(
+        val regions: List<StructuredRegion.Switch>,
+        val rejections: Map<BasicBlockId, UnstructuredControlFlowReason>,
+    )
+
+    private sealed interface SwitchCaseCollection {
+        data class Success(val blocks: Set<BasicBlockId>) : SwitchCaseCollection
+        data class Rejected(val reason: UnstructuredControlFlowReason) : SwitchCaseCollection
+    }
 
     private data class IfRecognition(
         val regions: List<StructuredRegion.If>,

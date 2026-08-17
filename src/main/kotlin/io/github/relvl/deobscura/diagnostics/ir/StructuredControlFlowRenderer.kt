@@ -5,6 +5,8 @@ import io.github.relvl.deobscura.controlflow.StructuredRegion
 import io.github.relvl.deobscura.controlflow.StructuredCondition
 import io.github.relvl.deobscura.controlflow.StructuredArmExit
 import io.github.relvl.deobscura.controlflow.StructuredArmExitKind
+import io.github.relvl.deobscura.controlflow.StructuredSwitchCaseExit
+import io.github.relvl.deobscura.controlflow.StructuredSwitchCaseExitKind
 import io.github.relvl.deobscura.controlflow.UnstructuredControlFlowKind
 import io.github.relvl.deobscura.expression.ExpressionAnalysis
 import io.github.relvl.deobscura.expression.BranchCondition
@@ -50,6 +52,24 @@ class StructuredControlFlowRenderer(
                     region.thenExit?.let { append(" then-${renderExit(it)}") }
                     region.elseExit?.let { append(" else-${renderExit(it)}") }
                     appendLine()
+                }
+
+                is StructuredRegion.Switch -> {
+                    append("    switch B${region.header.value} selector=v${region.selector.value}")
+                    region.continuation?.let { append(" continuation=B${it.value}") }
+                    appendLine()
+                    region.cases.forEach { case ->
+                        append("      case ")
+                        val labels = buildList {
+                            addAll(case.labels.map(Int::toString))
+                            if (case.isDefault) add("default")
+                        }
+                        append(labels.joinToString(","))
+                        append(" entry=B${case.entry.value}")
+                        append(" blocks=${formatBlocks(case.blocks)}")
+                        case.exit?.let { append(" ${renderSwitchExit(it)}") }
+                        appendLine()
+                    }
                 }
 
                 is StructuredRegion.While -> {
@@ -112,6 +132,14 @@ class StructuredControlFlowRenderer(
         StructuredArmExitKind.RETURN_OR_THROW -> "terminates"
         StructuredArmExitKind.CONTINUE -> "continue=B${requireNotNull(exit.target).value}"
         StructuredArmExitKind.BREAK -> "break=B${requireNotNull(exit.target).value}"
+    }
+
+    private fun renderSwitchExit(exit: StructuredSwitchCaseExit): String = when (exit.kind) {
+        StructuredSwitchCaseExitKind.BREAK -> "break=B${requireNotNull(exit.target).value}"
+        StructuredSwitchCaseExitKind.NORMAL -> "normal=B${requireNotNull(exit.target).value}"
+        StructuredSwitchCaseExitKind.FALLTHROUGH -> "fallthrough=B${requireNotNull(exit.target).value}"
+        StructuredSwitchCaseExitKind.CONTINUE -> "continue=B${requireNotNull(exit.target).value}"
+        StructuredSwitchCaseExitKind.RETURN_OR_THROW -> "terminates"
     }
 
     private fun formatBlocks(blocks: Set<io.github.relvl.deobscura.cfg.BasicBlockId>): String =

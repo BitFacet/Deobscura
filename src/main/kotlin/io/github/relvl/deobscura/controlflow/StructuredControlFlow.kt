@@ -77,7 +77,11 @@ enum class UnstructuredControlFlowKind {
 }
 
 enum class UnstructuredControlFlowReason(val diagnosticName: String) {
-    SWITCH_DEFERRED("switch-deferred"),
+    SWITCH_MISSING_EDGES("switch-missing-edges"),
+    SWITCH_NO_CONTINUATION("switch-no-common-continuation"),
+    SWITCH_EXTERNAL_ENTRY("switch-case-has-external-entry"),
+    SWITCH_OVERLAPPING_CASES("switch-overlapping-case-regions"),
+    SWITCH_UNSUPPORTED_EXIT("switch-unsupported-exit-shape"),
     MISSING_BRANCH_EDGES("missing-conditional-or-fallthrough-edge"),
     IDENTICAL_SUCCESSORS("identical-successors"),
     NO_COMMON_POST_DOMINATOR("no-common-post-dominator"),
@@ -107,6 +111,32 @@ enum class StructuredArmExitKind {
     CONTINUE,
     BREAK,
 }
+
+enum class StructuredSwitchCaseExitKind {
+    /** Explicit jump from the case body to the switch continuation. */
+    BREAK,
+    /** Physical fallthrough from the case body to the switch continuation. */
+    NORMAL,
+    /** Transfer into another case body. */
+    FALLTHROUGH,
+    /** Transfer to a containing loop's continue target. */
+    CONTINUE,
+    /** Every path represented by this case body terminates with return/throw. */
+    RETURN_OR_THROW,
+}
+
+data class StructuredSwitchCaseExit(
+    val kind: StructuredSwitchCaseExitKind,
+    val target: BasicBlockId? = null,
+)
+
+data class StructuredSwitchCase(
+    val labels: List<Int>,
+    val isDefault: Boolean,
+    val entry: BasicBlockId,
+    val blocks: Set<BasicBlockId>,
+    val exit: StructuredSwitchCaseExit? = null,
+)
 
 data class StructuredArmExit(
     val kind: StructuredArmExitKind,
@@ -140,6 +170,19 @@ sealed interface StructuredRegion {
             add(header)
             addAll(thenBlocks)
             addAll(elseBlocks)
+        }
+    }
+
+    data class Switch(
+        override val header: BasicBlockId,
+        val selector: ValueId,
+        val cases: List<StructuredSwitchCase>,
+        /** First block executed after the switch when control continues normally. */
+        val continuation: BasicBlockId?,
+    ) : StructuredRegion {
+        override val coveredBlocks: Set<BasicBlockId> = linkedSetOf<BasicBlockId>().apply {
+            add(header)
+            cases.forEach { addAll(it.blocks) }
         }
     }
 
