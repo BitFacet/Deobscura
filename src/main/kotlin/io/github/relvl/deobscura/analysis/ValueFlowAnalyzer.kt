@@ -68,11 +68,11 @@ class ValueFlowAnalyzer {
         state: MutableValueState,
         allocator: ValueAllocator,
     ): ValueOperation? = when (instruction) {
-        is RawConstantInstruction -> produce(instruction, index, instruction.type.toFrameValueKind(), emptyList(), state, allocator)
+        is RawConstantInstruction -> produce(instruction, index, instruction.toValueType(), emptyList(), state, allocator)
         is RawLocalInstruction -> executeLocal(instruction, index, state)
         is RawIncrementInstruction -> {
             val input = state.requireLocal(instruction.slot, FrameValueKind.INT)
-            val output = allocator.instructionValue(index, FrameValueKind.INT)
+            val output = allocator.instructionValue(index, JvmValueType.of(FrameValueKind.INT))
             state.writeLocal(instruction.slot, output)
             ValueOperation(index, instruction, listOf(input.id), output.id, instruction.slot)
         }
@@ -81,7 +81,7 @@ class ValueFlowAnalyzer {
         is RawOperatorInstruction -> executeOperator(instruction, index, state, allocator)
         is RawConversionInstruction -> {
             val input = state.pop(instruction.fromType.toFrameValueKind())
-            produce(instruction, index, instruction.toType.toFrameValueKind(), listOf(input), state, allocator)
+            produce(instruction, index, JvmValueType.of(instruction.toType), listOf(input), state, allocator)
         }
 
         is RawBranchInstruction -> executeBranch(instruction, index, state)
@@ -93,22 +93,22 @@ class ValueFlowAnalyzer {
             produceOptional(instruction, index, instruction.type.returnType, arguments, state, allocator)
         }
 
-        is RawNewObjectInstruction -> produce(instruction, index, FrameValueKind.REFERENCE, emptyList(), state, allocator)
+        is RawNewObjectInstruction -> produce(instruction, index, JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType(instruction.internalName))), emptyList(), state, allocator)
         is RawNewArrayInstruction -> {
             val size = state.pop(FrameValueKind.INT)
-            produce(instruction, index, FrameValueKind.REFERENCE, listOf(size), state, allocator)
+            produce(instruction, index, JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ArrayType(instruction.componentType))), listOf(size), state, allocator)
         }
 
         is RawNewMultiArrayInstruction -> {
             val dimensions = MutableList(instruction.dimensions) { state.pop(FrameValueKind.INT) }.asReversed()
-            produce(instruction, index, FrameValueKind.REFERENCE, dimensions, state, allocator)
+            produce(instruction, index, JvmValueType.Reference(JvmReferenceType.Exact(instruction.arrayType)), dimensions, state, allocator)
         }
 
         is RawTypeCheckInstruction -> when (instruction.opcode.mnemonic) {
             "checkcast" -> produce(
                 instruction,
                 index,
-                FrameValueKind.REFERENCE,
+                JvmValueType.Reference(JvmReferenceType.Exact(instruction.type)),
                 listOf(state.pop(FrameValueKind.REFERENCE)),
                 state,
                 allocator,
@@ -178,7 +178,7 @@ class ValueFlowAnalyzer {
             ArrayOperation.LOAD -> {
                 val arrayIndex = state.pop(FrameValueKind.INT)
                 val array = state.pop(FrameValueKind.REFERENCE)
-                produce(instruction, index, componentKind, listOf(array, arrayIndex), state, allocator)
+                produce(instruction, index, arrayLoadType(array, instruction.componentType), listOf(array, arrayIndex), state, allocator)
             }
 
             ArrayOperation.STORE -> {
@@ -187,6 +187,17 @@ class ValueFlowAnalyzer {
                 val array = state.pop(FrameValueKind.REFERENCE)
                 ValueOperation(index, instruction, listOf(array.id, arrayIndex.id, value.id))
             }
+        }
+    }
+
+    private fun arrayLoadType(array: SymbolicValue, componentType: JvmComputationalType): JvmValueType {
+        if (componentType != JvmComputationalType.REFERENCE) return JvmValueType.of(componentType)
+        val exactArray = (array.type as? JvmValueType.Reference)?.referenceType as? JvmReferenceType.Exact
+        val component = (exactArray?.type as? JvmType.ArrayType)?.componentType
+        return if (component is JvmType.ObjectType || component is JvmType.ArrayType) {
+            JvmValueType.Reference(JvmReferenceType.Exact(component))
+        } else {
+            JvmValueType.Reference(JvmReferenceType.Unknown)
         }
     }
 
@@ -211,7 +222,7 @@ class ValueFlowAnalyzer {
             mnemonic.endsWith("neg") -> produce(
                 instruction,
                 index,
-                kind,
+                JvmValueType.of(instruction.type),
                 listOf(state.pop(kind)),
                 state,
                 allocator,
@@ -226,13 +237,13 @@ class ValueFlowAnalyzer {
             mnemonic in SHIFT_OPERATORS -> {
                 val distance = state.pop(FrameValueKind.INT)
                 val value = state.pop(kind)
-                produce(instruction, index, kind, listOf(value, distance), state, allocator)
+                produce(instruction, index, JvmValueType.of(instruction.type), listOf(value, distance), state, allocator)
             }
 
             else -> {
                 val right = state.pop(kind)
                 val left = state.pop(kind)
-                produce(instruction, index, kind, listOf(left, right), state, allocator)
+                produce(instruction, index, JvmValueType.of(instruction.type), listOf(left, right), state, allocator)
             }
         }
     }
@@ -272,12 +283,12 @@ class ValueFlowAnalyzer {
     ): ValueOperation {
         val kind = instruction.type.toFrameValueKind()
         return when (instruction.opcode.mnemonic) {
-            "getstatic" -> produce(instruction, index, kind, emptyList(), state, allocator)
+            "getstatic" -> produce(instruction, index, JvmValueType.of(instruction.type), emptyList(), state, allocator)
             "putstatic" -> ValueOperation(index, instruction, listOf(state.pop(kind).id))
             "getfield" -> produce(
                 instruction,
                 index,
-                kind,
+                JvmValueType.of(instruction.type),
                 listOf(state.pop(FrameValueKind.REFERENCE)),
                 state,
                 allocator,
@@ -323,7 +334,20 @@ class ValueFlowAnalyzer {
     ): ValueOperation = if (returnType == JvmType.VoidType) {
         ValueOperation(index, instruction, inputs.map { it.id })
     } else {
-        produce(instruction, index, returnType.toFrameValueKind(), inputs, state, allocator)
+        produce(instruction, index, JvmValueType.of(returnType), inputs, state, allocator)
+    }
+
+    private fun produce(
+        instruction: RawInstruction,
+        index: Int,
+        type: JvmValueType,
+        inputs: List<SymbolicValue>,
+        state: MutableValueState,
+        allocator: ValueAllocator,
+    ): ValueOperation {
+        val output = allocator.instructionValue(index, type)
+        state.push(output)
+        return ValueOperation(index, instruction, inputs.map { it.id }, output.id)
     }
 
     private fun produce(
@@ -333,11 +357,7 @@ class ValueFlowAnalyzer {
         inputs: List<SymbolicValue>,
         state: MutableValueState,
         allocator: ValueAllocator,
-    ): ValueOperation {
-        val output = allocator.instructionValue(index, kind)
-        state.push(output)
-        return ValueOperation(index, instruction, inputs.map { it.id }, output.id)
-    }
+    ): ValueOperation = produce(instruction, index, JvmValueType.of(kind), inputs, state, allocator)
 
     private fun executeStack(mnemonic: String, state: MutableValueState) {
         JvmStackOperations.execute(
@@ -368,7 +388,9 @@ class ValueFlowAnalyzer {
             "Unsupported instruction '${instruction.opcode.mnemonic}' at instruction $index (${instruction::class.simpleName}).",
         )
 
-    private data class SymbolicValue(val id: ValueId, val kind: FrameValueKind)
+    private data class SymbolicValue(val id: ValueId, val type: JvmValueType) {
+        val kind: FrameValueKind get() = type.kind
+    }
 
     private class MutableValueState(
         val locals: MutableList<SymbolicValue?>,
@@ -421,33 +443,40 @@ class ValueFlowAnalyzer {
     private class ValueAllocator {
         private var nextId = 0
         val definitions = linkedMapOf<ValueId, ValueDefinition>()
-        private val roots = mutableMapOf<RootKey, SymbolicValue>()
+        private val roots = mutableMapOf<ValueOrigin, SymbolicValue>()
         private val instructions = mutableMapOf<Int, SymbolicValue>()
         private val merges = mutableMapOf<MergeKey, SymbolicValue>()
 
         fun valueForFrame(value: FrameValue, site: ValueMergeSite): SymbolicValue {
-            if (value.origins.size == 1) return valueForOrigin(value.kind, value.origins.single())
+            if (value.origins.size == 1) return valueForOrigin(value.type, value.origins.single())
             val origins = value.origins.sortedBy(::originSortKey)
-            val inputs = origins.map { valueForOrigin(value.kind, it) }
-            val key = MergeKey(value.kind, site, origins)
+            val inputs = origins.map { valueForOrigin(value.type, it) }
+            val key = MergeKey(value.type, site, origins)
             return merges.getOrPut(key) {
                 val id = newId()
-                definitions[id] = ValueDefinition.Merge(id, value.kind, site, inputs.map { it.id })
-                SymbolicValue(id, value.kind)
+                definitions[id] = ValueDefinition.Merge(id, value.type, site, inputs.map { it.id })
+                SymbolicValue(id, value.type)
             }
         }
 
-        fun instructionValue(index: Int, kind: FrameValueKind): SymbolicValue = instructions.getOrPut(index) {
-            val id = newId()
-            definitions[id] = ValueDefinition.Instruction(id, kind, index)
-            SymbolicValue(id, kind)
-        }.also {
-            if (it.kind != kind) {
-                throw ValueFlowInconsistencyException(
-                    "Instruction $index is used as both ${it.kind} and $kind.",
-                )
-            }
+        fun instructionValue(index: Int, type: JvmValueType): SymbolicValue {
+            val existing = instructions[index]
+            if (existing == null) return createInstructionValue(index, type)
+            requireSameInstructionKind(index, existing, type)
+            if (existing.type == type) return existing
+
+            // The instruction itself is authoritative for its produced type. Entry-frame reconstruction
+            // may have materialized the value earlier using a widened merge type (for example BYTE
+            // joined with INT, or an exact reference joined with a supertype). Once the instruction is
+            // executed, keep its intrinsic result type instead of permanently widening ValueId.
+            val precise = SymbolicValue(existing.id, type)
+            instructions[index] = precise
+            definitions[existing.id] = ValueDefinition.Instruction(existing.id, type, index)
+            return precise
         }
+
+        fun instructionValue(index: Int, kind: FrameValueKind): SymbolicValue =
+            instructionValue(index, JvmValueType.of(kind))
 
         fun verifyInstructionDefinitions(rawInstructions: List<RawInstruction>) {
             instructions.keys.forEach { index ->
@@ -455,20 +484,53 @@ class ValueFlowAnalyzer {
             }
         }
 
-        private fun valueForOrigin(kind: FrameValueKind, origin: ValueOrigin): SymbolicValue = when (origin) {
-            is ValueOrigin.Instruction -> instructionValue(origin.index, kind)
-            else -> roots.getOrPut(RootKey(kind, origin)) {
+        private fun valueForOrigin(type: JvmValueType, origin: ValueOrigin): SymbolicValue = when (origin) {
+            is ValueOrigin.Instruction -> instructionValueForFrame(origin.index, type)
+            else -> roots.getOrPut(origin) {
+                // A root is identified by its semantic origin, not by the contextual type observed
+                // at a particular block entry. Parameters, `this`, return addresses, and handler
+                // values are single SSA values even when frame merging later widens their type.
                 val id = newId()
-                definitions[id] = ValueDefinition.Root(id, kind, origin)
-                SymbolicValue(id, kind)
+                definitions[id] = ValueDefinition.Root(id, type, origin)
+                SymbolicValue(id, type)
+            }.also { existing ->
+                if (existing.kind != type.kind) {
+                    throw ValueFlowInconsistencyException(
+                        "Root $origin is used as both ${existing.kind} and ${type.kind}.",
+                    )
+                }
+            }
+        }
+
+        private fun instructionValueForFrame(index: Int, contextualType: JvmValueType): SymbolicValue {
+            val existing = instructions[index]
+            if (existing != null) {
+                requireSameInstructionKind(index, existing, contextualType)
+                return existing
+            }
+            return createInstructionValue(index, contextualType)
+        }
+
+        private fun createInstructionValue(index: Int, type: JvmValueType): SymbolicValue {
+            val id = newId()
+            val value = SymbolicValue(id, type)
+            instructions[index] = value
+            definitions[id] = ValueDefinition.Instruction(id, type, index)
+            return value
+        }
+
+        private fun requireSameInstructionKind(index: Int, existing: SymbolicValue, type: JvmValueType) {
+            if (existing.kind != type.kind) {
+                throw ValueFlowInconsistencyException(
+                    "Instruction $index is used as both ${existing.kind} and ${type.kind}.",
+                )
             }
         }
 
         private fun newId(): ValueId = ValueId(nextId++)
 
-        private data class RootKey(val kind: FrameValueKind, val origin: ValueOrigin)
         private data class MergeKey(
-            val kind: FrameValueKind,
+            val type: JvmValueType,
             val site: ValueMergeSite,
             val origins: List<ValueOrigin>,
         )

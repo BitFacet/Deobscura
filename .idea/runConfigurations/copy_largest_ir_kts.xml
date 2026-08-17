@@ -1,0 +1,8 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="copy-largest-ir.kts" type="KotlinStandaloneScriptRunConfigurationType" nameIsGenerated="true">
+    <module name="Deobscura" />
+    <shortenClasspath name="NONE" />
+    <option name="filePath" value="$PROJECT_DIR$/scripts/copy-largest-ir.kts" />
+    <method v="2" />
+  </configuration>
+</component>

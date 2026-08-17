@@ -52,7 +52,7 @@ class SsaConstantPropagator {
                 val constant = when (definition) {
                     is SsaValueDefinition.Root -> null
                     is SsaValueDefinition.Instruction -> operationsByOutput[id]?.let { evaluateOperation(it, constants) }
-                    is SsaValueDefinition.Phi -> evaluatePhi(definition.inputs, constants)
+                    is SsaValueDefinition.Phi -> evaluatePhi(definition.id, definition.inputs, constants)
                 }
 
                 if (constant != null) {
@@ -77,11 +77,13 @@ class SsaConstantPropagator {
     }
 
     private fun evaluatePhi(
-        inputs: List<ValueId>,
+        output: ValueId,
+        inputs: List<SsaPhiInput>,
         constants: Map<ValueId, SsaConstant>,
     ): SsaConstant? {
-        if (inputs.isEmpty()) return null
-        val values = inputs.map { constants[it] ?: return null }
+        val meaningfulInputs = inputs.filter { it.value != output }
+        if (meaningfulInputs.isEmpty()) return null
+        val values = meaningfulInputs.map { constants[it.value] ?: return null }
         val first = values.first()
         return first.takeIf { candidate -> values.all { sameConstant(candidate, it) } }
     }

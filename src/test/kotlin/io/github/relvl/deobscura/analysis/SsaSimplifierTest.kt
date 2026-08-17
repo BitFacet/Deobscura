@@ -110,7 +110,7 @@ class SsaSimplifierTest {
             kind = FrameValueKind.INT,
             blockId = BasicBlockId(id.value + 1),
             location = SsaPhiLocation.Local(0),
-            inputs = inputs,
+            inputs = inputs.map { SsaPhiInput(it) },
         )
 
     private fun analysisOf(

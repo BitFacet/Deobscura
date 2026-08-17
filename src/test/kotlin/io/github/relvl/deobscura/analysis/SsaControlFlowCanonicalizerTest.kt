@@ -94,7 +94,7 @@ class SsaControlFlowCanonicalizerTest {
                 edge(0, 1, ControlFlowEdgeKind.FALLTHROUGH),
             ),
         )
-        val phi = SsaPhiNode(phiValue, BasicBlockId(1), SsaPhiLocation.Local(0), listOf(incomingValue, incomingValue))
+        val phi = SsaPhiNode(phiValue, BasicBlockId(1), SsaPhiLocation.Local(0), listOf(SsaPhiInput(incomingValue, BasicBlockId(0))))
         val analysis = analysis(
             values = linkedMapOf(
                 condition to SsaValueDefinition.Root(condition, FrameValueKind.INT, ValueOrigin.Parameter(0)),
@@ -118,10 +118,76 @@ class SsaControlFlowCanonicalizerTest {
 
         assertEquals(1, result.collapsedEdgeCount)
         assertEquals(listOf(edge(0, 1, ControlFlowEdgeKind.FALLTHROUGH)), result.controlFlow.edges)
-        assertEquals(listOf(incomingValue), result.analysis.phiNodes.single().inputs)
+        assertEquals(listOf(SsaPhiInput(incomingValue, BasicBlockId(0))), result.analysis.phiNodes.single().inputs)
         assertEquals(
-            listOf(incomingValue),
+            listOf(SsaPhiInput(incomingValue, BasicBlockId(0))),
             (result.analysis.values.getValue(phiValue) as SsaValueDefinition.Phi).inputs,
+        )
+    }
+
+
+    @Test
+    fun `bypassing passthrough block rewrites phi predecessor identity`() {
+        val left = ValueId(0)
+        val right = ValueId(1)
+        val phiValue = ValueId(2)
+        val returnInstruction = returnVoid()
+        val graph = graph(
+            instructions = listOf(returnInstruction, returnInstruction, returnInstruction, returnInstruction, returnInstruction),
+            blocks = listOf(
+                block(0, 0, 1),
+                block(1, 1, 2),
+                block(2, 2, 3),
+                block(3, 3, 4),
+                block(4, 4, 5),
+            ),
+            edges = listOf(
+                edge(0, 2, ControlFlowEdgeKind.JUMP),
+                edge(1, 2, ControlFlowEdgeKind.JUMP),
+                edge(2, 3, ControlFlowEdgeKind.JUMP),
+                edge(4, 3, ControlFlowEdgeKind.JUMP),
+            ),
+        )
+        val phi = SsaPhiNode(
+            phiValue,
+            BasicBlockId(3),
+            SsaPhiLocation.Local(0),
+            listOf(
+                SsaPhiInput(left, BasicBlockId(2)),
+                SsaPhiInput(right, BasicBlockId(4)),
+            ),
+        )
+        val analysis = analysis(
+            values = linkedMapOf(
+                left to SsaValueDefinition.Root(left, FrameValueKind.INT, ValueOrigin.Parameter(0)),
+                right to SsaValueDefinition.Root(right, FrameValueKind.INT, ValueOrigin.Parameter(1)),
+                phiValue to SsaValueDefinition.Phi(
+                    phiValue,
+                    FrameValueKind.INT,
+                    BasicBlockId(3),
+                    SsaPhiLocation.Local(0),
+                    phi.inputs,
+                ),
+            ),
+            operations = listOf(
+                ValueOperation(0, returnInstruction, emptyList()),
+                ValueOperation(1, returnInstruction, emptyList()),
+                ValueOperation(3, returnInstruction, emptyList()),
+                ValueOperation(4, returnInstruction, emptyList()),
+            ),
+            phiNodes = listOf(phi),
+        )
+
+        val result = canonicalizer.canonicalize(graph, SsaControlFlowGraph.from(graph), analysis)
+
+        assertFalse(BasicBlockId(2) in result.controlFlow.blocks)
+        assertEquals(
+            listOf(
+                SsaPhiInput(right, BasicBlockId(4)),
+                SsaPhiInput(left, BasicBlockId(0)),
+                SsaPhiInput(left, BasicBlockId(1)),
+            ),
+            result.analysis.phiNodes.single().inputs,
         )
     }
 

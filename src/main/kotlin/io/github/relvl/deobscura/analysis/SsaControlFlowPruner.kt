@@ -8,10 +8,10 @@ import java.util.*
 /**
  * Applies an analysis-only constant-branch result to SSA.
  *
- * Normal phi inputs are matched to the CFG edges from which they were built. Inputs from eliminated
- * or newly unreachable predecessors are removed. Exception-handler phis are kept conservative: the
- * current SSA still models those from frame origins rather than per-instruction exceptional states,
- * so their inputs cannot be mapped losslessly to individual exception edges yet.
+ * Normal phi inputs are predecessor-addressed, so pruning removes an input exactly when that
+ * predecessor no longer has a surviving normal edge into the phi block. Exception-handler phis
+ * remain conservative: they still model frame origins rather than per-instruction exceptional
+ * states and therefore are not predecessor-addressed yet.
  */
 class SsaControlFlowPruner {
     fun prune(
@@ -33,7 +33,6 @@ class SsaControlFlowPruner {
     ): SsaControlFlowPruningResult {
         val reachableBlocks = branches.reachableBlocks
         val eliminatedEdges = branches.newlyEliminatedEdges
-        val incomingByBlock = controlFlow.edges.groupBy { it.to }
         val blockByInstruction = buildBlockIndex(graph)
 
         var removedPhiInputCount = 0
@@ -43,19 +42,21 @@ class SsaControlFlowPruner {
             .asSequence()
             .filter { it.blockId in reachableBlocks }
             .map { phi ->
-                val incoming = incomingByBlock[phi.blockId].orEmpty()
-                if (incoming.any { it.kind == ControlFlowEdgeKind.EXCEPTION }) {
-                    conservativelyRetainedPhiCount++
-                    return@map phi
-                }
-                if (incoming.size != phi.inputs.size) {
+                if (!phi.isPredecessorAddressed) {
                     conservativelyRetainedPhiCount++
                     return@map phi
                 }
 
-                val inputs = phi.inputs.zip(incoming)
-                    .filter { (_, edge) -> edge !in eliminatedEdges && edge.from in reachableBlocks }
-                    .map { (input, _) -> input }
+                val survivingPredecessors = controlFlow.edges.asSequence()
+                    .filter { edge ->
+                        edge.to == phi.blockId &&
+                            edge.kind != ControlFlowEdgeKind.EXCEPTION &&
+                            edge !in eliminatedEdges &&
+                            edge.from in reachableBlocks
+                    }
+                    .map { it.from }
+                    .toSet()
+                val inputs = phi.inputs.filter { it.predecessor in survivingPredecessors }
                 removedPhiInputCount += phi.inputs.size - inputs.size
                 if (inputs.isEmpty()) {
                     throw SsaInconsistencyException(
@@ -83,7 +84,7 @@ class SsaControlFlowPruner {
         // to keep those conservative phis well-formed until exceptional SSA becomes edge-precise.
         val requiredValues = ArrayDeque<ValueId>()
         reachableOperations.forEach { operation -> operation.inputs.forEach(requiredValues::addLast) }
-        reachablePhiNodes.forEach { phi -> phi.inputs.forEach(requiredValues::addLast) }
+        reachablePhiNodes.forEach { phi -> phi.inputs.forEach { requiredValues.addLast(it.value) } }
         val visitedValues = mutableSetOf<ValueId>()
         var retainedUnreachableOperationCount = 0
         var retainedUnreachablePhiCount = 0
@@ -110,7 +111,7 @@ class SsaControlFlowPruner {
                     keptPhiByOutput[value] = phi
                     if (phi.blockId !in reachableBlocks) retainedUnreachablePhiCount++
                 }
-                phi.inputs.forEach(requiredValues::addLast)
+                phi.inputs.forEach { requiredValues.addLast(it.value) }
             }
         }
 
@@ -126,7 +127,7 @@ class SsaControlFlowPruner {
         }
         keptPhiNodes.forEach { phi ->
             retainedValueIds += phi.output
-            retainedValueIds.addAll(phi.inputs)
+            phi.inputs.forEach { retainedValueIds += it.value }
         }
         analysis.values.values.filterIsInstance<SsaValueDefinition.Root>().forEach { retainedValueIds += it.id }
 
@@ -175,7 +176,6 @@ class SsaControlFlowPruner {
         }
         return result
     }
-
 }
 
 data class SsaControlFlowPruningResult(

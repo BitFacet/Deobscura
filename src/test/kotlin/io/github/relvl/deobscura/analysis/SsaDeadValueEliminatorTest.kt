@@ -99,7 +99,7 @@ class SsaDeadValueEliminatorTest {
             FrameValueKind.INT,
             BasicBlockId(3),
             SsaPhiLocation.Local(0),
-            listOf(left, right),
+            listOf(SsaPhiInput(left), SsaPhiInput(right)),
         )
         val analysis = SsaAnalysis(
             values = linkedMapOf(
@@ -112,7 +112,7 @@ class SsaDeadValueEliminatorTest {
                 constantOperation(1, right, 2),
             ),
             phiNodes = listOf(
-                SsaPhiNode(phi, BasicBlockId(3), SsaPhiLocation.Local(0), listOf(left, right)),
+                SsaPhiNode(phi, BasicBlockId(3), SsaPhiLocation.Local(0), listOf(SsaPhiInput(left), SsaPhiInput(right))),
             ),
             uses = emptyMap(),
             constants = mapOf(left to SsaConstant.IntValue(1), phi to SsaConstant.IntValue(1)),
@@ -138,7 +138,7 @@ class SsaDeadValueEliminatorTest {
             FrameValueKind.INT,
             BasicBlockId(1),
             SsaPhiLocation.Local(0),
-            listOf(seed, phi),
+            listOf(SsaPhiInput(seed), SsaPhiInput(phi)),
         )
         val analysis = SsaAnalysis(
             values = linkedMapOf(
@@ -147,7 +147,7 @@ class SsaDeadValueEliminatorTest {
             ),
             operations = listOf(constantOperation(0, seed, 1)),
             phiNodes = listOf(
-                SsaPhiNode(phi, BasicBlockId(1), SsaPhiLocation.Local(0), listOf(seed, phi)),
+                SsaPhiNode(phi, BasicBlockId(1), SsaPhiLocation.Local(0), listOf(SsaPhiInput(seed), SsaPhiInput(phi))),
             ),
             uses = emptyMap(),
             eliminatedLocalInstructionCount = 0,

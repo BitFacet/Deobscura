@@ -6,6 +6,7 @@
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/workspace" />
     <method v="2">
       <option name="Make" enabled="true" />
+      <option name="RunConfigurationTask" enabled="true" run_configuration_name="Tests" run_configuration_type="GradleRunConfiguration" />
     </method>
   </configuration>
 </component>

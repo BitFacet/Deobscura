@@ -78,6 +78,87 @@ class ValueFlowAnalyzerTest {
         assertTrue(analysis.operations.none { it.instruction is RawStackInstruction })
     }
 
+
+    @Test
+    fun `preserves precise value types into SSA`() {
+        val rawClass = importFixture()
+        val method = rawClass.methods.single { it.name == "typed" }
+        val code = requireNotNull(method.code)
+        val graph = graphBuilder.build(code)
+        val frames = frameAnalyzer.analyze(rawClass.internalName, method, graph)
+        val valueFlow = analyzer.analyze(graph, frames)
+        val ssa = SsaAnalyzer().analyze(graph, valueFlow)
+
+        val parameters = ssa.values.values.filterIsInstance<SsaValueDefinition.Root>()
+            .filter { it.origin is ValueOrigin.Parameter }
+            .associateBy { (it.origin as ValueOrigin.Parameter).index }
+
+        assertEquals(JvmValueType.Computational(JvmComputationalType.BOOLEAN), parameters.getValue(0).type)
+        assertEquals(JvmValueType.Computational(JvmComputationalType.BYTE), parameters.getValue(1).type)
+        assertEquals(
+            JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType("java/lang/String"))),
+            parameters.getValue(2).type,
+        )
+
+        val returnOperation = ssa.operations.single { it.instruction is RawReturnInstruction }
+        assertEquals(
+            JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType("java/lang/String"))),
+            ssa.typeOf(returnOperation.inputs.single()),
+        )
+    }
+
+
+    @Test
+    fun `keeps intrinsic instruction type when a frame merge widens it`() {
+        val rawClass = importFixture()
+        val method = rawClass.methods.single { it.name == "byteOrZero" }
+        val code = requireNotNull(method.code)
+        val graph = graphBuilder.build(code)
+        val frames = frameAnalyzer.analyze(rawClass.internalName, method, graph)
+
+        val analysis = analyzer.analyze(graph, frames)
+        val getIndex = code.instructions.indexOfFirst {
+            it is RawInvokeInstruction && it.owner == "java/nio/ByteBuffer" && it.name == "get" && it.descriptor == "()B"
+        }
+        val getValue = analysis.values.values.filterIsInstance<ValueDefinition.Instruction>()
+            .single { it.instructionIndex == getIndex }
+
+        assertEquals(JvmValueType.Computational(JvmComputationalType.BYTE), getValue.type)
+        assertTrue(
+            analysis.values.values.filterIsInstance<ValueDefinition.Merge>().any {
+                getValue.id in it.inputs && it.type == JvmValueType.Computational(JvmComputationalType.INT)
+            },
+        )
+    }
+
+    @Test
+    fun `preserves intrinsic reference constant types`() {
+        val rawClass = importFixture()
+        val method = rawClass.methods.single { it.name == "referenceConstants" }
+        val code = requireNotNull(method.code)
+        val graph = graphBuilder.build(code)
+        val frames = frameAnalyzer.analyze(rawClass.internalName, method, graph)
+
+        val analysis = analyzer.analyze(graph, frames)
+        val instructionValues = analysis.values.values.filterIsInstance<ValueDefinition.Instruction>()
+            .associateBy { it.instructionIndex }
+        val stringIndex = code.instructions.indexOfFirst {
+            it is RawConstantInstruction && it.opcode.mnemonic == "ldc" && it.value.javaClass == String::class.java
+        }
+        val nullIndex = code.instructions.indexOfFirst {
+            it is RawConstantInstruction && it.opcode.mnemonic == "aconst_null"
+        }
+
+        assertEquals(
+            JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType("java/lang/String"))),
+            instructionValues.getValue(stringIndex).type,
+        )
+        assertEquals(
+            JvmValueType.Reference(JvmReferenceType.Null),
+            instructionValues.getValue(nullIndex).type,
+        )
+    }
+
     private fun importFixture(): RawClass {
         val type = ValueFlowFixture::class.java
         val internalName = type.name.replace('.', '/')
@@ -97,4 +178,10 @@ private class ValueFlowFixture {
     fun choose(flag: Boolean): Int = if (flag) 10 else 20
 
     fun construct(): Any = Any()
+
+    fun typed(flag: Boolean, value: Byte, text: String): String? = if (flag && value >= 0) text else null
+
+    fun byteOrZero(buffer: java.nio.ByteBuffer, flag: Boolean): Int = if (flag) buffer.get().toInt() else 0
+
+    fun referenceConstants(flag: Boolean): String? = if (flag) "literal" else null
 }

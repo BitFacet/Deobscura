@@ -43,8 +43,8 @@ class SsaDeadValueEliminator(
                 throw SsaInconsistencyException("SSA contains multiple phi nodes defining value ${phi.output.value}.")
             }
             phi.inputs.forEach { input ->
-                if (input !in analysis.values) {
-                    throw SsaInconsistencyException("SSA phi use refers to undefined value ${input.value}.")
+                if (input.value !in analysis.values) {
+                    throw SsaInconsistencyException("SSA phi use refers to undefined value ${input.value.value}.")
                 }
             }
         }
@@ -76,7 +76,7 @@ class SsaDeadValueEliminator(
                 is SsaValueDefinition.Phi -> {
                     val phi = phiByOutput[id]
                         ?: throw SsaInconsistencyException("SSA phi definition ${id.value} has no phi node.")
-                    phi.inputs.forEach(::mark)
+                    phi.inputs.forEach { mark(it.value) }
                 }
 
                 is SsaValueDefinition.Instruction -> {

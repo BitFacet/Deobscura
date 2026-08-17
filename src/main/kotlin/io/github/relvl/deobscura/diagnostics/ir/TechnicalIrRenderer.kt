@@ -2,6 +2,7 @@ package io.github.relvl.deobscura.diagnostics.ir
 
 import io.github.relvl.deobscura.analysis.FrameState
 import io.github.relvl.deobscura.analysis.FrameValue
+import io.github.relvl.deobscura.analysis.JvmValueType
 import io.github.relvl.deobscura.analysis.MethodAnalysis
 import io.github.relvl.deobscura.analysis.MethodAnalysisException
 import io.github.relvl.deobscura.analysis.SsaPhiLocation
@@ -79,12 +80,14 @@ class TechnicalIrRenderer {
             appendLine("    B${block.value}:")
             phiByBlock[block].orEmpty().forEach { phi ->
                 appendLine(
-                    "      v${phi.output.value} = phi ${formatPhiLocation(phi.location)} " +
-                        phi.inputs.joinToString(prefix = "[", postfix = "]") { "v${it.value}" },
+                    "      v${phi.output.value}:${formatValueType(analysis.ssa.typeOf(phi.output))} = phi ${formatPhiLocation(phi.location)} " +
+                        phi.inputs.joinToString(prefix = "[", postfix = "]") { input ->
+                            input.predecessor?.let { "B${it.value}=v${input.value.value}" } ?: "origin=v${input.value.value}"
+                        },
                 )
             }
             operationsByBlock[block].orEmpty().sortedBy { it.instructionIndex }.forEach { operation ->
-                val output = operation.output?.let { "v${it.value} = " } ?: ""
+                val output = operation.output?.let { "v${it.value}:${formatValueType(analysis.ssa.typeOf(it))} = " } ?: ""
                 val inputs = operation.inputs.joinToString(prefix = "(", postfix = ")") { "v${it.value}" }
                 appendLine("      @${operation.instructionIndex} $output${formatInstruction(operation.instruction)} $inputs")
             }
@@ -95,7 +98,7 @@ class TechnicalIrRenderer {
         analysis.ssa.values.values
             .filterIsInstance<SsaValueDefinition.Root>()
             .sortedBy { it.id.value }
-            .forEach { appendLine("    v${it.id.value}: ${it.kind} ${it.origin}") }
+            .forEach { appendLine("    v${it.id.value}: ${formatValueType(it.type)} ${it.origin}") }
         appendLine()
 
         if (analysis.ssa.constants.isNotEmpty()) {
@@ -128,9 +131,11 @@ class TechnicalIrRenderer {
         append(frame.stack.joinToString(prefix = "[", postfix = "]", transform = ::formatFrameValue))
     }
 
-    private fun formatFrameValue(value: FrameValue): String = when (val type = value.referenceType) {
-        null -> value.kind.name
-        else -> formatReferenceType(type)
+    private fun formatFrameValue(value: FrameValue): String = formatValueType(value.type)
+
+    private fun formatValueType(type: JvmValueType): String = when (type) {
+        is JvmValueType.Reference -> formatReferenceType(type.referenceType)
+        is JvmValueType.Computational -> type.type.name.lowercase()
     }
 
     private fun formatReferenceType(type: JvmReferenceType): String = when (type) {

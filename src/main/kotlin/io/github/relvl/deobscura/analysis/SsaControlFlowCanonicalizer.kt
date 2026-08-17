@@ -136,20 +136,12 @@ class SsaControlFlowCanonicalizer {
         target: BasicBlockId,
         outgoing: List<ControlFlowEdge>,
     ): FlowAndAnalysis? {
-        val incomingToTarget = controlFlow.edges.filter { it.to == target }
         val targetPhis = analysis.phiNodes.filter { it.blockId == target }
-        if (targetPhis.isNotEmpty()) {
-            if (incomingToTarget.any { it.kind == ControlFlowEdgeKind.EXCEPTION }) return null
-            if (targetPhis.any { it.inputs.size != incomingToTarget.size }) return null
+        if (targetPhis.any { !it.isPredecessorAddressed }) return null
 
-            val collapsedIndexes = incomingToTarget.indices.filter { incomingToTarget[it] in outgoing }
-            if (collapsedIndexes.isEmpty()) return null
-            for (phi in targetPhis) {
-                val values = collapsedIndexes.map { phi.inputs[it] }.distinct()
-                if (values.size != 1) return null
-            }
-        }
-
+        // Phi inputs are predecessor-addressed. Collapsing several parallel CFG edges from the
+        // same source to the same target therefore does not change any phi: they already share one
+        // incoming SSA state identified by the source basic block.
         val canonicalEdge = ControlFlowEdge(
             from = source,
             to = target,
@@ -166,27 +158,7 @@ class SsaControlFlowCanonicalizer {
             }
         }
 
-        val rewrittenPhis = if (targetPhis.isEmpty() || outgoing.size == 1) {
-            analysis.phiNodes
-        } else {
-            val firstIncomingIndex = incomingToTarget.indexOfFirst { it in outgoing }
-            analysis.phiNodes.map { phi ->
-                if (phi.blockId != target) return@map phi
-                val inputs = buildList {
-                    phi.inputs.forEachIndexed { index, input ->
-                        when {
-                            index == firstIncomingIndex -> add(input)
-                            incomingToTarget[index] in outgoing -> Unit
-                            else -> add(input)
-                        }
-                    }
-                }
-                phi.copy(inputs = inputs)
-            }
-        }
-
-        val rewrittenAnalysis = rewritePhiDefinitions(analysis, rewrittenPhis)
-        return FlowAndAnalysis(controlFlow.copy(edges = newEdges), rewrittenAnalysis)
+        return FlowAndAnalysis(controlFlow.copy(edges = newEdges), analysis)
     }
 
     private fun bypassOnePassthroughBlock(
@@ -219,16 +191,38 @@ class SsaControlFlowCanonicalizer {
             if (exit.kind == ControlFlowEdgeKind.EXCEPTION || exit.to == blockId) continue
 
             val target = exit.to
-            val targetIncoming = controlFlow.edges.filter { it.to == target }
             val targetPhis = analysis.phiNodes.filter { it.blockId == target }
-            if (targetPhis.isNotEmpty()) {
-                if (targetIncoming.any { it.kind == ControlFlowEdgeKind.EXCEPTION }) continue
-                if (targetPhis.any { it.inputs.size != targetIncoming.size }) continue
-            }
+            if (targetPhis.any { !it.isPredecessorAddressed }) continue
 
             val redirected = incoming.map { edge -> redirectEdge(edge, exit, target) }
             val unaffected = controlFlow.edges.filter { it.from != blockId && it.to != blockId }
             if (hasDuplicateEdges(unaffected + redirected)) continue
+
+            val redirectedPredecessors = redirected.map { it.from }.distinct()
+            val rewrittenTargetPhis = mutableMapOf<ValueId, SsaPhiNode>()
+            var canRewritePhis = true
+            for (phi in targetPhis) {
+                val oldInput = phi.inputs.singleOrNull { it.predecessor == blockId }
+                if (oldInput == null) {
+                    canRewritePhis = false
+                    break
+                }
+                val kept = phi.inputs.filter { it.predecessor != blockId }.toMutableList()
+                for (predecessor in redirectedPredecessors) {
+                    val existing = kept.singleOrNull { it.predecessor == predecessor }
+                    if (existing != null) {
+                        if (existing.value != oldInput.value) {
+                            canRewritePhis = false
+                            break
+                        }
+                    } else {
+                        kept += SsaPhiInput(value = oldInput.value, predecessor = predecessor)
+                    }
+                }
+                if (!canRewritePhis) break
+                rewrittenTargetPhis[phi.output] = phi.copy(inputs = kept)
+            }
+            if (!canRewritePhis) continue
 
             val exitGlobalIndex = controlFlow.edges.indexOf(exit)
             val newEdges = buildList {
@@ -244,18 +238,7 @@ class SsaControlFlowCanonicalizer {
             val rewrittenPhis = if (targetPhis.isEmpty()) {
                 analysis.phiNodes
             } else {
-                val exitIncomingIndex = targetIncoming.indexOf(exit)
-                if (exitIncomingIndex < 0) continue
-                analysis.phiNodes.map { phi ->
-                    if (phi.blockId != target) return@map phi
-                    val replacement = phi.inputs[exitIncomingIndex]
-                    val inputs = buildList {
-                        phi.inputs.forEachIndexed { index, input ->
-                            if (index == exitIncomingIndex) repeat(redirected.size) { add(replacement) } else add(input)
-                        }
-                    }
-                    phi.copy(inputs = inputs)
-                }
+                analysis.phiNodes.map { rewrittenTargetPhis[it.output] ?: it }
             }
 
             val rewrittenAnalysis = rewritePhiDefinitions(analysis, rewrittenPhis)

@@ -31,7 +31,7 @@ class SsaSimplifier {
                 if (phi.output in aliases) return@forEach
                 val distinctInputs = phi.inputs
                     .asSequence()
-                    .map(::resolve)
+                    .map { resolve(it.value) }
                     .filter { it != phi.output }
                     .distinct()
                     .toList()
@@ -57,11 +57,11 @@ class SsaSimplifier {
         val phiNodes = analysis.phiNodes
             .asSequence()
             .filterNot { it.output in aliases }
-            .map { phi -> phi.copy(inputs = phi.inputs.map(::resolve)) }
+            .map { phi -> phi.copy(inputs = phi.inputs.map { it.copy(value = resolve(it.value)) }) }
             .toList()
 
         phiNodes.firstOrNull { phi ->
-            phi.inputs.asSequence().filter { it != phi.output }.distinct().count() <= 1
+            phi.inputs.asSequence().map { it.value }.filter { it != phi.output }.distinct().count() <= 1
         }?.let { phi ->
             throw SsaInconsistencyException(
                 "SSA simplification left trivial phi ${phi.output.value} in block ${phi.blockId.value}.",
@@ -74,7 +74,7 @@ class SsaSimplifier {
             values[id] = when (definition) {
                 is SsaValueDefinition.Root -> definition
                 is SsaValueDefinition.Instruction -> definition
-                is SsaValueDefinition.Phi -> definition.copy(inputs = definition.inputs.map(::resolve))
+                is SsaValueDefinition.Phi -> definition.copy(inputs = definition.inputs.map { it.copy(value = resolve(it.value)) })
             }
         }
 

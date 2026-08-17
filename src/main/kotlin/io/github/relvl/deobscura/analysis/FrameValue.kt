@@ -3,7 +3,11 @@ package io.github.relvl.deobscura.analysis
 import io.github.relvl.deobscura.raw.JvmComputationalType
 import io.github.relvl.deobscura.raw.JvmReferenceType
 import io.github.relvl.deobscura.raw.JvmType
+import io.github.relvl.deobscura.raw.RawConstantInstruction
 import io.github.relvl.deobscura.raw.toReferenceType
+import java.lang.constant.ClassDesc
+import java.lang.constant.MethodHandleDesc
+import java.lang.constant.MethodTypeDesc
 
 enum class FrameValueKind(val category: Int) {
     INT(1),
@@ -12,6 +16,54 @@ enum class FrameValueKind(val category: Int) {
     DOUBLE(2),
     REFERENCE(1),
     RETURN_ADDRESS(1),
+}
+
+sealed interface JvmValueType {
+    val kind: FrameValueKind
+
+    data class Computational(val type: JvmComputationalType) : JvmValueType {
+        init {
+            require(type != JvmComputationalType.REFERENCE && type != JvmComputationalType.VOID) {
+                "$type is not a computational value type."
+            }
+        }
+
+        override val kind: FrameValueKind = type.toFrameValueKind()
+    }
+
+    data class Reference(val referenceType: JvmReferenceType) : JvmValueType {
+        override val kind: FrameValueKind = FrameValueKind.REFERENCE
+    }
+
+    companion object {
+        fun of(kind: FrameValueKind): JvmValueType = when (kind) {
+            FrameValueKind.INT -> Computational(JvmComputationalType.INT)
+            FrameValueKind.LONG -> Computational(JvmComputationalType.LONG)
+            FrameValueKind.FLOAT -> Computational(JvmComputationalType.FLOAT)
+            FrameValueKind.DOUBLE -> Computational(JvmComputationalType.DOUBLE)
+            FrameValueKind.REFERENCE -> Reference(JvmReferenceType.Unknown)
+            FrameValueKind.RETURN_ADDRESS -> Computational(JvmComputationalType.RETURN_ADDRESS)
+        }
+
+        fun of(type: JvmComputationalType): JvmValueType = when (type) {
+            JvmComputationalType.REFERENCE -> Reference(JvmReferenceType.Unknown)
+            JvmComputationalType.VOID -> error("Void does not have a value type.")
+            else -> Computational(type)
+        }
+
+        fun of(type: JvmType): JvmValueType = when (type) {
+            JvmType.BooleanType -> Computational(JvmComputationalType.BOOLEAN)
+            JvmType.ByteType -> Computational(JvmComputationalType.BYTE)
+            JvmType.CharType -> Computational(JvmComputationalType.CHAR)
+            JvmType.ShortType -> Computational(JvmComputationalType.SHORT)
+            JvmType.IntType -> Computational(JvmComputationalType.INT)
+            JvmType.LongType -> Computational(JvmComputationalType.LONG)
+            JvmType.FloatType -> Computational(JvmComputationalType.FLOAT)
+            JvmType.DoubleType -> Computational(JvmComputationalType.DOUBLE)
+            is JvmType.ObjectType, is JvmType.ArrayType -> Reference(type.toReferenceType())
+            JvmType.VoidType -> error("Void does not have a value type.")
+        }
+    }
 }
 
 sealed interface ValueOrigin {
@@ -23,28 +75,30 @@ sealed interface ValueOrigin {
 }
 
 data class FrameValue(
-    val kind: FrameValueKind,
+    val type: JvmValueType,
     val origins: Set<ValueOrigin>,
-    val referenceType: JvmReferenceType? = if (kind == FrameValueKind.REFERENCE) JvmReferenceType.Unknown else null,
 ) {
-    init {
-        require((kind == FrameValueKind.REFERENCE) == (referenceType != null)) {
-            "Reference type must be present exactly for REFERENCE frame values."
-        }
-    }
+    val kind: FrameValueKind
+        get() = type.kind
+
+    val referenceType: JvmReferenceType?
+        get() = (type as? JvmValueType.Reference)?.referenceType
 
     companion object {
-        fun of(kind: FrameValueKind, origin: ValueOrigin): FrameValue = FrameValue(kind, setOf(origin))
+        fun of(kind: FrameValueKind, origin: ValueOrigin): FrameValue =
+            FrameValue(JvmValueType.of(kind), setOf(origin))
+
+        fun of(type: JvmComputationalType, origin: ValueOrigin): FrameValue =
+            FrameValue(JvmValueType.of(type), setOf(origin))
+
+        fun of(type: JvmValueType, origin: ValueOrigin): FrameValue =
+            FrameValue(type, setOf(origin))
 
         fun reference(type: JvmReferenceType, origin: ValueOrigin): FrameValue =
-            FrameValue(FrameValueKind.REFERENCE, setOf(origin), type)
+            FrameValue(JvmValueType.Reference(type), setOf(origin))
 
         fun of(type: JvmType, origin: ValueOrigin): FrameValue =
-            if (type is JvmType.ObjectType || type is JvmType.ArrayType) {
-                reference(type.toReferenceType(), origin)
-            } else {
-                FrameValue(type.toFrameValueKind(), setOf(origin))
-            }
+            FrameValue(JvmValueType.of(type), setOf(origin))
     }
 }
 
@@ -71,17 +125,20 @@ internal fun JvmComputationalType.toFrameValueKind(): FrameValueKind = when (thi
     JvmComputationalType.VOID -> error("Void does not have a frame value kind.")
 }
 
-internal fun JvmType.toFrameValueKind(): FrameValueKind = when (this) {
-    JvmType.BooleanType,
-    JvmType.ByteType,
-    JvmType.CharType,
-    JvmType.ShortType,
-    JvmType.IntType,
-        -> FrameValueKind.INT
+internal fun JvmType.toFrameValueKind(): FrameValueKind = JvmValueType.of(this).kind
 
-    JvmType.LongType -> FrameValueKind.LONG
-    JvmType.FloatType -> FrameValueKind.FLOAT
-    JvmType.DoubleType -> FrameValueKind.DOUBLE
-    is JvmType.ObjectType, is JvmType.ArrayType -> FrameValueKind.REFERENCE
-    JvmType.VoidType -> error("Void does not have a frame value kind.")
+internal fun RawConstantInstruction.toValueType(): JvmValueType {
+    if (type != JvmComputationalType.REFERENCE) return JvmValueType.of(type)
+    val referenceType = when {
+        opcode.mnemonic == "aconst_null" -> JvmReferenceType.Null
+        value.javaClass == String::class.java -> exactObjectType("java/lang/String")
+        value is ClassDesc -> exactObjectType("java/lang/Class")
+        value is MethodTypeDesc -> exactObjectType("java/lang/invoke/MethodType")
+        value is MethodHandleDesc -> exactObjectType("java/lang/invoke/MethodHandle")
+        else -> JvmReferenceType.Unknown
+    }
+    return JvmValueType.Reference(referenceType)
 }
+
+private fun exactObjectType(internalName: String): JvmReferenceType =
+    JvmReferenceType.Exact(JvmType.ObjectType(internalName))

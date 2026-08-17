@@ -20,26 +20,34 @@ data class ValueFlowAnalysis(
 
 sealed interface ValueDefinition {
     val id: ValueId
-    val kind: FrameValueKind
+    val type: JvmValueType
+    val kind: FrameValueKind get() = type.kind
 
     data class Root(
         override val id: ValueId,
-        override val kind: FrameValueKind,
+        override val type: JvmValueType,
         val origin: ValueOrigin,
-    ) : ValueDefinition
+    ) : ValueDefinition {
+        constructor(id: ValueId, kind: FrameValueKind, origin: ValueOrigin) : this(id, JvmValueType.of(kind), origin)
+    }
 
     data class Instruction(
         override val id: ValueId,
-        override val kind: FrameValueKind,
+        override val type: JvmValueType,
         val instructionIndex: Int,
-    ) : ValueDefinition
+    ) : ValueDefinition {
+        constructor(id: ValueId, kind: FrameValueKind, instructionIndex: Int) : this(id, JvmValueType.of(kind), instructionIndex)
+    }
 
     data class Merge(
         override val id: ValueId,
-        override val kind: FrameValueKind,
+        override val type: JvmValueType,
         val site: ValueMergeSite,
         val inputs: List<ValueId>,
-    ) : ValueDefinition
+    ) : ValueDefinition {
+        constructor(id: ValueId, kind: FrameValueKind, site: ValueMergeSite, inputs: List<ValueId>) :
+            this(id, JvmValueType.of(kind), site, inputs)
+    }
 }
 
 sealed interface ValueMergeSite {

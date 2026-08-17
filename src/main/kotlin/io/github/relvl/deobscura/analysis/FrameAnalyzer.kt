@@ -5,9 +5,6 @@ import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.raw.*
 import io.github.relvl.deobscura.resolution.ClassHierarchy
-import java.lang.constant.ClassDesc
-import java.lang.constant.MethodHandleDesc
-import java.lang.constant.MethodTypeDesc
 import java.util.*
 
 class FrameAnalyzer(
@@ -205,11 +202,7 @@ class FrameAnalyzer(
     private fun execute(instruction: RawInstruction, index: Int, frame: MutableFrame) {
         when (instruction) {
             is RawConstantInstruction -> frame.push(
-                if (instruction.type == JvmComputationalType.REFERENCE) {
-                    referenceValue(constantReferenceType(instruction), index)
-                } else {
-                    value(instruction.type.toFrameValueKind(), index)
-                },
+                FrameValue.of(instruction.toValueType(), ValueOrigin.Instruction(index)),
             )
             is RawLocalInstruction -> executeLocal(instruction, frame)
             is RawIncrementInstruction -> {
@@ -221,7 +214,7 @@ class FrameAnalyzer(
             is RawOperatorInstruction -> executeOperator(instruction, index, frame)
             is RawConversionInstruction -> {
                 frame.pop(instruction.fromType.toFrameValueKind())
-                frame.push(value(instruction.toType.toFrameValueKind(), index))
+                frame.push(value(instruction.toType, index))
             }
 
             is RawStackInstruction -> executeStack(instruction.opcode.mnemonic, frame)
@@ -303,7 +296,7 @@ class FrameAnalyzer(
                 if (componentKind == FrameValueKind.REFERENCE) {
                     frame.push(referenceValue(arrayComponentType(array.referenceType), index))
                 } else {
-                    frame.push(value(componentKind, index))
+                    frame.push(value(instruction.componentType, index))
                 }
             }
 
@@ -326,7 +319,7 @@ class FrameAnalyzer(
 
             mnemonic.endsWith("neg") -> {
                 frame.pop(kind)
-                frame.push(value(kind, index))
+                frame.push(value(instruction.type, index))
             }
 
             mnemonic in COMPARISONS -> {
@@ -338,13 +331,13 @@ class FrameAnalyzer(
             mnemonic in SHIFT_OPERATORS -> {
                 frame.pop(FrameValueKind.INT)
                 frame.pop(kind)
-                frame.push(value(kind, index))
+                frame.push(value(instruction.type, index))
             }
 
             else -> {
                 frame.pop(kind)
                 frame.pop(kind)
-                frame.push(value(kind, index))
+                frame.push(value(instruction.type, index))
             }
         }
     }
@@ -426,23 +419,14 @@ class FrameAnalyzer(
     private fun value(type: JvmType, instructionIndex: Int): FrameValue =
         FrameValue.of(type, ValueOrigin.Instruction(instructionIndex))
 
+    private fun value(type: JvmComputationalType, instructionIndex: Int): FrameValue =
+        FrameValue.of(type, ValueOrigin.Instruction(instructionIndex))
+
     private fun value(kind: FrameValueKind, instructionIndex: Int): FrameValue =
         FrameValue.of(kind, ValueOrigin.Instruction(instructionIndex))
 
     private fun referenceValue(type: JvmReferenceType, instructionIndex: Int): FrameValue =
         FrameValue.reference(type, ValueOrigin.Instruction(instructionIndex))
-
-    private fun constantReferenceType(instruction: RawConstantInstruction): JvmReferenceType = when {
-        instruction.opcode.mnemonic == "aconst_null" -> JvmReferenceType.Null
-        instruction.value.javaClass == String::class.java -> exactObject("java/lang/String")
-        instruction.value is ClassDesc -> exactObject("java/lang/Class")
-        instruction.value is MethodTypeDesc -> exactObject("java/lang/invoke/MethodType")
-        instruction.value is MethodHandleDesc -> exactObject("java/lang/invoke/MethodHandle")
-        else -> JvmReferenceType.Unknown
-    }
-
-    private fun exactObject(internalName: String): JvmReferenceType =
-        JvmReferenceType.Exact(JvmType.ObjectType(internalName))
 
     private fun arrayComponentType(type: JvmReferenceType?): JvmReferenceType {
         val array = (type as? JvmReferenceType.Exact)?.type as? JvmType.ArrayType
@@ -531,7 +515,22 @@ class FrameAnalyzer(
             if (referenceType == JvmReferenceType.Unknown) counters.impreciseReferenceMerges++
         }
         counters.valueMerges++
-        return FrameValue(current.kind, origins, referenceType)
+        return FrameValue(mergeValueType(current.type, incoming.type, referenceType), origins)
+    }
+
+    private fun mergeValueType(
+        left: JvmValueType,
+        right: JvmValueType,
+        mergedReferenceType: JvmReferenceType?,
+    ): JvmValueType {
+        if (left == right) return left
+        if (left.kind != right.kind) error("Cannot merge value types with different frame kinds: $left vs $right")
+        if (left.kind == FrameValueKind.REFERENCE) {
+            return JvmValueType.Reference(requireNotNull(mergedReferenceType))
+        }
+        // The verifier collapses boolean/byte/char/short/int to the INT computational category.
+        // Preserve a narrow primitive only while all incoming values agree on it.
+        return JvmValueType.of(left.kind)
     }
 
     private fun conservativeCommonSupertype(

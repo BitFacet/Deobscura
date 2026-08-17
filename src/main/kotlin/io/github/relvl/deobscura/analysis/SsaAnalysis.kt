@@ -10,6 +10,8 @@ data class SsaAnalysis(
     val constants: Map<ValueId, SsaConstant> = emptyMap(),
     val eliminatedLocalInstructionCount: Int,
 ) {
+    fun typeOf(id: ValueId): JvmValueType = requireNotNull(values[id]) { "Unknown SSA value v${id.value}." }.type
+
     val localPhiCount: Int
         get() = phiNodes.count { it.location is SsaPhiLocation.Local }
 
@@ -23,32 +25,46 @@ data class SsaAnalysis(
         get() = phiNodes.asSequence().map { it.blockId }.distinct().count()
 
     val trivialPhiCount: Int
-        get() = phiNodes.count { it.inputs.distinct().size <= 1 }
+        get() = phiNodes.count { phi ->
+            phi.inputs.asSequence()
+                .map { it.value }
+                .filter { it != phi.output }
+                .distinct()
+                .count() <= 1
+        }
 }
 
 sealed interface SsaValueDefinition {
     val id: ValueId
-    val kind: FrameValueKind
+    val type: JvmValueType
+    val kind: FrameValueKind get() = type.kind
 
     data class Root(
         override val id: ValueId,
-        override val kind: FrameValueKind,
+        override val type: JvmValueType,
         val origin: ValueOrigin,
-    ) : SsaValueDefinition
+    ) : SsaValueDefinition {
+        constructor(id: ValueId, kind: FrameValueKind, origin: ValueOrigin) : this(id, JvmValueType.of(kind), origin)
+    }
 
     data class Instruction(
         override val id: ValueId,
-        override val kind: FrameValueKind,
+        override val type: JvmValueType,
         val instructionIndex: Int,
-    ) : SsaValueDefinition
+    ) : SsaValueDefinition {
+        constructor(id: ValueId, kind: FrameValueKind, instructionIndex: Int) : this(id, JvmValueType.of(kind), instructionIndex)
+    }
 
     data class Phi(
         override val id: ValueId,
-        override val kind: FrameValueKind,
+        override val type: JvmValueType,
         val blockId: BasicBlockId,
         val location: SsaPhiLocation,
-        val inputs: List<ValueId>,
-    ) : SsaValueDefinition
+        val inputs: List<SsaPhiInput>,
+    ) : SsaValueDefinition {
+        constructor(id: ValueId, kind: FrameValueKind, blockId: BasicBlockId, location: SsaPhiLocation, inputs: List<SsaPhiInput>) :
+            this(id, JvmValueType.of(kind), blockId, location, inputs)
+    }
 }
 
 sealed interface SsaPhiLocation {
@@ -56,12 +72,21 @@ sealed interface SsaPhiLocation {
     data class Stack(val index: Int) : SsaPhiLocation
 }
 
+data class SsaPhiInput(
+    val value: ValueId,
+    /** Null for conservative exceptional/frame-origin merges that are not predecessor-addressed yet. */
+    val predecessor: BasicBlockId? = null,
+)
+
 data class SsaPhiNode(
     val output: ValueId,
     val blockId: BasicBlockId,
     val location: SsaPhiLocation,
-    val inputs: List<ValueId>,
-)
+    val inputs: List<SsaPhiInput>,
+) {
+    val isPredecessorAddressed: Boolean
+        get() = inputs.all { it.predecessor != null }
+}
 
 sealed interface SsaValueUse {
     data class Operation(
@@ -71,6 +96,7 @@ sealed interface SsaValueUse {
 
     data class Phi(
         val output: ValueId,
+        val predecessor: BasicBlockId?,
         val inputIndex: Int,
     ) : SsaValueUse
 }

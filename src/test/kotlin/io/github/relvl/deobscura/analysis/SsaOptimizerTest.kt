@@ -55,7 +55,7 @@ class SsaOptimizerTest {
             FrameValueKind.INT,
             BasicBlockId(3),
             SsaPhiLocation.Local(0),
-            listOf(left, right),
+            listOf(SsaPhiInput(left, BasicBlockId(1)), SsaPhiInput(right, BasicBlockId(2))),
         )
         val analysis = SsaAnalysis(
             values = linkedMapOf(
@@ -71,7 +71,7 @@ class SsaOptimizerTest {
                 constantOperation(4, right, 1),
                 ValueOperation(6, secondBranch, listOf(phi)),
             ),
-            phiNodes = listOf(SsaPhiNode(phi, BasicBlockId(3), SsaPhiLocation.Local(0), listOf(left, right))),
+            phiNodes = listOf(SsaPhiNode(phi, BasicBlockId(3), SsaPhiLocation.Local(0), listOf(SsaPhiInput(left, BasicBlockId(1)), SsaPhiInput(right, BasicBlockId(2))))),
             uses = emptyMap(),
             eliminatedLocalInstructionCount = 0,
         )

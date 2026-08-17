@@ -182,7 +182,7 @@ object TechnicalIrService {
     private fun formatElapsed(nanos: Long): String =
         String.format(Locale.ROOT, "%.1f s", nanos / 1_000_000_000.0)
 
-    const val FORMAT_VERSION = 1
+    const val FORMAT_VERSION = 2
     const val MANIFEST_FILE = "_manifest.txt"
     private const val PROGRESS_INTERVAL_NANOS = 5_000_000_000L
 }

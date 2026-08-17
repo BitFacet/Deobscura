@@ -120,7 +120,66 @@ class SsaAnalyzerTest {
         val analysis = analyzer.analyze(graph, valueFlow)
 
         assertEquals(1, analysis.phiNodes.size)
-        assertEquals(listOf(left, right), analysis.phiNodes.single().inputs)
+        assertEquals(listOf(left, right), analysis.phiNodes.single().inputs.map { it.value })
+    }
+
+    @Test
+    fun `keeps predecessor identity and self input on non-trivial loop phi`() {
+        val b0 = BasicBlockId(0)
+        val b2 = BasicBlockId(2)
+        val b3 = BasicBlockId(3)
+        val join = BasicBlockId(4)
+        val graph = ControlFlowGraph(
+            code = RawCode(0, 1, 0, emptyList(), emptyList(), emptyList(), emptyList()),
+            blocks = listOf(
+                BasicBlock(b0, 0, 0, emptyList(), listOf(join)),
+                BasicBlock(b2, 0, 0, emptyList(), listOf(join)),
+                BasicBlock(b3, 0, 0, emptyList(), listOf(join)),
+                BasicBlock(join, 0, 0, listOf(b0, b2, b3), emptyList()),
+            ),
+            edges = listOf(
+                ControlFlowEdge(b0, join, ControlFlowEdgeKind.JUMP),
+                ControlFlowEdge(b2, join, ControlFlowEdgeKind.JUMP),
+                ControlFlowEdge(b3, join, ControlFlowEdgeKind.JUMP),
+            ),
+            entryBlock = b0,
+        )
+        val seed = ValueId(0)
+        val updated = ValueId(1)
+        val phi = ValueId(2)
+        val valueFlow = ValueFlowAnalysis(
+            values = linkedMapOf(
+                seed to ValueDefinition.Root(seed, FrameValueKind.INT, ValueOrigin.Parameter(0)),
+                updated to ValueDefinition.Root(updated, FrameValueKind.INT, ValueOrigin.Parameter(1)),
+                phi to ValueDefinition.Merge(
+                    phi,
+                    FrameValueKind.INT,
+                    ValueMergeSite.Local(join, 0),
+                    listOf(seed, updated, phi),
+                ),
+            ),
+            operations = emptyList(),
+            blockEntryLocals = emptyMap(),
+            blockEntryStacks = emptyMap(),
+            blockExitLocals = mapOf(b0 to listOf(seed), b2 to listOf(updated), b3 to listOf(phi)),
+            blockExitStacks = emptyMap(),
+            mergeValueCount = 1,
+            eliminatedStackInstructionCount = 0,
+            unanalyzedBlockCount = 0,
+        )
+
+        val analysis = analyzer.analyze(graph, valueFlow)
+        val node = analysis.phiNodes.single()
+
+        assertEquals(
+            listOf(
+                SsaPhiInput(seed, b0),
+                SsaPhiInput(updated, b2),
+                SsaPhiInput(phi, b3),
+            ),
+            node.inputs,
+        )
+        assertTrue(node.isPredecessorAddressed)
     }
 
     private fun importFixture(): io.github.relvl.deobscura.raw.RawClass {

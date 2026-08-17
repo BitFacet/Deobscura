@@ -97,7 +97,7 @@ class SsaConstantPropagatorTest {
             kind = FrameValueKind.INT,
             blockId = BasicBlockId(3),
             location = SsaPhiLocation.Local(0),
-            inputs = listOf(left.id, right.id),
+            inputs = listOf(SsaPhiInput(left.id), SsaPhiInput(right.id)),
         )
         val analysis = analysisOf(
             definitions = listOf(left, right, phi),

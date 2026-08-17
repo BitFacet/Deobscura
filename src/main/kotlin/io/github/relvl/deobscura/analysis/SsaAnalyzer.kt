@@ -1,5 +1,6 @@
 package io.github.relvl.deobscura.analysis
 
+import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.raw.RawLocalInstruction
@@ -12,7 +13,8 @@ class SsaAnalyzer {
         val mergeDefinitions = valueFlow.values.values.filterIsInstance<ValueDefinition.Merge>().associateBy { it.id }
         val aliases = mutableMapOf<ValueId, ValueId>()
         val directInputs = mergeDefinitions.mapValues { (_, definition) ->
-            directPredecessorInputs(graph, valueFlow, definition) ?: definition.inputs
+            directPredecessorInputs(graph, valueFlow, definition)
+                ?: definition.inputs.map { SsaPhiInput(it) }
         }
 
         fun resolve(id: ValueId): ValueId {
@@ -27,6 +29,8 @@ class SsaAnalyzer {
             }
         }
 
+        fun resolve(input: SsaPhiInput): SsaPhiInput = input.copy(value = resolve(input.value))
+
         // Frame analysis carries the union of origins downstream. Collapse those propagated merge
         // placeholders by comparing the values arriving from the immediate CFG predecessors.
         var changed: Boolean
@@ -34,8 +38,12 @@ class SsaAnalyzer {
             changed = false
             mergeDefinitions.forEach { (id, _) ->
                 if (id in aliases) return@forEach
-                val inputs = directInputs.getValue(id).map(::resolve)
-                val meaningfulInputs = inputs.filter { it != id }.distinct()
+                val meaningfulInputs = directInputs.getValue(id)
+                    .asSequence()
+                    .map { resolve(it).value }
+                    .filter { it != id }
+                    .distinct()
+                    .toList()
                 if (meaningfulInputs.size == 1) {
                     aliases[id] = meaningfulInputs.single()
                     changed = true
@@ -49,10 +57,10 @@ class SsaAnalyzer {
         valueFlow.values.forEach { (id, definition) ->
             if (id in aliases) return@forEach
             values[id] = when (definition) {
-                is ValueDefinition.Root -> SsaValueDefinition.Root(id, definition.kind, definition.origin)
+                is ValueDefinition.Root -> SsaValueDefinition.Root(id, definition.type, definition.origin)
                 is ValueDefinition.Instruction -> SsaValueDefinition.Instruction(
                     id,
-                    definition.kind,
+                    definition.type,
                     definition.instructionIndex,
                 )
 
@@ -61,16 +69,23 @@ class SsaAnalyzer {
                         is ValueMergeSite.Local -> SsaPhiLocation.Local(site.slot)
                         is ValueMergeSite.Stack -> SsaPhiLocation.Stack(site.index)
                     }
-                    val inputs = directInputs.getValue(id)
-                        .map(::resolve)
+                    // Keep self inputs: on a back-edge they mean that the predecessor carries the
+                    // loop-entry value through unchanged. Simplification may ignore them when
+                    // deciding whether a phi is trivial, but CFG rewrites still need the mapping.
+                    val inputs = directInputs.getValue(id).map(::resolve)
+                    val meaningfulInputs = inputs.asSequence()
+                        .map { it.value }
                         .filter { it != id }
-                    if (inputs.distinct().size <= 1) {
+                        .distinct()
+                        .toList()
+                    if (meaningfulInputs.size <= 1) {
                         throw SsaInconsistencyException(
                             "Non-aliased phi ${id.value} in block ${definition.site.blockId.value} has fewer than two distinct inputs.",
                         )
                     }
+                    validatePhiInputs(id, definition.site.blockId, inputs)
                     phiNodes += SsaPhiNode(id, definition.site.blockId, location, inputs)
-                    SsaValueDefinition.Phi(id, definition.kind, definition.site.blockId, location, inputs)
+                    SsaValueDefinition.Phi(id, definition.type, definition.site.blockId, location, inputs)
                 }
             }
         }
@@ -83,32 +98,7 @@ class SsaAnalyzer {
             }
             .toList()
         val eliminatedLocalInstructionCount = valueFlow.operations.size - operations.size
-        val uses = linkedMapOf<ValueId, MutableList<SsaValueUse>>()
-
-        fun registerUse(value: ValueId, use: SsaValueUse) {
-            if (value !in values) {
-                throw SsaInconsistencyException("Use refers to undefined value ${value.value}.")
-            }
-            uses.getOrPut(value) { mutableListOf() } += use
-        }
-
-        operations.forEach { operation ->
-            operation.output?.let { output ->
-                if (output !in values) {
-                    throw SsaInconsistencyException(
-                        "Instruction ${operation.instructionIndex} defines unknown value ${output.value}.",
-                    )
-                }
-            }
-            operation.inputs.forEachIndexed { inputIndex, input ->
-                registerUse(input, SsaValueUse.Operation(operation.instructionIndex, inputIndex))
-            }
-        }
-        phiNodes.forEach { phi ->
-            phi.inputs.forEachIndexed { inputIndex, input ->
-                registerUse(input, SsaValueUse.Phi(phi.output, inputIndex))
-            }
-        }
+        val uses = rebuildSsaUses(values, operations, phiNodes, "Initial")
 
         val duplicatePhiSites = phiNodes
             .groupBy { it.blockId to it.location }
@@ -122,7 +112,7 @@ class SsaAnalyzer {
             values = values,
             operations = operations,
             phiNodes = phiNodes,
-            uses = uses.mapValues { it.value.toList() },
+            uses = uses,
             eliminatedLocalInstructionCount = eliminatedLocalInstructionCount,
         )
     }
@@ -131,7 +121,7 @@ class SsaAnalyzer {
         graph: ControlFlowGraph,
         valueFlow: ValueFlowAnalysis,
         definition: ValueDefinition.Merge,
-    ): List<ValueId>? {
+    ): List<SsaPhiInput>? {
         val site = definition.site
         val incomingEdges = graph.edges.filter { it.to == site.blockId }
         if (incomingEdges.isEmpty()) return null
@@ -141,11 +131,25 @@ class SsaAnalyzer {
         // frame-origin merge for handlers until value-flow records per-instruction exceptional states.
         if (incomingEdges.any { it.kind == ControlFlowEdgeKind.EXCEPTION }) return null
 
-        return incomingEdges.map { edge ->
-            when (site) {
-                is ValueMergeSite.Local -> valueFlow.blockExitLocals[edge.from]?.getOrNull(site.slot)
-                is ValueMergeSite.Stack -> valueFlow.blockExitStacks[edge.from]?.getOrNull(site.index)
+        // SSA phi semantics are predecessor-based, not edge-based. A conditional or switch may
+        // have several CFG edges from the same block to one target, but they all carry the same
+        // block-exit SSA state and therefore form one phi input.
+        return graph.block(site.blockId).predecessors.distinct().map { predecessor ->
+            val value = when (site) {
+                is ValueMergeSite.Local -> valueFlow.blockExitLocals[predecessor]?.getOrNull(site.slot)
+                is ValueMergeSite.Stack -> valueFlow.blockExitStacks[predecessor]?.getOrNull(site.index)
             } ?: return null
+            SsaPhiInput(value = value, predecessor = predecessor)
+        }
+    }
+
+    private fun validatePhiInputs(id: ValueId, blockId: BasicBlockId, inputs: List<SsaPhiInput>) {
+        val addressed = inputs.mapNotNull { it.predecessor }
+        if (addressed.isNotEmpty() && addressed.size != inputs.size) {
+            throw SsaInconsistencyException("Phi ${id.value} in block ${blockId.value} mixes predecessor and exceptional inputs.")
+        }
+        if (addressed.size != addressed.distinct().size) {
+            throw SsaInconsistencyException("Phi ${id.value} in block ${blockId.value} has duplicate predecessor inputs.")
         }
     }
 }

@@ -34,7 +34,7 @@ internal fun rebuildSsaUses(
             throw SsaInconsistencyException("$context phi defines unknown value ${phi.output.value}.")
         }
         phi.inputs.forEachIndexed { inputIndex, input ->
-            register(input, SsaValueUse.Phi(phi.output, inputIndex))
+            register(input.value, SsaValueUse.Phi(phi.output, input.predecessor, inputIndex))
         }
     }
 

@@ -35,7 +35,7 @@ class SsaControlFlowPrunerTest {
         val values = linkedMapOf<ValueId, SsaValueDefinition>(
             left to SsaValueDefinition.Instruction(left, FrameValueKind.INT, 1),
             right to SsaValueDefinition.Instruction(right, FrameValueKind.INT, 2),
-            phi to SsaValueDefinition.Phi(phi, FrameValueKind.INT, BasicBlockId(3), SsaPhiLocation.Local(0), listOf(left, right)),
+            phi to SsaValueDefinition.Phi(phi, FrameValueKind.INT, BasicBlockId(3), SsaPhiLocation.Local(0), listOf(SsaPhiInput(left, BasicBlockId(1)), SsaPhiInput(right, BasicBlockId(2)))),
             result to SsaValueDefinition.Instruction(result, FrameValueKind.INT, 3),
         )
         val leftOperation = operation(1, emptyList(), left)
@@ -44,7 +44,7 @@ class SsaControlFlowPrunerTest {
         val analysis = SsaAnalysis(
             values = values,
             operations = listOf(leftOperation, rightOperation, useOperation),
-            phiNodes = listOf(SsaPhiNode(phi, BasicBlockId(3), SsaPhiLocation.Local(0), listOf(left, right))),
+            phiNodes = listOf(SsaPhiNode(phi, BasicBlockId(3), SsaPhiLocation.Local(0), listOf(SsaPhiInput(left, BasicBlockId(1)), SsaPhiInput(right, BasicBlockId(2))))),
             uses = emptyMap(),
             constants = mapOf(left to SsaConstant.IntValue(7), right to SsaConstant.IntValue(9)),
             eliminatedLocalInstructionCount = 0,
@@ -64,7 +64,7 @@ class SsaControlFlowPrunerTest {
 
         assertEquals(1, pruning.removedOperationCount)
         assertEquals(1, pruning.removedPhiInputCount)
-        assertEquals(listOf(left), pruning.analysis.phiNodes.single().inputs)
+        assertEquals(listOf(SsaPhiInput(left, BasicBlockId(1))), pruning.analysis.phiNodes.single().inputs)
         assertEquals(1, simplified.removedPhiCount)
         assertFalse(phi in simplified.analysis.values)
         assertEquals(listOf(left), simplified.analysis.operations.single { it.instructionIndex == 3 }.inputs)
