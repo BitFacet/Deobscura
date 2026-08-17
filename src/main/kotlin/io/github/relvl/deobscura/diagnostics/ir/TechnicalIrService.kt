@@ -5,8 +5,7 @@ import org.slf4j.LoggerFactory
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.Comparator
-import java.util.Locale
+import java.util.*
 
 /** Collects optional technical-IR snapshots during analysis and writes them after the pipeline completes. */
 object TechnicalIrService {
@@ -107,6 +106,7 @@ object TechnicalIrService {
                     analysis != null -> writer.appendEscapedMalformedUtf16(
                         renderer.renderMethod(analysis.method, analysis),
                     )
+
                     method.failure != null -> writer.appendEscapedMalformedUtf16(
                         renderer.renderFailure(method.originalMethod, requireNotNull(method.failure)),
                     )

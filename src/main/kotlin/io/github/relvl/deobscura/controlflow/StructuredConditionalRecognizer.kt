@@ -6,7 +6,7 @@ import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.expression.BranchCondition
 import io.github.relvl.deobscura.expression.ComparisonOperator
 import io.github.relvl.deobscura.expression.ExpressionStatement
-import java.util.ArrayDeque
+import java.util.*
 
 /** Recognizes conditional regions once method-wide facts and enclosing loops are known. */
 internal class StructuredConditionalRecognizer {
@@ -321,7 +321,7 @@ internal class StructuredConditionalRecognizer {
                 outgoing = outgoing,
             )
             val conditionalTransfers = conditionalArm is ArmCollection.Success &&
-                singleEntryArm(conditionalArm.blocks, header, predecessors, ignoredPredecessors)
+                    singleEntryArm(conditionalArm.blocks, header, predecessors, ignoredPredecessors)
 
             val fallthroughArm = collectTransferArm(
                 start = fallthroughTarget,
@@ -332,7 +332,7 @@ internal class StructuredConditionalRecognizer {
                 outgoing = outgoing,
             )
             val fallthroughTransfers = fallthroughArm is ArmCollection.Success &&
-                singleEntryArm(fallthroughArm.blocks, header, predecessors, ignoredPredecessors)
+                    singleEntryArm(fallthroughArm.blocks, header, predecessors, ignoredPredecessors)
 
             var effectiveConditionalTransfers = conditionalTransfers
             var effectiveFallthroughTransfers = fallthroughTransfers
@@ -355,6 +355,7 @@ internal class StructuredConditionalRecognizer {
                         effectiveConditionalTransfers = false
                         usedContinuationSpine = true
                     }
+
                     LoopContinuation.FALLTHROUGH_SPINE -> {
                         effectiveFallthroughTransfers = false
                         usedContinuationSpine = true

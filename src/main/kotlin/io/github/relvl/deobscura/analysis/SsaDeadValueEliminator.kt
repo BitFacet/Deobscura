@@ -1,6 +1,6 @@
 package io.github.relvl.deobscura.analysis
 
-import java.util.ArrayDeque
+import java.util.*
 
 /**
  * Removes SSA values that do not contribute to any retained operation.

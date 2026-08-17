@@ -1,16 +1,7 @@
 package io.github.relvl.deobscura.analysis
 
-import io.github.relvl.deobscura.cfg.BasicBlock
-import io.github.relvl.deobscura.cfg.BasicBlockId
-import io.github.relvl.deobscura.cfg.ControlFlowEdge
-import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
-import io.github.relvl.deobscura.cfg.ControlFlowGraph
-import io.github.relvl.deobscura.raw.JvmComputationalType
-import io.github.relvl.deobscura.raw.JvmOpcode
-import io.github.relvl.deobscura.raw.RawBranchInstruction
-import io.github.relvl.deobscura.raw.RawCode
-import io.github.relvl.deobscura.raw.RawLabelId
-import io.github.relvl.deobscura.raw.RawReturnInstruction
+import io.github.relvl.deobscura.cfg.*
+import io.github.relvl.deobscura.raw.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -229,7 +220,7 @@ class SsaControlFlowCanonicalizerTest {
     )
 
     private fun graph(
-        instructions: List<io.github.relvl.deobscura.raw.RawInstruction>,
+        instructions: List<RawInstruction>,
         blocks: List<BasicBlock>,
         edges: List<ControlFlowEdge>,
     ) = ControlFlowGraph(

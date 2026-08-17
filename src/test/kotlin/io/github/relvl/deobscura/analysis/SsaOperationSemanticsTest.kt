@@ -1,10 +1,6 @@
 package io.github.relvl.deobscura.analysis
 
-import io.github.relvl.deobscura.raw.JvmComputationalType
-import io.github.relvl.deobscura.raw.JvmOpcode
-import io.github.relvl.deobscura.raw.RawBranchInstruction
-import io.github.relvl.deobscura.raw.RawLabelId
-import io.github.relvl.deobscura.raw.RawOperatorInstruction
+import io.github.relvl.deobscura.raw.*
 import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue

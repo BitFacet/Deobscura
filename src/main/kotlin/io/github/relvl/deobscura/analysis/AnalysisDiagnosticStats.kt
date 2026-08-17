@@ -1,12 +1,12 @@
 package io.github.relvl.deobscura.analysis
 
+import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
+import io.github.relvl.deobscura.controlflow.StructuredRegion
 import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
-import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
 import io.github.relvl.deobscura.expression.ExpressionAnalysis
 import io.github.relvl.deobscura.expression.ExpressionNode
 import io.github.relvl.deobscura.expression.ExpressionStatement
-import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
-import io.github.relvl.deobscura.controlflow.StructuredRegion
+import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
 import org.slf4j.Logger
 
 internal class AnalysisDiagnosticStats {
@@ -65,6 +65,10 @@ internal class StructuredControlFlowDiagnosticStats {
     private var switchRegionCount = 0L
     private var exceptionRegionCount = 0L
     private var structuredExceptionRegionCount = 0L
+    private var tryCatchRegionCount = 0L
+    private var tryCatchFinallyRegionCount = 0L
+    private var tryFinallyRegionCount = 0L
+    private var synchronizedRegionCount = 0L
     private var unstructuredExceptionRegionCount = 0L
     private var unstructuredConditionalCount = 0L
     private var unstructuredSwitchCount = 0L
@@ -104,11 +108,19 @@ internal class StructuredControlFlowDiagnosticStats {
         val ifs = analysis.regions.count { it is StructuredRegion.If }
         val whiles = analysis.regions.count { it is StructuredRegion.While }
         val switches = analysis.regions.count { it is StructuredRegion.Switch }
-        val exceptions = analysis.regions.count { it is StructuredRegion.TryCatch }
+        val tryCatches = analysis.regions.count { it is StructuredRegion.TryCatch }
+        val tryCatchFinallys = analysis.regions.count { it is StructuredRegion.TryCatchFinally }
+        val tryFinallys = analysis.regions.count { it is StructuredRegion.TryFinally }
+        val synchronizeds = analysis.regions.count { it is StructuredRegion.Synchronized }
+        val exceptions = tryCatches + tryCatchFinallys + tryFinallys + synchronizeds
         ifRegionCount += ifs
         whileRegionCount += whiles
         switchRegionCount += switches
-        structuredExceptionRegionCount += exceptions
+        structuredExceptionRegionCount += analysis.exceptionRegionCount - analysis.unstructuredExceptionRegionCount
+        tryCatchRegionCount += tryCatches
+        tryCatchFinallyRegionCount += tryCatchFinallys
+        tryFinallyRegionCount += tryFinallys
+        synchronizedRegionCount += synchronizeds
         unstructuredConditionalCount += analysis.unstructuredConditionalCount
         unstructuredSwitchCount += analysis.unstructured.count {
             it.kind == io.github.relvl.deobscura.controlflow.UnstructuredControlFlowKind.SWITCH
@@ -119,13 +131,16 @@ internal class StructuredControlFlowDiagnosticStats {
 
     fun log(logger: Logger) {
         logger.info(
-            "Structured control flow for {}/{} method(s): {} if region(s), {} natural while loop(s), {} switch region(s), {} try/catch region(s) in {} method(s).",
+            "Structured control flow for {}/{} method(s): {} if region(s), {} natural while loop(s), {} switch region(s), {} try/catch region(s), {} try/catch/finally region(s), {} try/finally region(s), {} synchronized region(s) in {} method(s).",
             analyzedMethodCount,
             methodCount,
             ifRegionCount,
             whileRegionCount,
             switchRegionCount,
-            structuredExceptionRegionCount,
+            tryCatchRegionCount,
+            tryCatchFinallyRegionCount,
+            tryFinallyRegionCount,
+            synchronizedRegionCount,
             structuredMethodCount,
         )
         logger.info(

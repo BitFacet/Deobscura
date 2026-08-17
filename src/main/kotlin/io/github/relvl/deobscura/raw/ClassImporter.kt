@@ -3,11 +3,11 @@ package io.github.relvl.deobscura.raw
 import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
 import io.github.relvl.deobscura.jar.JarLoadResult
 import io.github.relvl.deobscura.jar.JarRole
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import java.lang.classfile.*
 import java.lang.classfile.attribute.CodeAttribute
 import java.lang.classfile.instruction.*
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 import java.util.*
 
 class ClassImporter(

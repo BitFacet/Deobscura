@@ -38,7 +38,7 @@ class SsaOperationSemantics {
             JvmComputationalType.LONG,
             JvmComputationalType.FLOAT,
             JvmComputationalType.DOUBLE,
-            -> PURE
+                -> PURE
 
             else -> UNKNOWN
         }
@@ -48,7 +48,7 @@ class SsaOperationSemantics {
         is RawConversionInstruction,
         is RawStackInstruction,
         is RawNopInstruction,
-        -> PURE
+            -> PURE
 
         is RawOperatorInstruction -> classifyOperator(instruction.opcode.mnemonic)
         is RawArrayInstruction -> when (instruction.operation) {
@@ -59,7 +59,7 @@ class SsaOperationSemantics {
         is RawFieldInstruction -> classifyField(instruction.opcode.mnemonic)
         is RawInvokeInstruction,
         is RawInvokeDynamicInstruction,
-        -> effects(OperationEffect.CALLS_CODE, OperationEffect.MAY_THROW)
+            -> effects(OperationEffect.CALLS_CODE, OperationEffect.MAY_THROW)
 
         is RawNewObjectInstruction -> effects(
             OperationEffect.ALLOCATES,
@@ -69,7 +69,7 @@ class SsaOperationSemantics {
 
         is RawNewArrayInstruction,
         is RawNewMultiArrayInstruction,
-        -> effects(OperationEffect.ALLOCATES, OperationEffect.MAY_THROW)
+            -> effects(OperationEffect.ALLOCATES, OperationEffect.MAY_THROW)
 
         is RawTypeCheckInstruction -> effects(OperationEffect.MAY_THROW)
         is RawMonitorInstruction -> effects(OperationEffect.SYNCHRONIZES, OperationEffect.MAY_THROW)
@@ -77,7 +77,7 @@ class SsaOperationSemantics {
         is RawSwitchInstruction,
         is RawReturnInstruction,
         is RawRetInstruction,
-        -> effects(OperationEffect.CONTROL_FLOW)
+            -> effects(OperationEffect.CONTROL_FLOW)
 
         is RawThrowInstruction -> effects(OperationEffect.CONTROL_FLOW, OperationEffect.MAY_THROW)
         is RawUnknownInstruction -> UNKNOWN

@@ -6,13 +6,7 @@ import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowEdge
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
-import io.github.relvl.deobscura.expression.BranchCondition
-import io.github.relvl.deobscura.expression.BranchOperand
-import io.github.relvl.deobscura.expression.ComparisonOperator
-import io.github.relvl.deobscura.expression.ExpressionAnalysis
-import io.github.relvl.deobscura.expression.ExpressionNode
-import io.github.relvl.deobscura.expression.ExpressionStatement
-import java.util.ArrayDeque
+import io.github.relvl.deobscura.expression.*
 
 /** Recognizes conservative single-entry reducible `if`, terminal-arm `if`, and natural `while` regions. */
 class StructuredControlFlowAnalyzer {
@@ -25,6 +19,7 @@ class StructuredControlFlowAnalyzer {
         graph: ControlFlowGraph,
         flow: SsaControlFlowGraph,
         expression: ExpressionAnalysis,
+        legacySubroutineNormalized: Boolean = false,
     ): StructuredControlFlowAnalysis {
         val facts = ControlFlowFacts.build(graph, flow, expression)
             ?: return StructuredControlFlowAnalysis(emptyList(), 0, 0)
@@ -59,7 +54,11 @@ class StructuredControlFlowAnalyzer {
         val shortCircuitFoldedHeaders = shortCircuitFolds.flatMapTo(hashSetOf()) { it.foldedHeaders }
         val loopContexts = loopRecognizer.contexts(loopRecognition.regions, facts, expression)
         val naturalLoopContexts = loopRecognizer.naturalContexts(facts, expression)
-        val exceptionRecognition = exceptionRecognizer.recognize(graph, facts)
+        val exceptionRecognition = exceptionRecognizer.recognize(
+            graph = graph,
+            facts = facts,
+            legacySubroutineNormalized = legacySubroutineNormalized,
+        )
         val switchRecognition = switchRecognizer.recognize(
             facts = facts,
             loopContexts = naturalLoopContexts,
@@ -78,8 +77,11 @@ class StructuredControlFlowAnalyzer {
                     when (it) {
                         is StructuredRegion.While -> 0
                         is StructuredRegion.TryCatch -> 1
-                        is StructuredRegion.Switch -> 2
-                        is StructuredRegion.If -> 3
+                        is StructuredRegion.TryCatchFinally -> 2
+                        is StructuredRegion.TryFinally -> 3
+                        is StructuredRegion.Synchronized -> 4
+                        is StructuredRegion.Switch -> 5
+                        is StructuredRegion.If -> 6
                     }
                 },
         )
@@ -216,7 +218,7 @@ class StructuredControlFlowAnalyzer {
 
     private fun isTransparentBooleanArm(
         block: BasicBlockId,
-        valuesByBlock: Map<BasicBlockId?, List<io.github.relvl.deobscura.expression.ExpressionValue>>,
+        valuesByBlock: Map<BasicBlockId?, List<ExpressionValue>>,
         statementsByBlock: Map<BasicBlockId?, List<ExpressionStatement>>,
         expression: ExpressionAnalysis,
     ): Boolean {
@@ -268,29 +270,37 @@ class StructuredControlFlowAnalyzer {
 
                 while (true) {
                     val branch = branches[current]
-                    if (branch == null) { valid = false; break }
+                    if (branch == null) {
+                        valid = false; break
+                    }
                     val condition = branch.condition
-                    if (condition == null) { valid = false; break }
+                    if (condition == null) {
+                        valid = false; break
+                    }
                     val targets = branchTargets(current, outgoing)
-                    if (targets == null) { valid = false; break }
+                    if (targets == null) {
+                        valid = false; break
+                    }
                     val toCommon = when (commonTarget) {
                         targets.first -> StructuredCondition.Atomic(condition)
                         targets.second -> StructuredCondition.Atomic(condition.negated())
                         else -> null
                     }
-                    if (toCommon == null) { valid = false; break }
+                    if (toCommon == null) {
+                        valid = false; break
+                    }
                     terms += toCommon
                     val other = if (targets.first == commonTarget) targets.second else targets.first
 
                     val nextBranch = branches[other]
                     val nextTargets = nextBranch?.let { branchTargets(other, outgoing) }
                     val canContinue = nextBranch != null &&
-                        nextTargets != null &&
-                        commonTarget in listOf(nextTargets.first, nextTargets.second) &&
-                        other !in occupied &&
-                        other !in excludedHeaders &&
-                        predecessors[other].orEmpty().distinct() == listOf(current) &&
-                        isTransparentConditionHeader(other, valuesByBlock, statementsByBlock, expression)
+                            nextTargets != null &&
+                            commonTarget in listOf(nextTargets.first, nextTargets.second) &&
+                            other !in occupied &&
+                            other !in excludedHeaders &&
+                            predecessors[other].orEmpty().distinct() == listOf(current) &&
+                            isTransparentConditionHeader(other, valuesByBlock, statementsByBlock, expression)
                     if (!canContinue) {
                         finalOther = other
                         break
@@ -346,14 +356,14 @@ class StructuredControlFlowAnalyzer {
 
     private fun isTransparentConditionHeader(
         block: BasicBlockId,
-        valuesByBlock: Map<BasicBlockId?, List<io.github.relvl.deobscura.expression.ExpressionValue>>,
+        valuesByBlock: Map<BasicBlockId?, List<ExpressionValue>>,
         statementsByBlock: Map<BasicBlockId?, List<ExpressionStatement>>,
         expression: ExpressionAnalysis,
     ): Boolean {
         if (valuesByBlock[block].orEmpty().any { it.id !in expression.materialization.inlineValues }) return false
         val statements = statementsByBlock[block].orEmpty()
         return statements.size == 1 && statements.single() is ExpressionStatement.Branch &&
-            (statements.single() as ExpressionStatement.Branch).condition != null
+                (statements.single() as ExpressionStatement.Branch).condition != null
     }
 
     private fun StructuredCondition.negated(): StructuredCondition = when (this) {

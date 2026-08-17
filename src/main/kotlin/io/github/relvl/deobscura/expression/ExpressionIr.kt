@@ -1,10 +1,6 @@
 package io.github.relvl.deobscura.expression
 
-import io.github.relvl.deobscura.analysis.JvmValueType
-import io.github.relvl.deobscura.analysis.SsaPhiInput
-import io.github.relvl.deobscura.analysis.SsaPhiLocation
-import io.github.relvl.deobscura.analysis.ValueId
-import io.github.relvl.deobscura.analysis.ValueOrigin
+import io.github.relvl.deobscura.analysis.*
 import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.raw.JvmMethodDescriptor
 import io.github.relvl.deobscura.raw.JvmType

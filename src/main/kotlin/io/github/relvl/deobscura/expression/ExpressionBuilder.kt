@@ -1,10 +1,6 @@
 package io.github.relvl.deobscura.expression
 
-import io.github.relvl.deobscura.analysis.JvmValueType
-import io.github.relvl.deobscura.analysis.SsaAnalysis
-import io.github.relvl.deobscura.analysis.SsaValueDefinition
-import io.github.relvl.deobscura.analysis.ValueId
-import io.github.relvl.deobscura.analysis.ValueOperation
+import io.github.relvl.deobscura.analysis.*
 import io.github.relvl.deobscura.raw.*
 
 /** Lifts optimized SSA values and side effects into typed source-like expressions. */
@@ -37,7 +33,7 @@ class ExpressionBuilder(
                     if (operation.instructionIndex != definition.instructionIndex) {
                         throw ExpressionIrInconsistencyException(
                             "SSA value v${definition.id.value} definition points to instruction ${definition.instructionIndex}, " +
-                                "but its producing operation is ${operation.instructionIndex}.",
+                                    "but its producing operation is ${operation.instructionIndex}.",
                         )
                     }
                     ExpressionValue(
@@ -75,6 +71,7 @@ class ExpressionBuilder(
             is RawIncrementInstruction -> requireInputs(operation, 1) {
                 ExpressionNode.Increment(inputs[0], instruction.amount)
             }
+
             is RawArrayInstruction -> when (instruction.operation) {
                 ArrayOperation.LOAD -> requireInputs(operation, 2) { ExpressionNode.ArrayRead(inputs[0], inputs[1]) }
                 ArrayOperation.STORE -> rawValue(operation)

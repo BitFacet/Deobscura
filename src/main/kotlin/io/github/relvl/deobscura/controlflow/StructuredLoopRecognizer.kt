@@ -4,7 +4,7 @@ import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.expression.ExpressionAnalysis
 import io.github.relvl.deobscura.expression.ExpressionStatement
-import java.util.ArrayDeque
+import java.util.*
 
 /** Recognizes natural loops and derives loop-relative transfer context for nested regions. */
 internal class StructuredLoopRecognizer {

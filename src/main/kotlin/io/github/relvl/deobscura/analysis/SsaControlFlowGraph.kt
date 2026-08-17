@@ -3,7 +3,7 @@ package io.github.relvl.deobscura.analysis
 import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowEdge
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
-import java.util.ArrayDeque
+import java.util.*
 
 /**
  * Mutable-by-replacement control-flow view used by SSA optimization.

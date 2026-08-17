@@ -1,16 +1,9 @@
 package io.github.relvl.deobscura.diagnostics.ir
 
-import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
-import io.github.relvl.deobscura.controlflow.StructuredRegion
-import io.github.relvl.deobscura.controlflow.StructuredCondition
-import io.github.relvl.deobscura.controlflow.StructuredArmExit
-import io.github.relvl.deobscura.controlflow.StructuredArmExitKind
-import io.github.relvl.deobscura.controlflow.StructuredRegionTransfer
-import io.github.relvl.deobscura.controlflow.StructuredRegionTransferKind
-import io.github.relvl.deobscura.controlflow.UnstructuredControlFlowKind
-import io.github.relvl.deobscura.expression.ExpressionAnalysis
+import io.github.relvl.deobscura.controlflow.*
 import io.github.relvl.deobscura.expression.BranchCondition
 import io.github.relvl.deobscura.expression.ComparisonOperator
+import io.github.relvl.deobscura.expression.ExpressionAnalysis
 
 /** Compact diagnostic rendering of source-level regions proven from the canonical CFG. */
 class StructuredControlFlowRenderer(
@@ -74,6 +67,77 @@ class StructuredControlFlowRenderer(
                     }
                 }
 
+                is StructuredRegion.TryCatchFinally -> {
+                    append("    try/catch/finally B${region.header.value}")
+                    append(" protected=${region.protectedStartInstructionIndex}..<${region.protectedEndInstructionIndexExclusive}")
+                    if (region.protectedRanges.size > 1) {
+                        append(" ranges=")
+                        append(region.protectedRanges.joinToString(prefix = "[", postfix = "]") { range ->
+                            "${range.startInstructionIndex}..<${range.endInstructionIndexExclusive}"
+                        })
+                    }
+                    append(" blocks=${formatBlocks(region.tryBlocks)}")
+                    region.continuation?.let { append(" continuation=B${it.value}") }
+                    appendLine()
+                    region.catches.forEach { catch ->
+                        append("      catch ")
+                        append(catch.catchTypes.joinToString(" | "))
+                        append(" entry=B${catch.entry.value}")
+                        appendLine(" blocks=${formatBlocks(catch.blocks)}")
+                    }
+                    append("      finally entry=B${region.handlerEntry.value}")
+                    append(" handler=${formatBlocks(region.handlerBlocks)}")
+                    append(" normal=${formatBlocks(region.normalCopyBlocks)}")
+                    append(" body=@${region.finallyBodyInstructionIndices.first}..@${region.finallyBodyInstructionIndices.last}")
+                    append(" copies=")
+                    append(region.normalCopyInstructionIndices.joinToString(prefix = "[", postfix = "]") { range ->
+                        "@${range.first}..@${range.last}"
+                    })
+                    appendLine()
+                }
+
+                is StructuredRegion.TryFinally -> {
+                    append("    try/finally B${region.header.value}")
+                    append(" protected=${region.protectedStartInstructionIndex}..<${region.protectedEndInstructionIndexExclusive}")
+                    if (region.protectedRanges.size > 1) {
+                        append(" ranges=")
+                        append(region.protectedRanges.joinToString(prefix = "[", postfix = "]") { range ->
+                            "${range.startInstructionIndex}..<${range.endInstructionIndexExclusive}"
+                        })
+                    }
+                    append(" blocks=${formatBlocks(region.tryBlocks)}")
+                    region.continuation?.let { append(" continuation=B${it.value}") }
+                    appendLine()
+                    append("      finally entry=B${region.handlerEntry.value}")
+                    append(" handler=${formatBlocks(region.handlerBlocks)}")
+                    append(" normal=${formatBlocks(region.normalCopyBlocks)}")
+                    append(" body=@${region.finallyBodyInstructionIndices.first}..@${region.finallyBodyInstructionIndices.last}")
+                    append(" copies=")
+                    append(region.normalCopyInstructionIndices.joinToString(prefix = "[", postfix = "]") { range ->
+                        "@${range.first}..@${range.last}"
+                    })
+                    appendLine()
+                }
+
+                is StructuredRegion.Synchronized -> {
+                    append("    synchronized B${region.header.value}")
+                    append(" body-entry=B${region.bodyEntry.value}")
+                    append(" blocks=${formatBlocks(region.bodyBlocks)}")
+                    append(" monitor-slot=${region.monitorSlot}")
+                    append(" enter=@${region.monitorEnterInstructionIndex}")
+                    append(" exits=")
+                    append(region.normalMonitorExitInstructionIndices.joinToString(prefix = "[", postfix = "]") { "@$it" })
+                    append(" handler=B${region.handlerEntry.value}")
+                    append(" handler-exit=@${region.handlerMonitorExitInstructionIndex}")
+                    if (region.syntheticCleanupProtectedRanges.isNotEmpty()) {
+                        append(" cleanup-ranges=")
+                        append(region.syntheticCleanupProtectedRanges.joinToString(prefix = "[", postfix = "]") { range ->
+                            "${range.startInstructionIndex}..<${range.endInstructionIndexExclusive}"
+                        })
+                    }
+                    appendLine()
+                }
+
                 is StructuredRegion.Switch -> {
                     append("    switch B${region.header.value} selector=v${region.selector.value}")
                     region.continuation?.let { append(" continuation=B${it.value}") }
@@ -133,6 +197,7 @@ class StructuredControlFlowRenderer(
             val rendered = renderCondition(term, expression)
             if (term is StructuredCondition.Or) "($rendered)" else rendered
         }
+
         is StructuredCondition.Or -> condition.terms.joinToString(" || ") { term ->
             val rendered = renderCondition(term, expression)
             if (term is StructuredCondition.And) "($rendered)" else rendered

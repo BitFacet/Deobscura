@@ -1,11 +1,6 @@
 package io.github.relvl.deobscura.diagnostics.ir
 
-import io.github.relvl.deobscura.analysis.FrameAnalysis
-import io.github.relvl.deobscura.analysis.MethodAnalysis
-import io.github.relvl.deobscura.analysis.MethodAnalysisException
-import io.github.relvl.deobscura.analysis.SsaAnalysis
-import io.github.relvl.deobscura.analysis.SsaOptimizationResult
-import io.github.relvl.deobscura.analysis.ValueFlowAnalysis
+import io.github.relvl.deobscura.analysis.*
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
 import io.github.relvl.deobscura.expression.ExpressionAnalysis

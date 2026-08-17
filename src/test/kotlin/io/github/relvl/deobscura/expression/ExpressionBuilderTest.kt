@@ -2,11 +2,7 @@ package io.github.relvl.deobscura.expression
 
 import io.github.relvl.deobscura.analysis.*
 import io.github.relvl.deobscura.raw.*
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertIs
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
+import kotlin.test.*
 
 class ExpressionBuilderTest {
     private val builder = ExpressionBuilder()

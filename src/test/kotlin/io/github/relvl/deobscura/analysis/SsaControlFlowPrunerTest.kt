@@ -35,7 +35,13 @@ class SsaControlFlowPrunerTest {
         val values = linkedMapOf<ValueId, SsaValueDefinition>(
             left to SsaValueDefinition.Instruction(left, FrameValueKind.INT, 1),
             right to SsaValueDefinition.Instruction(right, FrameValueKind.INT, 2),
-            phi to SsaValueDefinition.Phi(phi, FrameValueKind.INT, BasicBlockId(3), SsaPhiLocation.Local(0), listOf(SsaPhiInput(left, BasicBlockId(1)), SsaPhiInput(right, BasicBlockId(2)))),
+            phi to SsaValueDefinition.Phi(
+                phi,
+                FrameValueKind.INT,
+                BasicBlockId(3),
+                SsaPhiLocation.Local(0),
+                listOf(SsaPhiInput(left, BasicBlockId(1)), SsaPhiInput(right, BasicBlockId(2)))
+            ),
             result to SsaValueDefinition.Instruction(result, FrameValueKind.INT, 3),
         )
         val leftOperation = operation(1, emptyList(), left)

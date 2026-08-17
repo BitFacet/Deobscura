@@ -7,9 +7,7 @@ import io.github.relvl.deobscura.raw.*
 import io.github.relvl.deobscura.resolution.ClassHierarchy
 import java.util.*
 
-class FrameAnalyzer(
-    private val hierarchy: ClassHierarchy? = null,
-) {
+class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
     fun analyze(ownerInternalName: String, method: RawMethod, graph: ControlFlowGraph): FrameAnalysis {
         val code = requireNotNull(method.code) { "Method ${method.name}${method.descriptor} has no code." }
         val entryBlock = graph.entryBlock ?: return FrameAnalysis(emptyMap(), emptyMap(), 0, 0)
@@ -204,6 +202,7 @@ class FrameAnalyzer(
             is RawConstantInstruction -> frame.push(
                 FrameValue.of(instruction.toValueType(), ValueOrigin.Instruction(index)),
             )
+
             is RawLocalInstruction -> executeLocal(instruction, frame)
             is RawIncrementInstruction -> {
                 frame.requireLocal(instruction.slot, FrameValueKind.INT)
@@ -230,6 +229,7 @@ class FrameAnalyzer(
             is RawNewObjectInstruction -> frame.push(
                 referenceValue(JvmReferenceType.Exact(JvmType.ObjectType(instruction.internalName)), index),
             )
+
             is RawNewArrayInstruction -> {
                 frame.pop(FrameValueKind.INT)
                 frame.push(referenceValue(JvmReferenceType.Exact(JvmType.ArrayType(instruction.componentType)), index))

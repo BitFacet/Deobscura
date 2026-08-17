@@ -3,7 +3,7 @@ package io.github.relvl.deobscura.controlflow
 import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowEdge
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
-import java.util.ArrayDeque
+import java.util.*
 
 /** Recognizes switch ownership/continuations; transfer semantics are delegated separately. */
 internal class StructuredSwitchRecognizer(
@@ -155,14 +155,14 @@ internal class StructuredSwitchRecognizer(
                     StructuredRegionTransferKind.RETURN_OR_THROW,
                     StructuredRegionTransferKind.BREAK_LOOP,
                     StructuredRegionTransferKind.CONTINUE_LOOP,
-                    -> true
+                        -> true
 
                     StructuredRegionTransferKind.CASE_FALLTHROUGH ->
                         transfer.target?.let { target -> target in byEntry && exitsSwitch(target, visiting) } == true
 
                     StructuredRegionTransferKind.BREAK_SWITCH,
                     StructuredRegionTransferKind.NORMAL_SWITCH_COMPLETION,
-                    -> false
+                        -> false
                 }
             }
             visiting.remove(entry)
@@ -181,7 +181,7 @@ internal class StructuredSwitchRecognizer(
     ): BasicBlockId? {
         fun isValidContinuation(candidate: BasicBlockId): Boolean =
             (containingLoop == null || candidate in containingLoop.blocks) &&
-                !reachesOtherCaseEntryBeforeHeader(candidate, header, entries, facts.outgoing)
+                    !reachesOtherCaseEntryBeforeHeader(candidate, header, entries, facts.outgoing)
 
         immediatePostDominator(header, facts.postDominators)?.let { candidate ->
             if (isValidContinuation(candidate)) return candidate
@@ -220,11 +220,11 @@ internal class StructuredSwitchRecognizer(
 
         val externallySharedJoins = reachableFromHeader.filter { candidate ->
             candidate != header &&
-                candidate !in entries &&
-                isValidContinuation(candidate) &&
-                candidate !in facts.explicitTerminalBlocks &&
-                header !in reachableFrom(candidate, facts.outgoing) &&
-                facts.incoming[candidate].orEmpty().any { edge -> edge.from !in reachableFromHeader }
+                    candidate !in entries &&
+                    isValidContinuation(candidate) &&
+                    candidate !in facts.explicitTerminalBlocks &&
+                    header !in reachableFrom(candidate, facts.outgoing) &&
+                    facts.incoming[candidate].orEmpty().any { edge -> edge.from !in reachableFromHeader }
         }
         if (externallySharedJoins.size == 1) return externallySharedJoins.single()
 
@@ -271,6 +271,7 @@ internal class StructuredSwitchRecognizer(
         }
         return false
     }
+
     private fun reachableUntilCaseOrTerminal(
         start: BasicBlockId,
         caseEntries: Set<BasicBlockId>,
@@ -379,13 +380,13 @@ internal class StructuredSwitchRecognizer(
 
         val sharedTerminalBlocks = owners.filter { (block, blockOwners) ->
             block != continuation &&
-                block !in caseEntries &&
-                (
-                    blockOwners.size > 1 ||
-                        predecessors[block].orEmpty().any { predecessor ->
-                            predecessor != header && predecessor !in allCaseBlocks
-                        }
-                    )
+                    block !in caseEntries &&
+                    (
+                            blockOwners.size > 1 ||
+                                    predecessors[block].orEmpty().any { predecessor ->
+                                        predecessor != header && predecessor !in allCaseBlocks
+                                    }
+                            )
         }.keys
         if (sharedTerminalBlocks.isEmpty()) return
 

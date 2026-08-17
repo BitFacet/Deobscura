@@ -2,14 +2,14 @@ package io.github.relvl.deobscura.analysis
 
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.cfg.ControlFlowGraphBuilder
+import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
+import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalyzer
 import io.github.relvl.deobscura.diagnostics.ir.MethodAnalysisTrace
+import io.github.relvl.deobscura.expression.ExpressionAnalysis
+import io.github.relvl.deobscura.expression.ExpressionBuilder
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizer
 import io.github.relvl.deobscura.raw.RawMethod
-import io.github.relvl.deobscura.expression.ExpressionAnalysis
-import io.github.relvl.deobscura.expression.ExpressionBuilder
-import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
-import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalyzer
 
 /** Runs the complete low-level analysis pipeline for one method. */
 class MethodAnalyzer(
@@ -99,7 +99,12 @@ class MethodAnalyzer(
         trace?.expression = expression
 
         val structuredControlFlow = try {
-            structuredControlFlowAnalyzer.analyze(graph, optimization.controlFlow, expression)
+            structuredControlFlowAnalyzer.analyze(
+                graph = graph,
+                flow = optimization.controlFlow,
+                expression = expression,
+                legacySubroutineNormalized = normalization.changed,
+            )
         } catch (exception: Exception) {
             throw failure(
                 trace,

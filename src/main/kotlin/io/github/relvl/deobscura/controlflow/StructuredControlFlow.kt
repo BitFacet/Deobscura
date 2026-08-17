@@ -131,14 +131,19 @@ enum class StructuredArmExitKind {
 enum class StructuredRegionTransferKind {
     /** Transfer from this case body into another case body. */
     CASE_FALLTHROUGH,
+
     /** Explicit `break` from this switch to its continuation. */
     BREAK_SWITCH,
+
     /** Natural completion of this case at the switch continuation. */
     NORMAL_SWITCH_COMPLETION,
+
     /** Transfer from this switch to the canonical exit of an enclosing loop. */
     BREAK_LOOP,
+
     /** Transfer from this switch to a proven continue target of an enclosing loop. */
     CONTINUE_LOOP,
+
     /** A return or throw terminates this path. */
     RETURN_OR_THROW,
 }
@@ -262,6 +267,86 @@ sealed interface StructuredRegion {
         override val coveredBlocks: Set<BasicBlockId> = linkedSetOf<BasicBlockId>().apply {
             addAll(tryBlocks)
             catches.forEach { addAll(it.blocks) }
+        }
+    }
+
+    /** Source-level `try/catch/finally` recovered as one compound exception construct. */
+    data class TryCatchFinally(
+        override val header: BasicBlockId,
+        val tryBlocks: Set<BasicBlockId>,
+        val catches: List<StructuredCatch>,
+        val handlerEntry: BasicBlockId,
+        val handlerBlocks: Set<BasicBlockId>,
+        val finallyBodyInstructionIndices: IntRange,
+        val normalCopyInstructionIndices: List<IntRange>,
+        val normalCopyBlocks: Set<BasicBlockId>,
+        val continuation: BasicBlockId?,
+        val protectedStartInstructionIndex: Int,
+        val protectedEndInstructionIndexExclusive: Int,
+        val protectedRanges: List<StructuredProtectedRange> = listOf(
+            StructuredProtectedRange(protectedStartInstructionIndex, protectedEndInstructionIndexExclusive),
+        ),
+    ) : StructuredRegion {
+        override val coveredBlocks: Set<BasicBlockId> = linkedSetOf<BasicBlockId>().apply {
+            addAll(tryBlocks)
+            catches.forEach { addAll(it.blocks) }
+            addAll(handlerBlocks)
+            addAll(normalCopyBlocks)
+        }
+    }
+
+    /**
+     * Conservatively proven source-level `try/finally`. The JVM represents finally with a
+     * catch-all handler plus duplicated copies of the finally body on normal exits.
+     *
+     * Instruction ranges retain the physical copies as provenance until source emission learns
+     * how to suppress duplicates.
+     */
+    data class TryFinally(
+        override val header: BasicBlockId,
+        val tryBlocks: Set<BasicBlockId>,
+        val handlerEntry: BasicBlockId,
+        val handlerBlocks: Set<BasicBlockId>,
+        val finallyBodyInstructionIndices: IntRange,
+        val normalCopyInstructionIndices: List<IntRange>,
+        val normalCopyBlocks: Set<BasicBlockId>,
+        val continuation: BasicBlockId?,
+        val protectedStartInstructionIndex: Int,
+        val protectedEndInstructionIndexExclusive: Int,
+        val protectedRanges: List<StructuredProtectedRange> = listOf(
+            StructuredProtectedRange(protectedStartInstructionIndex, protectedEndInstructionIndexExclusive),
+        ),
+    ) : StructuredRegion {
+        override val coveredBlocks: Set<BasicBlockId> = linkedSetOf<BasicBlockId>().apply {
+            addAll(tryBlocks)
+            addAll(handlerBlocks)
+            addAll(normalCopyBlocks)
+        }
+    }
+
+    /** Source-level `synchronized` recovered from monitorenter/monitorexit plus catch-all cleanup. */
+    data class Synchronized(
+        override val header: BasicBlockId,
+        val bodyEntry: BasicBlockId,
+        val bodyBlocks: Set<BasicBlockId>,
+        val handlerEntry: BasicBlockId,
+        val handlerBlocks: Set<BasicBlockId>,
+        val monitorSlot: Int,
+        val monitorEnterInstructionIndex: Int,
+        val normalMonitorExitInstructionIndices: List<Int>,
+        val handlerMonitorExitInstructionIndex: Int,
+        val protectedStartInstructionIndex: Int,
+        val protectedEndInstructionIndexExclusive: Int,
+        val protectedRanges: List<StructuredProtectedRange> = listOf(
+            StructuredProtectedRange(protectedStartInstructionIndex, protectedEndInstructionIndexExclusive),
+        ),
+        /** Synthetic catch-all range protecting the handler's own monitor-exit, when present. */
+        val syntheticCleanupProtectedRanges: List<StructuredProtectedRange> = emptyList(),
+    ) : StructuredRegion {
+        override val coveredBlocks: Set<BasicBlockId> = linkedSetOf<BasicBlockId>().apply {
+            add(header)
+            addAll(bodyBlocks)
+            addAll(handlerBlocks)
         }
     }
 

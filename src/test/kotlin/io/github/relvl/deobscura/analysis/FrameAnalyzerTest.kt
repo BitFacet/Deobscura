@@ -1,8 +1,8 @@
 package io.github.relvl.deobscura.analysis
 
 import io.github.relvl.deobscura.cfg.ControlFlowGraphBuilder
-import io.github.relvl.deobscura.raw.*
 import io.github.relvl.deobscura.jar.JarLoadResult
+import io.github.relvl.deobscura.raw.*
 import io.github.relvl.deobscura.resolution.ClassHierarchy
 import io.github.relvl.deobscura.resolution.ClassResolver
 import io.github.relvl.deobscura.resolution.RuntimeClassSource

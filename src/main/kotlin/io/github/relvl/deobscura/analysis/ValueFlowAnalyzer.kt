@@ -93,7 +93,15 @@ class ValueFlowAnalyzer {
             produceOptional(instruction, index, instruction.type.returnType, arguments, state, allocator)
         }
 
-        is RawNewObjectInstruction -> produce(instruction, index, JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType(instruction.internalName))), emptyList(), state, allocator)
+        is RawNewObjectInstruction -> produce(
+            instruction,
+            index,
+            JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType(instruction.internalName))),
+            emptyList(),
+            state,
+            allocator
+        )
+
         is RawNewArrayInstruction -> {
             val size = state.pop(FrameValueKind.INT)
             produce(instruction, index, JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ArrayType(instruction.componentType))), listOf(size), state, allocator)

@@ -1,10 +1,6 @@
 package io.github.relvl.deobscura.analysis
 
-import io.github.relvl.deobscura.raw.JvmComputationalType
-import io.github.relvl.deobscura.raw.JvmReferenceType
-import io.github.relvl.deobscura.raw.JvmType
-import io.github.relvl.deobscura.raw.RawConstantInstruction
-import io.github.relvl.deobscura.raw.toReferenceType
+import io.github.relvl.deobscura.raw.*
 import java.lang.constant.ClassDesc
 import java.lang.constant.MethodHandleDesc
 import java.lang.constant.MethodTypeDesc

@@ -1,12 +1,6 @@
 package io.github.relvl.deobscura.diagnostics.ir
 
-import io.github.relvl.deobscura.analysis.FrameState
-import io.github.relvl.deobscura.analysis.FrameValue
-import io.github.relvl.deobscura.analysis.JvmValueType
-import io.github.relvl.deobscura.analysis.MethodAnalysis
-import io.github.relvl.deobscura.analysis.MethodAnalysisException
-import io.github.relvl.deobscura.analysis.SsaPhiLocation
-import io.github.relvl.deobscura.analysis.SsaValueDefinition
+import io.github.relvl.deobscura.analysis.*
 import io.github.relvl.deobscura.cfg.ControlFlowEdge
 import io.github.relvl.deobscura.raw.*
 
@@ -31,13 +25,13 @@ class TechnicalIrRenderer(
         appendLine("  optimizer-iterations: ${stats.iterationCount}")
         appendLine(
             "  ssa-size: " +
-                "initial=${analysis.initialSsa.values.size} values/${analysis.initialSsa.operations.size} ops/${analysis.initialSsa.phiNodes.size} phi, " +
-                "final=${analysis.ssa.values.size} values/${analysis.ssa.operations.size} ops/${analysis.ssa.phiNodes.size} phi",
+                    "initial=${analysis.initialSsa.values.size} values/${analysis.initialSsa.operations.size} ops/${analysis.initialSsa.phiNodes.size} phi, " +
+                    "final=${analysis.ssa.values.size} values/${analysis.ssa.operations.size} ops/${analysis.ssa.phiNodes.size} phi",
         )
         appendLine(
             "  optimization: cfg-pruned-ops=${stats.removedOperationCount}, dead-ops=${stats.deadOperationCount}, " +
-                "dead-values=${stats.deadValueCount}, passthrough-blocks=${stats.canonicalizedPassthroughBlockCount}, " +
-                "control-flow-ops=${stats.removedControlFlowOperationCount}",
+                    "dead-values=${stats.deadValueCount}, passthrough-blocks=${stats.canonicalizedPassthroughBlockCount}, " +
+                    "control-flow-ops=${stats.removedControlFlowOperationCount}",
         )
         appendLine()
 
@@ -84,9 +78,9 @@ class TechnicalIrRenderer(
             phiByBlock[block].orEmpty().forEach { phi ->
                 appendLine(
                     "      v${phi.output.value}:${formatValueType(analysis.ssa.typeOf(phi.output))} = phi ${formatPhiLocation(phi.location)} " +
-                        phi.inputs.joinToString(prefix = "[", postfix = "]") { input ->
-                            input.predecessor?.let { "B${it.value}=v${input.value.value}" } ?: "origin=v${input.value.value}"
-                        },
+                            phi.inputs.joinToString(prefix = "[", postfix = "]") { input ->
+                                input.predecessor?.let { "B${it.value}=v${input.value.value}" } ?: "origin=v${input.value.value}"
+                            },
                 )
             }
             operationsByBlock[block].orEmpty().sortedBy { it.instructionIndex }.forEach { operation ->
@@ -200,16 +194,21 @@ class TechnicalIrRenderer(
             append(" default=L${instruction.defaultTarget.value}")
             instruction.cases.forEach { append(" ${it.value}:L${it.target.value}") }
         }
+
         is RawFieldInstruction ->
             "${instruction.opcode.mnemonic} ${instruction.owner}.${instruction.name}:${instruction.descriptor}"
+
         is RawInvokeInstruction ->
             "${instruction.opcode.mnemonic} ${instruction.owner}.${instruction.name}${instruction.descriptor}"
+
         is RawInvokeDynamicInstruction ->
             "${instruction.opcode.mnemonic} ${instruction.name}${instruction.descriptor}"
+
         is RawNewObjectInstruction -> "${instruction.opcode.mnemonic} ${instruction.internalName}"
         is RawNewArrayInstruction -> "${instruction.opcode.mnemonic} ${instruction.componentType.descriptor}"
         is RawNewMultiArrayInstruction ->
             "${instruction.opcode.mnemonic} ${instruction.arrayType.descriptor} dimensions=${instruction.dimensions}"
+
         is RawTypeCheckInstruction -> "${instruction.opcode.mnemonic} ${instruction.type.descriptor}"
         is RawReturnInstruction -> instruction.opcode.mnemonic
         is RawMonitorInstruction -> instruction.opcode.mnemonic

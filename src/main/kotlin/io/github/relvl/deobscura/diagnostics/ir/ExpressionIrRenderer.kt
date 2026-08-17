@@ -1,10 +1,6 @@
 package io.github.relvl.deobscura.diagnostics.ir
 
-import io.github.relvl.deobscura.analysis.JvmValueType
-import io.github.relvl.deobscura.analysis.MethodAnalysis
-import io.github.relvl.deobscura.analysis.SsaPhiLocation
-import io.github.relvl.deobscura.analysis.ValueId
-import io.github.relvl.deobscura.analysis.ValueOrigin
+import io.github.relvl.deobscura.analysis.*
 import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.expression.*
@@ -50,6 +46,7 @@ class ExpressionIrRenderer {
                         } else {
                             renderDefinition(event.value, expression)
                         }
+
                         is RenderEvent.Statement -> renderStatement(event.statement, outgoingByBlock[block].orEmpty(), expression)
                     }
                     appendLine("      $rendered")
@@ -72,7 +69,7 @@ class ExpressionIrRenderer {
             renderNode(node, expression)
         }
         return "v${value.id.value}:$renderedType = $renderedNode" +
-            value.instructionIndices.takeIf { it.size > 1 }?.joinToString(prefix = "  // @", separator = ",@") { it.toString() }.orEmpty()
+                value.instructionIndices.takeIf { it.size > 1 }?.joinToString(prefix = "  // @", separator = ",@") { it.toString() }.orEmpty()
     }
 
     private fun renderBooleanPhi(node: ExpressionNode.Phi, output: ValueId, expression: ExpressionAnalysis): String =
@@ -88,6 +85,7 @@ class ExpressionIrRenderer {
                         else -> ref(input.value, expression)
                     }
                 }
+
                 else -> ref(input.value, expression)
             }
             predecessor + rendered
@@ -183,7 +181,7 @@ class ExpressionIrRenderer {
         val effective = if (negate) condition.copy(operator = condition.operator.negated()) else condition
         val left = expression.values[effective.left]
         val isBoolean = effective.left in expression.materialization.booleanValues ||
-            left?.type == JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.BOOLEAN)
+                left?.type == JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.BOOLEAN)
         if (isBoolean && effective.right == BranchOperand.Zero) {
             return when (effective.operator) {
                 ComparisonOperator.EQ -> "!${parenthesizeBoolean(effective.left, expression)}"
@@ -284,10 +282,12 @@ class ExpressionIrRenderer {
             val right = renderValue(node.right, expression, ownPrecedence + 1)
             "$left ${node.operator.symbol} $right"
         }
+
         is ExpressionNode.Increment -> {
             val operand = renderValue(node.operand, expression, PRECEDENCE_ADDITIVE)
             if (node.amount >= 0) "$operand + ${node.amount}" else "$operand - ${-node.amount}"
         }
+
         is ExpressionNode.Conversion -> "(${formatValueType(node.targetType)}) ${renderValue(node.operand, expression, PRECEDENCE_UNARY)}"
         else -> renderNode(node, expression)
     }
@@ -301,6 +301,7 @@ class ExpressionIrRenderer {
             BinaryOperator.BIT_XOR -> PRECEDENCE_BIT_XOR
             BinaryOperator.BIT_OR -> PRECEDENCE_BIT_OR
         }
+
         is ExpressionNode.Increment -> PRECEDENCE_ADDITIVE
         is ExpressionNode.Unary, is ExpressionNode.Conversion -> PRECEDENCE_UNARY
         else -> PRECEDENCE_PRIMARY

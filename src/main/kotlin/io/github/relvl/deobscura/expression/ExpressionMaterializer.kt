@@ -72,7 +72,7 @@ class ExpressionMaterializer(
         is ExpressionNode.Call,
         is ExpressionNode.DynamicCall,
         is ExpressionNode.ConstructObject,
-        -> true
+            -> true
 
         else -> false
     }

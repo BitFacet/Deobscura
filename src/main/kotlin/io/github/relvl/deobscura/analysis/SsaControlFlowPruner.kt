@@ -50,9 +50,9 @@ class SsaControlFlowPruner {
                 val survivingPredecessors = controlFlow.edges.asSequence()
                     .filter { edge ->
                         edge.to == phi.blockId &&
-                            edge.kind != ControlFlowEdgeKind.EXCEPTION &&
-                            edge !in eliminatedEdges &&
-                            edge.from in reachableBlocks
+                                edge.kind != ControlFlowEdgeKind.EXCEPTION &&
+                                edge !in eliminatedEdges &&
+                                edge.from in reachableBlocks
                     }
                     .map { it.from }
                     .toSet()

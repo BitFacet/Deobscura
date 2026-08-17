@@ -1,10 +1,10 @@
 package io.github.relvl.deobscura.controlflow
 
 import io.github.relvl.deobscura.cfg.BasicBlockId
+import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
-import io.github.relvl.deobscura.raw.RawExceptionHandler
-import io.github.relvl.deobscura.raw.RawLabelId
-import java.util.ArrayDeque
+import io.github.relvl.deobscura.raw.*
+import java.util.*
 
 /**
  * Reconstructs conservative source-level `try/catch` regions directly from exception-table ranges.
@@ -23,6 +23,7 @@ internal class StructuredExceptionRecognizer {
     fun recognize(
         graph: ControlFlowGraph,
         facts: ControlFlowFacts,
+        legacySubroutineNormalized: Boolean,
     ): ExceptionRecognition {
         if (graph.code.exceptionHandlers.isEmpty()) return ExceptionRecognition(emptyList(), emptyMap(), 0)
 
@@ -48,14 +49,16 @@ internal class StructuredExceptionRecognizer {
             )
         }
 
-        val regions = mutableListOf<StructuredRegion.TryCatch>()
+        val regions = mutableListOf<StructuredRegion>()
         val rejections = linkedMapOf<ExceptionRegionKey, UnstructuredControlFlowReason>()
+        val consumedGroups = mutableSetOf<ExceptionRegionKey>()
 
         groupTopologies.forEach { topology ->
             val group = topology.group
             val range = group.envelope
             val handlers = group.handlers
             val key = ExceptionRegionKey(range.start, range.endExclusive)
+            if (key in consumedGroups) return@forEach
             val protectedBlocks = extendWithTerminalTransfers(topology.protectedBlocks, facts)
             if (protectedBlocks.isEmpty()) {
                 rejections[key] = UnstructuredControlFlowReason.EXCEPTION_EMPTY_PROTECTED_REGION
@@ -77,7 +80,58 @@ internal class StructuredExceptionRecognizer {
             }
             val handlerEntries = groupedHandlers.keys.filterNotNull().toSet()
             if (handlers.any { it.catchType == null }) {
-                rejections[key] = UnstructuredControlFlowReason.EXCEPTION_CATCH_ALL_UNSUPPORTED
+                val legacyTryCatchFinallyRecognition = if (legacySubroutineNormalized) recognizeLegacySubroutineTryCatchFinally(
+                    graph = graph,
+                    topology = topology,
+                    header = header,
+                    allGroups = groupTopologies,
+                    labelPositions = labelPositions,
+                    facts = facts,
+                ) else null
+                if (legacyTryCatchFinallyRecognition != null) {
+                    regions += legacyTryCatchFinallyRecognition.region
+                    consumedGroups += legacyTryCatchFinallyRecognition.consumedGroupKeys
+                    return@forEach
+                }
+                val legacyFinallyRecognition = if (legacySubroutineNormalized) recognizeLegacySubroutineFinally(
+                    graph = graph,
+                    topology = topology,
+                    header = header,
+                    allGroups = groupTopologies,
+                    labelPositions = labelPositions,
+                    facts = facts,
+                ) else null
+                if (legacyFinallyRecognition != null) {
+                    regions += legacyFinallyRecognition.region
+                    consumedGroups += legacyFinallyRecognition.consumedGroupKeys
+                    return@forEach
+                }
+                val synchronizedRecognition = recognizeSynchronizedMonitor(
+                    graph = graph,
+                    topology = topology,
+                    header = header,
+                    groupedHandlers = groupedHandlers,
+                    allGroups = groupTopologies,
+                    facts = facts,
+                )
+                if (synchronizedRecognition != null) {
+                    regions += synchronizedRecognition.region
+                    consumedGroups += synchronizedRecognition.consumedGroupKeys
+                    return@forEach
+                }
+                val finallyRegion = recognizeCanonicalFinally(
+                    graph = graph,
+                    topology = topology,
+                    header = header,
+                    protectedBlocks = protectedBlocks,
+                    groupedHandlers = groupedHandlers,
+                    facts = facts,
+                )
+                if (finallyRegion != null) {
+                    regions += finallyRegion
+                } else {
+                    rejections[key] = UnstructuredControlFlowReason.EXCEPTION_CATCH_ALL_UNSUPPORTED
+                }
                 return@forEach
             }
             if (hasExternalProtectedEntry(header, protectedBlocks, facts)) {
@@ -122,12 +176,14 @@ internal class StructuredExceptionRecognizer {
                     rejections[key] = UnstructuredControlFlowReason.EXCEPTION_UNSUPPORTED_HANDLER_EXIT
                     return@forEach
                 }
+
                 inferredContinuations.size == 1 -> inferredContinuations.single()
                 inferredContinuations.isEmpty() -> inferLoopBackContinuation(
                     header = header,
                     catches = collectedCatches,
                     facts = facts,
                 )
+
                 else -> {
                     rejections[key] = UnstructuredControlFlowReason.EXCEPTION_NO_COMMON_CONTINUATION
                     return@forEach
@@ -183,8 +239,8 @@ internal class StructuredExceptionRecognizer {
     ): Set<BasicBlockId> = graph.blocks.asSequence()
         .filter { block ->
             block.id in facts.blocks &&
-                block.startInstructionIndex < range.endExclusive &&
-                block.endInstructionIndexExclusive > range.start
+                    block.startInstructionIndex < range.endExclusive &&
+                    block.endInstructionIndexExclusive > range.start
         }
         .mapTo(linkedSetOf()) { it.id }
 
@@ -389,8 +445,8 @@ internal class StructuredExceptionRecognizer {
         val candidates = blocks.asSequence()
             .filter { block ->
                 block != entry &&
-                    block in facts.postDominators[entry].orEmpty() &&
-                    facts.incoming[block].orEmpty().any { edge -> edge.from !in blocks }
+                        block in facts.postDominators[entry].orEmpty() &&
+                        facts.incoming[block].orEmpty().any { edge -> edge.from !in blocks }
             }
             .toList()
         return candidates.firstOrNull { candidate ->
@@ -428,6 +484,834 @@ internal class StructuredExceptionRecognizer {
         if (block in facts.explicitTerminalBlocks) return@all true
         facts.outgoing[block].orEmpty().all { edge -> edge.to in blocks || edge.to == continuation }
     }
+
+    /**
+     * Recognizes javac's canonical monitor-cleanup lowering for a source-level `synchronized` block:
+     *
+     * `astore monitor; monitorenter; BODY; aload monitor; monitorexit; ...`
+     * with a catch-all handler `astore ex; aload monitor; monitorexit; aload ex; athrow`.
+     *
+     * The protected range may include the handler's own `monitorexit`; javac does this so an
+     * exception thrown by monitor exit is routed through the same cleanup path. This recognizer
+     * therefore derives source body ownership from instruction positions instead of treating the
+     * raw protected range as the complete source body.
+     */
+    private fun recognizeSynchronizedMonitor(
+        graph: ControlFlowGraph,
+        topology: ExceptionGroupTopology,
+        header: BasicBlockId,
+        groupedHandlers: Map<BasicBlockId?, List<RawExceptionHandler>>,
+        allGroups: List<ExceptionGroupTopology>,
+        facts: ControlFlowFacts,
+    ): SynchronizedRecognition? {
+        val group = topology.group
+        if (group.handlers.size != 1 || group.handlers.single().catchType != null) return null
+        if (groupedHandlers.size != 1) return null
+
+        val instructions = graph.code.instructions
+        val start = group.envelope.start
+        if (start < 2) return null
+        val monitorEnterInstructionIndex = start - 1
+        val monitorEnter = instructions.getOrNull(monitorEnterInstructionIndex) as? RawMonitorInstruction ?: return null
+        if (monitorEnter.opcode.mnemonic != "monitorenter") return null
+        val monitorSlot = monitorSlotBeforeEnter(instructions, monitorEnterInstructionIndex) ?: return null
+
+        val handlerEntry = groupedHandlers.keys.single() ?: return null
+        val handlerStart = graph.block(handlerEntry).startInstructionIndex
+        val exceptionStore = instructions.getOrNull(handlerStart) as? RawLocalInstruction ?: return null
+        val handlerMonitorLoad = instructions.getOrNull(handlerStart + 1) as? RawLocalInstruction ?: return null
+        val handlerMonitorExit = instructions.getOrNull(handlerStart + 2) as? RawMonitorInstruction ?: return null
+        val exceptionReload = instructions.getOrNull(handlerStart + 3) as? RawLocalInstruction ?: return null
+        if (instructions.getOrNull(handlerStart + 4) !is RawThrowInstruction) return null
+        if (exceptionStore.operation != LocalOperation.STORE || exceptionStore.type != JvmComputationalType.REFERENCE) return null
+        if (handlerMonitorLoad.operation != LocalOperation.LOAD || handlerMonitorLoad.slot != monitorSlot) return null
+        if (handlerMonitorExit.opcode.mnemonic != "monitorexit") return null
+        if (exceptionReload.operation != LocalOperation.LOAD || exceptionReload.slot != exceptionStore.slot) return null
+
+        val normalExitIndices = mutableListOf<Int>()
+        for (index in start until group.envelope.endExclusive) {
+            if (index == handlerStart + 2) continue
+            val exit = instructions[index] as? RawMonitorInstruction ?: continue
+            if (exit.opcode.mnemonic != "monitorexit") return null
+            val load = instructions.getOrNull(index - 1) as? RawLocalInstruction ?: return null
+            if (load.operation != LocalOperation.LOAD || load.slot != monitorSlot) return null
+            normalExitIndices += index
+        }
+        if (normalExitIndices.isEmpty()) return null
+
+        val handlerInstructionIndices = handlerStart..(handlerStart + 4)
+        val handlerBlocks = handlerInstructionIndices.mapNotNullTo(linkedSetOf()) { index ->
+            facts.instructionToBlock.getOrNull(index)
+        }
+        if (handlerBlocks.isEmpty()) return null
+
+        val sourceProtectedBlocks = topology.protectedBlocks - handlerBlocks
+        if (sourceProtectedBlocks.isEmpty()) return null
+        val bodyBlocks = collectSynchronizedBodyBlocks(
+            header = header,
+            protectedBlocks = sourceProtectedBlocks,
+            normalMonitorExitInstructionIndices = normalExitIndices,
+            facts = facts,
+        )
+        if (bodyBlocks.isEmpty()) return null
+        if (hasExternalProtectedEntry(header, bodyBlocks, facts)) return null
+
+        val monitorEnterBlock = facts.instructionToBlock.getOrNull(monitorEnterInstructionIndex) ?: return null
+        val cleanupCompanions = allGroups.filter { candidate ->
+            candidate !== topology &&
+                    candidate.group.handlers.size == 1 &&
+                    candidate.group.handlers.single().catchType == null &&
+                    candidate.group.envelope.start == handlerStart &&
+                    candidate.group.envelope.endExclusive == handlerStart + 3 &&
+                    candidate.handlerEntries == setOf(handlerEntry)
+        }
+        if (cleanupCompanions.size > 1) return null
+        val cleanupRanges = cleanupCompanions.flatMap { companion ->
+            companion.group.segments.map { segment ->
+                StructuredProtectedRange(segment.range.start, segment.range.endExclusive)
+            }
+        }
+
+        val region = StructuredRegion.Synchronized(
+            header = monitorEnterBlock,
+            bodyEntry = header,
+            bodyBlocks = bodyBlocks,
+            handlerEntry = handlerEntry,
+            handlerBlocks = handlerBlocks,
+            monitorSlot = monitorSlot,
+            monitorEnterInstructionIndex = monitorEnterInstructionIndex,
+            normalMonitorExitInstructionIndices = normalExitIndices,
+            handlerMonitorExitInstructionIndex = handlerStart + 2,
+            protectedStartInstructionIndex = group.envelope.start,
+            protectedEndInstructionIndexExclusive = group.envelope.endExclusive,
+            protectedRanges = group.segments.map { segment ->
+                StructuredProtectedRange(segment.range.start, segment.range.endExclusive)
+            },
+            syntheticCleanupProtectedRanges = cleanupRanges,
+        )
+        return SynchronizedRecognition(
+            region = region,
+            consumedGroupKeys = cleanupCompanions.mapTo(linkedSetOf()) { companion ->
+                ExceptionRegionKey(companion.group.envelope.start, companion.group.envelope.endExclusive)
+            },
+        )
+    }
+
+    private fun monitorSlotBeforeEnter(
+        instructions: List<RawInstruction>,
+        monitorEnterInstructionIndex: Int,
+    ): Int? {
+        val immediate = instructions.getOrNull(monitorEnterInstructionIndex - 1) as? RawLocalInstruction
+        if (immediate?.operation == LocalOperation.STORE && immediate.type == JvmComputationalType.REFERENCE) {
+            return immediate.slot
+        }
+        if (immediate?.operation != LocalOperation.LOAD || immediate.type != JvmComputationalType.REFERENCE) return null
+        val store = instructions.getOrNull(monitorEnterInstructionIndex - 2) as? RawLocalInstruction ?: return null
+        return store.slot.takeIf {
+            store.operation == LocalOperation.STORE &&
+                    store.type == JvmComputationalType.REFERENCE &&
+                    store.slot == immediate.slot
+        }
+    }
+
+    private data class SynchronizedRecognition(
+        val region: StructuredRegion.Synchronized,
+        val consumedGroupKeys: Set<ExceptionRegionKey>,
+    )
+
+    private fun collectSynchronizedBodyBlocks(
+        header: BasicBlockId,
+        protectedBlocks: Set<BasicBlockId>,
+        normalMonitorExitInstructionIndices: List<Int>,
+        facts: ControlFlowFacts,
+    ): Set<BasicBlockId> {
+        val normalExitBlocks = normalMonitorExitInstructionIndices.mapNotNullTo(linkedSetOf()) { index ->
+            facts.instructionToBlock.getOrNull(index)
+        }
+        if (normalExitBlocks.isEmpty()) return emptySet()
+
+        val result = linkedSetOf<BasicBlockId>()
+        val pending = ArrayDeque<BasicBlockId>()
+        pending += header
+        while (pending.isNotEmpty()) {
+            val block = pending.removeFirst()
+            if (block !in protectedBlocks || !result.add(block)) continue
+
+            // The block containing the normal monitorexit is still part of the synchronized
+            // body, but control reached after that instruction is already outside the source
+            // synchronized statement. Do not absorb successor blocks from that point onward.
+            if (block in normalExitBlocks) continue
+
+            facts.outgoing[block].orEmpty()
+                .asSequence()
+                .filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION && edge.to in protectedBlocks }
+                .mapTo(pending) { edge -> edge.to }
+        }
+        return result
+    }
+
+    /**
+     * Recognizes old javac `try/catch/finally` after JSR/RET normalization. The primary protected
+     * range carries both typed catches and the catch-all finally handler, while additional ranges
+     * protect the catch bodies themselves with the same finally handler.
+     */
+    private fun recognizeLegacySubroutineTryCatchFinally(
+        graph: ControlFlowGraph,
+        topology: ExceptionGroupTopology,
+        header: BasicBlockId,
+        allGroups: List<ExceptionGroupTopology>,
+        labelPositions: Map<RawLabelId, Int>,
+        facts: ControlFlowFacts,
+    ): LegacyTryCatchFinallyRecognition? {
+        val group = topology.group
+        val catchAllHandlers = group.handlers.filter { it.catchType == null }
+        val typedHandlers = group.handlers.filter { it.catchType != null }
+        if (catchAllHandlers.size != 1 || typedHandlers.isEmpty()) return null
+
+        val catchAll = catchAllHandlers.single()
+        val handlerInstructionIndex = labelPosition(labelPositions, catchAll.handler)
+        val handlerEntry = facts.instructionToBlock.getOrNull(handlerInstructionIndex) ?: return null
+        val handlerInstructions = graph.instructions(graph.block(handlerEntry))
+        if (handlerInstructions.size != 3) return null
+
+        val store = handlerInstructions[0] as? RawLocalInstruction ?: return null
+        if (store.operation != LocalOperation.STORE || store.type != JvmComputationalType.REFERENCE) return null
+        val nullSeed = handlerInstructions[1] as? RawConstantInstruction ?: return null
+        if (nullSeed.opcode.mnemonic != "aconst_null") return null
+        val trampoline = handlerInstructions[2] as? RawBranchInstruction ?: return null
+        if (trampoline.opcode.mnemonic !in setOf("goto", "goto_w")) return null
+
+        val bodyEntry = facts.outgoing[handlerEntry].orEmpty()
+            .filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION }
+            .map { edge -> edge.to }
+            .distinct()
+            .singleOrNull() ?: return null
+        val reachable = collectAcyclicNormalRegion(bodyEntry, facts) ?: return null
+        val rethrowBlocks = reachable.filter { block -> isCanonicalRethrowBlock(graph, block, store.slot) }
+        if (rethrowBlocks.size != 1) return null
+        val rethrow = rethrowBlocks.single()
+
+        val bodyBlocks = collectUntil(bodyEntry, rethrow, facts)
+        if (bodyBlocks.isEmpty() || rethrow in bodyBlocks) return null
+        if (bodyBlocks.any { block -> rethrow !in facts.postDominators[block].orEmpty() }) return null
+        if (bodyBlocks.any { block -> graph.instructions(graph.block(block)).any { it is RawSwitchInstruction } }) return null
+        if (bodyBlocks.any { block ->
+                facts.outgoing[block].orEmpty().any { edge -> edge.to !in bodyBlocks && edge.to != rethrow }
+            }) return null
+
+        val finallyHandlerBlocks = linkedSetOf<BasicBlockId>().apply {
+            add(handlerEntry)
+            addAll(bodyBlocks)
+            add(rethrow)
+        }
+        val candidateEntries = graph.blocks.asSequence()
+            .map { it.id }
+            .filter { it !in finallyHandlerBlocks }
+            .filter { candidate -> hasLegacyFinallyCallSite(candidate, graph, facts) }
+            .toList()
+        val matches = candidateEntries.mapNotNull { candidate ->
+            matchFinallyBodyGraph(
+                graph = graph,
+                handlerEntry = bodyEntry,
+                handlerBlocks = bodyBlocks,
+                handlerExit = rethrow,
+                handlerEntryInstructionOffset = 0,
+                normalEntry = candidate,
+                facts = facts,
+            )
+        }
+        if (matches.isEmpty()) return null
+        val continuations = matches.mapTo(linkedSetOf()) { it.continuation }
+        if (continuations.size != 1) return null
+        val continuation = continuations.single()
+
+        val catchAllRelated = allGroups.filter { candidate ->
+            candidate.group.handlers.any { handler ->
+                handler.catchType == null && labelPosition(labelPositions, handler.handler) == handlerInstructionIndex
+            }
+        }
+        // Keep this first slice unambiguous: one mixed primary range plus any catch-all-only ranges
+        // protecting its catch bodies / synthetic finally transfers. Additional mixed ranges sharing
+        // the same finally handler represent nested exception structure and are handled separately.
+        val mixedRelated = catchAllRelated.filter { candidate -> candidate.group.handlers.any { it.catchType != null } }
+        if (mixedRelated.size != 1 || mixedRelated.single() !== topology) return null
+        val catchAllFamily = catchAllRelated
+
+        val sourceTryBlocks = extendWithTerminalTransfers(topology.protectedBlocks, facts) - finallyHandlerBlocks
+        if (header !in sourceTryBlocks) return null
+        if (hasExternalProtectedEntry(header, sourceTryBlocks, facts)) return null
+
+        val typedByEntry = typedHandlers.groupBy { handler ->
+            facts.instructionToBlock.getOrNull(labelPosition(labelPositions, handler.handler))
+        }
+        if (typedByEntry.keys.any { it == null }) return null
+        val typedEntries = typedByEntry.keys.filterNotNull().toSet()
+        val catches = mutableListOf<StructuredCatch>()
+        val occupiedCatchBlocks = linkedSetOf<BasicBlockId>()
+        for ((entryOrNull, entries) in typedByEntry.entries.sortedBy { it.key?.value ?: Int.MAX_VALUE }) {
+            val entry = requireNotNull(entryOrNull)
+            val blocks = collectLegacyCatchBody(
+                entry = entry,
+                protectedBlocks = sourceTryBlocks,
+                otherHandlerEntries = typedEntries + handlerEntry,
+                finallyCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks },
+                graph = graph,
+                facts = facts,
+            ) ?: return null
+            if (blocks.isEmpty() || blocks.any { it in occupiedCatchBlocks }) return null
+            if (hasExternalHandlerEntry(entry, blocks, typedEntries, facts)) return null
+            occupiedCatchBlocks += blocks
+            catches += StructuredCatch(
+                catchTypes = entries.mapNotNull { it.catchType }.distinct(),
+                entry = entry,
+                blocks = blocks,
+            )
+        }
+
+        val handlerRange = contiguousInstructionRange(bodyBlocks, graph) ?: return null
+        val protectedRanges = catchAllFamily
+            .flatMap { candidate -> candidate.group.segments }
+            .sortedWith(compareBy<ExceptionTableSegment> { it.range.start }.thenBy { it.range.endExclusive })
+            .map { segment -> StructuredProtectedRange(segment.range.start, segment.range.endExclusive) }
+            .distinct()
+        val firstRange = protectedRanges.first()
+        val lastRange = protectedRanges.last()
+        val region = StructuredRegion.TryCatchFinally(
+            header = header,
+            tryBlocks = sourceTryBlocks,
+            catches = catches,
+            handlerEntry = handlerEntry,
+            handlerBlocks = finallyHandlerBlocks,
+            finallyBodyInstructionIndices = handlerRange,
+            normalCopyInstructionIndices = matches.map { it.instructionRange },
+            normalCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks },
+            continuation = continuation,
+            protectedStartInstructionIndex = firstRange.startInstructionIndex,
+            protectedEndInstructionIndexExclusive = lastRange.endInstructionIndexExclusive,
+            protectedRanges = protectedRanges,
+        )
+        return LegacyTryCatchFinallyRecognition(
+            region = region,
+            consumedGroupKeys = catchAllFamily.mapTo(linkedSetOf()) { candidate ->
+                ExceptionRegionKey(candidate.group.envelope.start, candidate.group.envelope.endExclusive)
+            },
+        )
+    }
+
+    private fun collectLegacyCatchBody(
+        entry: BasicBlockId,
+        protectedBlocks: Set<BasicBlockId>,
+        otherHandlerEntries: Set<BasicBlockId>,
+        finallyCopyBlocks: Set<BasicBlockId>,
+        graph: ControlFlowGraph,
+        facts: ControlFlowFacts,
+    ): Set<BasicBlockId>? {
+        val result = linkedSetOf<BasicBlockId>()
+        val pending = ArrayDeque<BasicBlockId>()
+        pending += entry
+        while (pending.isNotEmpty()) {
+            val block = pending.removeFirst()
+            if (block in protectedBlocks || block in finallyCopyBlocks || (block != entry && block in otherHandlerEntries)) continue
+            if (!result.add(block)) continue
+            if (block in facts.explicitTerminalBlocks) continue
+
+            val outgoing = facts.outgoing[block].orEmpty()
+            for (edge in outgoing) {
+                if (edge.to in finallyCopyBlocks) continue
+                if (edge.to in protectedBlocks || edge.to in otherHandlerEntries) return null
+                pending += edge.to
+            }
+        }
+        if (result.isEmpty()) return null
+        // Do not let the catch walk escape into arbitrary post-try flow. A non-terminal boundary is
+        // valid here only when it enters a proven cloned finally body.
+        val hasUnsupportedBoundary = result.any { block ->
+            if (block in facts.explicitTerminalBlocks) return@any false
+            facts.outgoing[block].orEmpty().any { edge -> edge.to !in result && edge.to !in finallyCopyBlocks }
+        }
+        return result.takeUnless { hasUnsupportedBoundary }
+    }
+
+    private data class LegacyTryCatchFinallyRecognition(
+        val region: StructuredRegion.TryCatchFinally,
+        val consumedGroupKeys: Set<ExceptionRegionKey>,
+    )
+
+    /**
+     * Recognizes the characteristic shape left by `LegacySubroutineNormalizer` for old javac
+     * JSR/RET finally blocks. The normalizer replaces every JSR call with `aconst_null; goto`
+     * and clones the subroutine body per return site, so one source finally can leave several
+     * catch-all exception-table groups that all target the same exceptional trampoline.
+     *
+     * This slice is intentionally strict: the catch-all handler must be
+     * `astore ex; aconst_null; goto FINALLY_COPY`, the exceptional copy must end in
+     * `aload ex; athrow`, and at least one normal copy must be entered through the same synthetic
+     * `aconst_null; goto` call-site marker and be graph-equivalent to the exceptional copy.
+     */
+    private fun recognizeLegacySubroutineFinally(
+        graph: ControlFlowGraph,
+        topology: ExceptionGroupTopology,
+        header: BasicBlockId,
+        allGroups: List<ExceptionGroupTopology>,
+        labelPositions: Map<RawLabelId, Int>,
+        facts: ControlFlowFacts,
+    ): LegacyFinallyRecognition? {
+        val group = topology.group
+        if (group.handlers.size != 1 || group.handlers.single().catchType != null) return null
+
+        val signature = handlerSignature(group.handlers, labelPositions)
+        val handlerInstructionIndex = signature.single().handlerInstructionIndex
+        val handlerEntry = facts.instructionToBlock.getOrNull(handlerInstructionIndex) ?: return null
+        val handlerInstructions = graph.instructions(graph.block(handlerEntry))
+        if (handlerInstructions.size != 3) return null
+
+        val store = handlerInstructions[0] as? RawLocalInstruction ?: return null
+        if (store.operation != LocalOperation.STORE || store.type != JvmComputationalType.REFERENCE) return null
+        val nullSeed = handlerInstructions[1] as? RawConstantInstruction ?: return null
+        if (nullSeed.opcode.mnemonic != "aconst_null") return null
+        val trampoline = handlerInstructions[2] as? RawBranchInstruction ?: return null
+        if (trampoline.opcode.mnemonic !in setOf("goto", "goto_w")) return null
+
+        val bodyEntry = facts.outgoing[handlerEntry].orEmpty()
+            .filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION }
+            .map { edge -> edge.to }
+            .distinct()
+            .singleOrNull() ?: return null
+        val reachable = collectAcyclicNormalRegion(bodyEntry, facts) ?: return null
+        val rethrowBlocks = reachable.filter { block -> isCanonicalRethrowBlock(graph, block, store.slot) }
+        if (rethrowBlocks.size != 1) return null
+        val rethrow = rethrowBlocks.single()
+
+        val bodyBlocks = collectUntil(bodyEntry, rethrow, facts)
+        if (bodyBlocks.isEmpty() || rethrow in bodyBlocks) return null
+        if (bodyBlocks.any { block -> rethrow !in facts.postDominators[block].orEmpty() }) return null
+        if (bodyBlocks.any { block -> graph.instructions(graph.block(block)).any { it is RawSwitchInstruction } }) return null
+        if (bodyBlocks.any { block ->
+                facts.outgoing[block].orEmpty().any { edge -> edge.to !in bodyBlocks && edge.to != rethrow }
+            }) return null
+
+        val handlerBlocks = linkedSetOf<BasicBlockId>().apply {
+            add(handlerEntry)
+            addAll(bodyBlocks)
+            add(rethrow)
+        }
+        val candidateEntries = graph.blocks.asSequence()
+            .map { it.id }
+            .filter { it !in handlerBlocks }
+            .filter { candidate -> hasLegacyFinallyCallSite(candidate, graph, facts) }
+            .toList()
+        val matches = candidateEntries.mapNotNull { candidate ->
+            matchFinallyBodyGraph(
+                graph = graph,
+                handlerEntry = bodyEntry,
+                handlerBlocks = bodyBlocks,
+                handlerExit = rethrow,
+                handlerEntryInstructionOffset = 0,
+                normalEntry = candidate,
+                facts = facts,
+            )
+        }
+        if (matches.isEmpty()) return null
+        val continuations = matches.mapTo(linkedSetOf()) { it.continuation }
+        if (continuations.size != 1) return null
+
+        val family = allGroups.filter { candidate ->
+            handlerSignature(candidate.group.handlers, labelPositions) == signature
+        }
+        if (family.isEmpty()) return null
+        val protectedBlocks = family.flatMapTo(linkedSetOf()) { candidate ->
+            extendWithTerminalTransfers(candidate.protectedBlocks, facts)
+        } - handlerBlocks
+        if (header !in protectedBlocks) return null
+
+        val handlerRange = contiguousInstructionRange(bodyBlocks, graph) ?: return null
+        val protectedRanges = family
+            .flatMap { candidate -> candidate.group.segments }
+            .sortedWith(compareBy<ExceptionTableSegment> { it.range.start }.thenBy { it.range.endExclusive })
+            .map { segment -> StructuredProtectedRange(segment.range.start, segment.range.endExclusive) }
+        val firstRange = protectedRanges.first()
+        val lastRange = protectedRanges.last()
+        val region = StructuredRegion.TryFinally(
+            header = header,
+            tryBlocks = protectedBlocks,
+            handlerEntry = handlerEntry,
+            handlerBlocks = handlerBlocks,
+            finallyBodyInstructionIndices = handlerRange,
+            normalCopyInstructionIndices = matches.map { it.instructionRange },
+            normalCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks },
+            continuation = continuations.single(),
+            protectedStartInstructionIndex = firstRange.startInstructionIndex,
+            protectedEndInstructionIndexExclusive = lastRange.endInstructionIndexExclusive,
+            protectedRanges = protectedRanges,
+        )
+        return LegacyFinallyRecognition(
+            region = region,
+            consumedGroupKeys = family.mapTo(linkedSetOf()) { candidate ->
+                ExceptionRegionKey(candidate.group.envelope.start, candidate.group.envelope.endExclusive)
+            },
+        )
+    }
+
+    private fun hasLegacyFinallyCallSite(
+        bodyEntry: BasicBlockId,
+        graph: ControlFlowGraph,
+        facts: ControlFlowFacts,
+    ): Boolean = facts.incoming[bodyEntry].orEmpty().any { edge ->
+        if (edge.kind == ControlFlowEdgeKind.EXCEPTION) return@any false
+        val instructions = graph.instructions(graph.block(edge.from))
+        if (instructions.size < 2) return@any false
+        val nullSeed = instructions[instructions.lastIndex - 1] as? RawConstantInstruction ?: return@any false
+        val jump = instructions.last() as? RawBranchInstruction ?: return@any false
+        nullSeed.opcode.mnemonic == "aconst_null" && jump.opcode.mnemonic in setOf("goto", "goto_w")
+    }
+
+    private fun contiguousInstructionRange(
+        blocks: Set<BasicBlockId>,
+        graph: ControlFlowGraph,
+    ): IntRange? {
+        val physical = blocks.map(graph::block).sortedBy { it.startInstructionIndex }
+        if (physical.isEmpty()) return null
+        val first = physical.first().startInstructionIndex
+        val last = physical.last().endInstructionIndexExclusive - 1
+        val instructionCount = physical.sumOf { it.endInstructionIndexExclusive - it.startInstructionIndex }
+        return (first..last).takeIf { it.count() == instructionCount }
+    }
+
+    private data class LegacyFinallyRecognition(
+        val region: StructuredRegion.TryFinally,
+        val consumedGroupKeys: Set<ExceptionRegionKey>,
+    )
+
+    private fun recognizeCanonicalFinally(
+        graph: ControlFlowGraph,
+        topology: ExceptionGroupTopology,
+        header: BasicBlockId,
+        protectedBlocks: Set<BasicBlockId>,
+        groupedHandlers: Map<BasicBlockId?, List<RawExceptionHandler>>,
+        facts: ControlFlowFacts,
+    ): StructuredRegion.TryFinally? = recognizeLinearCanonicalFinally(
+        graph,
+        topology,
+        header,
+        protectedBlocks,
+        groupedHandlers,
+        facts,
+    ) ?: recognizeBranchingCanonicalFinally(
+        graph,
+        topology,
+        header,
+        protectedBlocks,
+        groupedHandlers,
+        facts,
+    )
+
+    /**
+     * First safe finally slice: a single linear catch-all handler
+     * `astore ex; BODY; aload ex; athrow` whose BODY occurs verbatim at the start of a normal exit.
+     */
+    private fun recognizeLinearCanonicalFinally(
+        graph: ControlFlowGraph,
+        topology: ExceptionGroupTopology,
+        header: BasicBlockId,
+        protectedBlocks: Set<BasicBlockId>,
+        groupedHandlers: Map<BasicBlockId?, List<RawExceptionHandler>>,
+        facts: ControlFlowFacts,
+    ): StructuredRegion.TryFinally? {
+        val group = topology.group
+        if (group.handlers.size != 1 || group.handlers.single().catchType != null) return null
+        if (groupedHandlers.size != 1) return null
+        if (hasExternalProtectedEntry(header, protectedBlocks, facts)) return null
+
+        val handlerEntry = groupedHandlers.keys.single() ?: return null
+        val handlerBlock = graph.block(handlerEntry)
+        val handlerInstructions = graph.instructions(handlerBlock)
+        if (handlerInstructions.size < 4) return null
+
+        val store = handlerInstructions.first() as? RawLocalInstruction ?: return null
+        if (store.operation != LocalOperation.STORE || store.type != JvmComputationalType.REFERENCE) return null
+        val reload = handlerInstructions[handlerInstructions.lastIndex - 1] as? RawLocalInstruction ?: return null
+        if (reload.operation != LocalOperation.LOAD || reload.slot != store.slot) return null
+        if (handlerInstructions.last() !is RawThrowInstruction) return null
+
+        val body = handlerInstructions.subList(1, handlerInstructions.size - 2)
+        if (body.isEmpty() || body.any(::isControlTransfer)) return null
+
+        val boundaryTargets = normalBoundaryTargets(protectedBlocks, setOf(handlerEntry), facts)
+        if (boundaryTargets.isEmpty()) return null
+        val matches = boundaryTargets.mapNotNull { target ->
+            val block = graph.block(target)
+            val instructions = graph.instructions(block)
+            if (instructions.size < body.size || instructions.subList(0, body.size) != body) return@mapNotNull null
+            target to (block.startInstructionIndex..(block.startInstructionIndex + body.size - 1))
+        }
+        if (matches.isEmpty()) return null
+
+        val continuationCandidates = matches.mapNotNullTo(linkedSetOf()) { (target, _) ->
+            facts.outgoing[target].orEmpty().map { it.to }.distinct().singleOrNull()
+        }
+        if (continuationCandidates.size > 1) return null
+
+        val handlerBodyStart = handlerBlock.startInstructionIndex + 1
+        return StructuredRegion.TryFinally(
+            header = header,
+            tryBlocks = protectedBlocks,
+            handlerEntry = handlerEntry,
+            handlerBlocks = setOf(handlerEntry),
+            finallyBodyInstructionIndices = handlerBodyStart..(handlerBodyStart + body.size - 1),
+            normalCopyInstructionIndices = matches.map { it.second },
+            normalCopyBlocks = matches.mapTo(linkedSetOf()) { it.first },
+            continuation = continuationCandidates.singleOrNull(),
+            protectedStartInstructionIndex = group.envelope.start,
+            protectedEndInstructionIndexExclusive = group.envelope.endExclusive,
+            protectedRanges = group.segments.map { segment ->
+                StructuredProtectedRange(segment.range.start, segment.range.endExclusive)
+            },
+        )
+    }
+
+    /**
+     * Second safe finally slice: a canonical catch-all whose body is a small acyclic CFG ending
+     * at `aload ex; athrow`, with an isomorphic copy on a normal exit. Branch targets may differ,
+     * but instruction semantics and edge kinds must match exactly.
+     */
+    private fun recognizeBranchingCanonicalFinally(
+        graph: ControlFlowGraph,
+        topology: ExceptionGroupTopology,
+        header: BasicBlockId,
+        protectedBlocks: Set<BasicBlockId>,
+        groupedHandlers: Map<BasicBlockId?, List<RawExceptionHandler>>,
+        facts: ControlFlowFacts,
+    ): StructuredRegion.TryFinally? {
+        val group = topology.group
+        if (group.handlers.size != 1 || group.handlers.single().catchType != null) return null
+        if (groupedHandlers.size != 1) return null
+        if (hasExternalProtectedEntry(header, protectedBlocks, facts)) return null
+
+        val handlerEntry = groupedHandlers.keys.single() ?: return null
+        val entryBlock = graph.block(handlerEntry)
+        val entryInstructions = graph.instructions(entryBlock)
+        if (entryInstructions.isEmpty()) return null
+        val store = entryInstructions.first() as? RawLocalInstruction ?: return null
+        if (store.operation != LocalOperation.STORE || store.type != JvmComputationalType.REFERENCE) return null
+
+        val handlerEntryInstructionOffset: Int
+        val bodyEntry: BasicBlockId
+        if (entryInstructions.size == 1) {
+            handlerEntryInstructionOffset = 0
+            bodyEntry = facts.outgoing[handlerEntry].orEmpty().map { it.to }.distinct().singleOrNull() ?: return null
+        } else {
+            handlerEntryInstructionOffset = 1
+            bodyEntry = handlerEntry
+        }
+        val reachable = collectAcyclicNormalRegion(bodyEntry, facts) ?: return null
+        val rethrowBlocks = reachable.filter { block -> isCanonicalRethrowBlock(graph, block, store.slot) }
+        if (rethrowBlocks.size != 1) return null
+        val rethrow = rethrowBlocks.single()
+
+        val bodyBlocks = collectUntil(bodyEntry, rethrow, facts) ?: return null
+        if (bodyBlocks.isEmpty() || rethrow in bodyBlocks) return null
+        if (bodyBlocks.any { block -> rethrow !in facts.postDominators[block].orEmpty() }) return null
+        if (bodyBlocks.any { block -> graph.instructions(graph.block(block)).any { it is RawSwitchInstruction } }) return null
+        if (bodyBlocks.any { block -> facts.outgoing[block].orEmpty().any { edge -> edge.to !in bodyBlocks && edge.to != rethrow } }) return null
+
+        val boundaryTargets = normalBoundaryTargets(protectedBlocks, setOf(handlerEntry), facts)
+        if (boundaryTargets.isEmpty()) return null
+
+        val matches = boundaryTargets.mapNotNull { target ->
+            matchFinallyBodyGraph(
+                graph = graph,
+                handlerEntry = bodyEntry,
+                handlerBlocks = bodyBlocks,
+                handlerExit = rethrow,
+                handlerEntryInstructionOffset = handlerEntryInstructionOffset,
+                normalEntry = target,
+                facts = facts,
+            )
+        }
+        if (matches.isEmpty()) return null
+        val continuations = matches.mapTo(linkedSetOf()) { it.continuation }
+        if (continuations.size != 1) return null
+
+        val handlerRange = bodyBlocks.asSequence()
+            .map(graph::block)
+            .sortedBy { it.startInstructionIndex }
+            .let { blocks ->
+                val list = blocks.toList()
+                val first = list.first().startInstructionIndex + handlerEntryInstructionOffset
+                val last = list.last().endInstructionIndexExclusive - 1
+                val instructionCount = list.sumOf { it.endInstructionIndexExclusive - it.startInstructionIndex } -
+                        handlerEntryInstructionOffset
+                if ((first..last).count() != instructionCount) return null
+                first..last
+            }
+
+        return StructuredRegion.TryFinally(
+            header = header,
+            tryBlocks = protectedBlocks,
+            handlerEntry = handlerEntry,
+            handlerBlocks = linkedSetOf<BasicBlockId>().apply {
+                add(handlerEntry)
+                addAll(bodyBlocks)
+                add(rethrow)
+            },
+            finallyBodyInstructionIndices = handlerRange,
+            normalCopyInstructionIndices = matches.map { it.instructionRange },
+            normalCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks },
+            continuation = continuations.single(),
+            protectedStartInstructionIndex = group.envelope.start,
+            protectedEndInstructionIndexExclusive = group.envelope.endExclusive,
+            protectedRanges = group.segments.map { segment ->
+                StructuredProtectedRange(segment.range.start, segment.range.endExclusive)
+            },
+        )
+    }
+
+    private fun collectAcyclicNormalRegion(
+        entry: BasicBlockId,
+        facts: ControlFlowFacts,
+    ): Set<BasicBlockId>? {
+        val result = linkedSetOf<BasicBlockId>()
+        val visiting = mutableSetOf<BasicBlockId>()
+
+        fun visit(block: BasicBlockId): Boolean {
+            if (block in result) return true
+            if (!visiting.add(block)) return false
+            for (edge in facts.outgoing[block].orEmpty()) {
+                if (!visit(edge.to)) return false
+            }
+            visiting.remove(block)
+            result += block
+            return true
+        }
+
+        return result.takeIf { visit(entry) }
+    }
+
+    private fun collectUntil(
+        entry: BasicBlockId,
+        stop: BasicBlockId,
+        facts: ControlFlowFacts,
+    ): Set<BasicBlockId> {
+        val result = linkedSetOf<BasicBlockId>()
+        val queue = ArrayDeque<BasicBlockId>()
+        queue += entry
+        while (queue.isNotEmpty()) {
+            val block = queue.removeFirst()
+            if (block == stop || !result.add(block)) continue
+            for (edge in facts.outgoing[block].orEmpty()) {
+                if (edge.to != stop) queue += edge.to
+            }
+        }
+        return result
+    }
+
+    private fun isCanonicalRethrowBlock(
+        graph: ControlFlowGraph,
+        block: BasicBlockId,
+        exceptionSlot: Int,
+    ): Boolean {
+        val instructions = graph.instructions(graph.block(block))
+        if (instructions.size != 2) return false
+        val reload = instructions[0] as? RawLocalInstruction ?: return false
+        return reload.operation == LocalOperation.LOAD &&
+                reload.type == JvmComputationalType.REFERENCE &&
+                reload.slot == exceptionSlot &&
+                instructions[1] is RawThrowInstruction
+    }
+
+    private data class FinallyBodyMatch(
+        val blocks: Set<BasicBlockId>,
+        val continuation: BasicBlockId,
+        val instructionRange: IntRange,
+    )
+
+    private fun matchFinallyBodyGraph(
+        graph: ControlFlowGraph,
+        handlerEntry: BasicBlockId,
+        handlerBlocks: Set<BasicBlockId>,
+        handlerExit: BasicBlockId,
+        handlerEntryInstructionOffset: Int,
+        normalEntry: BasicBlockId,
+        facts: ControlFlowFacts,
+    ): FinallyBodyMatch? {
+        val mapping = linkedMapOf<BasicBlockId, BasicBlockId>()
+        var continuation: BasicBlockId? = null
+
+        fun match(handlerBlock: BasicBlockId, normalBlock: BasicBlockId): Boolean {
+            mapping[handlerBlock]?.let { return it == normalBlock }
+            if (normalBlock in mapping.values) return false
+            mapping[handlerBlock] = normalBlock
+
+            val left = graph.instructions(graph.block(handlerBlock)).let { instructions ->
+                if (handlerBlock == handlerEntry && handlerEntryInstructionOffset != 0) {
+                    instructions.drop(handlerEntryInstructionOffset)
+                } else {
+                    instructions
+                }
+            }
+            val right = graph.instructions(graph.block(normalBlock))
+            val rightBody = if (
+                right.size == left.size + 1 &&
+                right.last() is RawBranchInstruction &&
+                (right.last() as RawBranchInstruction).opcode.mnemonic == "goto"
+            ) {
+                right.dropLast(1)
+            } else {
+                right
+            }
+            if (left.size != rightBody.size || left.indices.any { !equivalentFinallyInstruction(left[it], rightBody[it]) }) {
+                return false
+            }
+
+            val leftEdges = facts.outgoing[handlerBlock].orEmpty()
+            val rightEdges = facts.outgoing[normalBlock].orEmpty()
+            if (leftEdges.size != rightEdges.size) return false
+
+            for (leftEdge in leftEdges) {
+                val sameKind = rightEdges.filter { it.kind == leftEdge.kind }
+                val candidates = if (leftEdge.to == handlerExit && sameKind.isEmpty() && rightEdges.size == 1) {
+                    rightEdges
+                } else {
+                    sameKind
+                }
+                if (candidates.size != 1) return false
+                val rightTarget = candidates.single().to
+                if (leftEdge.to == handlerExit) {
+                    if (continuation != null && continuation != rightTarget) return false
+                    continuation = rightTarget
+                } else {
+                    if (leftEdge.to !in handlerBlocks || !match(leftEdge.to, rightTarget)) return false
+                }
+            }
+            return true
+        }
+
+        if (!match(handlerEntry, normalEntry)) return null
+        val resolvedContinuation = continuation ?: return null
+        val normalBlocks = mapping.values.toSet()
+        if (resolvedContinuation in normalBlocks) return null
+        if (normalBlocks.any { block -> facts.incoming[block].orEmpty().any { it.from !in normalBlocks && block != normalEntry } }) return null
+
+        val physical = normalBlocks.map(graph::block).sortedBy { it.startInstructionIndex }
+        val first = physical.first().startInstructionIndex
+        val last = physical.last().endInstructionIndexExclusive - 1
+        if ((first..last).count() != physical.sumOf { it.endInstructionIndexExclusive - it.startInstructionIndex }) return null
+        return FinallyBodyMatch(normalBlocks, resolvedContinuation, first..last)
+    }
+
+    private fun equivalentFinallyInstruction(
+        left: RawInstruction,
+        right: RawInstruction,
+    ): Boolean = when {
+        left is RawBranchInstruction && right is RawBranchInstruction -> left.opcode == right.opcode
+        else -> left == right
+    }
+
+    private fun isControlTransfer(instruction: RawInstruction): Boolean =
+        instruction is RawBranchInstruction ||
+                instruction is RawSwitchInstruction ||
+                instruction is RawReturnInstruction ||
+                instruction is RawThrowInstruction
 
     private fun labelPosition(positions: Map<RawLabelId, Int>, label: RawLabelId): Int =
         requireNotNull(positions[label]) { "Unknown exception-table label ${label.value}." }
@@ -478,7 +1362,7 @@ internal data class ExceptionRegionKey(
 )
 
 internal data class ExceptionRecognition(
-    val regions: List<StructuredRegion.TryCatch>,
+    val regions: List<StructuredRegion>,
     val rejections: Map<ExceptionRegionKey, UnstructuredControlFlowReason>,
     val regionCount: Int,
 )

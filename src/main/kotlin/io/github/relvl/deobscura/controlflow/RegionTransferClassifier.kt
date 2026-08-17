@@ -21,12 +21,15 @@ internal class RegionTransferClassifier {
                 entry == continuation -> listOf(
                     StructuredRegionTransfer(header, continuation, StructuredRegionTransferKind.NORMAL_SWITCH_COMPLETION),
                 )
+
                 loopContext?.exit == entry -> listOf(
                     StructuredRegionTransfer(header, entry, StructuredRegionTransferKind.BREAK_LOOP),
                 )
+
                 entry in loopContext?.continueTargets.orEmpty() -> listOf(
                     StructuredRegionTransfer(header, entry, StructuredRegionTransferKind.CONTINUE_LOOP),
                 )
+
                 else -> emptyList()
             }
         }

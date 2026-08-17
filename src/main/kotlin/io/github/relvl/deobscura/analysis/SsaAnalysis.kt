@@ -63,7 +63,7 @@ sealed interface SsaValueDefinition {
         val inputs: List<SsaPhiInput>,
     ) : SsaValueDefinition {
         constructor(id: ValueId, kind: FrameValueKind, blockId: BasicBlockId, location: SsaPhiLocation, inputs: List<SsaPhiInput>) :
-            this(id, JvmValueType.of(kind), blockId, location, inputs)
+                this(id, JvmValueType.of(kind), blockId, location, inputs)
     }
 }
 
