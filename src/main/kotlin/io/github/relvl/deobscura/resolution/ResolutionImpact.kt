@@ -32,7 +32,7 @@ data class ResolutionRequest(
 )
 
 internal class ResolutionImpactTracker {
-    private val unresolvedUses = linkedMapOf<String, MutableList<ResolutionRequest>>()
+    private val unresolvedUses = linkedMapOf<String, MutableSet<ResolutionRequest>>()
 
     fun record(
         internalName: String,
@@ -41,7 +41,7 @@ internal class ResolutionImpactTracker {
         impact: ResolutionImpact,
     ) {
         unresolvedUses
-            .getOrPut(internalName) { mutableListOf() }
+            .getOrPut(internalName) { linkedSetOf() }
             .add(ResolutionRequest(purpose, consumer, impact))
     }
 

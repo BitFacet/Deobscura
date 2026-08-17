@@ -70,6 +70,8 @@ internal class FrameDiagnosticStats {
     private var analyzedMethodCount = 0
     private var frameMergeCount = 0L
     private var valueMergeCount = 0L
+    private var referenceMergeCount = 0L
+    private var impreciseReferenceMergeCount = 0L
     var stackInconsistencyCount = 0
     var unsupportedInstructionCount = 0
     var failureCount = 0
@@ -78,6 +80,8 @@ internal class FrameDiagnosticStats {
         analyzedMethodCount++
         frameMergeCount += analysis.frameMergeCount
         valueMergeCount += analysis.valueMergeCount
+        referenceMergeCount += analysis.referenceMergeCount
+        impreciseReferenceMergeCount += analysis.impreciseReferenceMergeCount
     }
 
     fun log(logger: Logger) {
@@ -87,6 +91,11 @@ internal class FrameDiagnosticStats {
             methodCount,
             frameMergeCount,
             valueMergeCount,
+        )
+        logger.info(
+            "Frame reference typing merged {} differing reference value(s): {} merge(s) lost exact type precision.",
+            referenceMergeCount,
+            impreciseReferenceMergeCount,
         )
         logger.info(
             "Frame analysis completed with {} failure(s): {} stack/local inconsistency(s), {} unsupported instruction case(s).",

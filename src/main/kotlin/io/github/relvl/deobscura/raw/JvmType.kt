@@ -126,3 +126,21 @@ private class DescriptorCursor(private val descriptor: String) {
         }
     }
 }
+
+sealed interface JvmReferenceType {
+    data object Unknown : JvmReferenceType
+    data object Null : JvmReferenceType
+
+    data class Exact(val type: JvmType) : JvmReferenceType {
+        init {
+            require(type is JvmType.ObjectType || type is JvmType.ArrayType) {
+                "Exact reference type requires an object or array type, got $type."
+            }
+        }
+    }
+}
+
+fun JvmType.toReferenceType(): JvmReferenceType = when (this) {
+    is JvmType.ObjectType, is JvmType.ArrayType -> JvmReferenceType.Exact(this)
+    else -> error("$this is not a JVM reference type.")
+}

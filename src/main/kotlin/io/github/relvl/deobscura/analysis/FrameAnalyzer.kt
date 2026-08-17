@@ -4,12 +4,19 @@ import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.raw.*
+import io.github.relvl.deobscura.resolution.ClassHierarchy
+import java.lang.constant.ClassDesc
+import java.lang.constant.MethodHandleDesc
+import java.lang.constant.MethodTypeDesc
 import java.util.*
 
-class FrameAnalyzer {
+class FrameAnalyzer(
+    private val hierarchy: ClassHierarchy? = null,
+) {
     fun analyze(ownerInternalName: String, method: RawMethod, graph: ControlFlowGraph): FrameAnalysis {
         val code = requireNotNull(method.code) { "Method ${method.name}${method.descriptor} has no code." }
         val entryBlock = graph.entryBlock ?: return FrameAnalysis(emptyMap(), emptyMap(), 0, 0)
+        val consumer = "$ownerInternalName.${method.name}${method.descriptor}"
         val maxLocals = requireNotNull(code.maxLocals) { "Missing maxLocals for ${method.name}${method.descriptor}." }
         val labelPositions = code.labels.associate { it.id to it.instructionIndex }
         val handlers = code.exceptionHandlers.map { handler ->
@@ -49,7 +56,7 @@ class FrameAnalyzer {
                 schedule(location)
                 return
             }
-            val merged = mergeFrames(current, incoming, counters, context)
+            val merged = mergeFrames(current, incoming, counters, context, consumer)
             if (merged != current) {
                 contextualEntryFrames[location] = merged
                 schedule(location)
@@ -85,8 +92,10 @@ class FrameAnalyzer {
                         val exceptionFrame = FrameState(
                             locals = mutable.locals.toList(),
                             stack = listOf(
-                                FrameValue.of(
-                                    FrameValueKind.REFERENCE,
+                                FrameValue.reference(
+                                    JvmReferenceType.Exact(
+                                        JvmType.ObjectType(handler.raw.catchType ?: "java/lang/Throwable"),
+                                    ),
                                     ValueOrigin.ExceptionHandler(
                                         handlerInstructionIndex = graph.block(handler.handlerBlock).startInstructionIndex,
                                         catchType = handler.raw.catchType,
@@ -165,6 +174,8 @@ class FrameAnalyzer {
             exitFrames = rootContextFrames(contextualExitFrames),
             frameMergeCount = counters.frameMerges,
             valueMergeCount = counters.valueMerges,
+            referenceMergeCount = counters.referenceMerges,
+            impreciseReferenceMergeCount = counters.impreciseReferenceMerges,
         )
     }
 
@@ -173,12 +184,15 @@ class FrameAnalyzer {
         var slot = 0
         if (method.accessFlags and ACC_STATIC == 0) {
             require(slot < maxLocals) { "Instance method has no local slot for this." }
-            locals[slot++] = FrameValue.of(FrameValueKind.REFERENCE, ValueOrigin.This(ownerInternalName))
+            locals[slot++] = FrameValue.reference(
+                JvmReferenceType.Exact(JvmType.ObjectType(ownerInternalName)),
+                ValueOrigin.This(ownerInternalName),
+            )
         }
         method.type.parameterTypes.forEachIndexed { parameterIndex, type ->
             val kind = type.toFrameValueKind()
             require(slot < maxLocals) { "Parameter $parameterIndex does not fit in maxLocals=$maxLocals." }
-            locals[slot] = FrameValue.of(kind, ValueOrigin.Parameter(parameterIndex))
+            locals[slot] = FrameValue.of(type, ValueOrigin.Parameter(parameterIndex))
             if (kind.category == 2) {
                 require(slot + 1 < maxLocals) { "Wide parameter $parameterIndex does not fit in maxLocals=$maxLocals." }
                 locals[slot + 1] = null
@@ -190,7 +204,13 @@ class FrameAnalyzer {
 
     private fun execute(instruction: RawInstruction, index: Int, frame: MutableFrame) {
         when (instruction) {
-            is RawConstantInstruction -> frame.push(value(instruction.type.toFrameValueKind(), index))
+            is RawConstantInstruction -> frame.push(
+                if (instruction.type == JvmComputationalType.REFERENCE) {
+                    referenceValue(constantReferenceType(instruction), index)
+                } else {
+                    value(instruction.type.toFrameValueKind(), index)
+                },
+            )
             is RawLocalInstruction -> executeLocal(instruction, frame)
             is RawIncrementInstruction -> {
                 frame.requireLocal(instruction.slot, FrameValueKind.INT)
@@ -214,21 +234,23 @@ class FrameAnalyzer {
                 pushReturn(instruction.type.returnType, index, frame)
             }
 
-            is RawNewObjectInstruction -> frame.push(value(FrameValueKind.REFERENCE, index))
+            is RawNewObjectInstruction -> frame.push(
+                referenceValue(JvmReferenceType.Exact(JvmType.ObjectType(instruction.internalName)), index),
+            )
             is RawNewArrayInstruction -> {
                 frame.pop(FrameValueKind.INT)
-                frame.push(value(FrameValueKind.REFERENCE, index))
+                frame.push(referenceValue(JvmReferenceType.Exact(JvmType.ArrayType(instruction.componentType)), index))
             }
 
             is RawNewMultiArrayInstruction -> {
                 repeat(instruction.dimensions) { frame.pop(FrameValueKind.INT) }
-                frame.push(value(FrameValueKind.REFERENCE, index))
+                frame.push(referenceValue(JvmReferenceType.Exact(instruction.arrayType), index))
             }
 
             is RawTypeCheckInstruction -> when (instruction.opcode.mnemonic) {
                 "checkcast" -> {
                     frame.pop(FrameValueKind.REFERENCE)
-                    frame.push(value(FrameValueKind.REFERENCE, index))
+                    frame.push(referenceValue(JvmReferenceType.Exact(instruction.type), index))
                 }
 
                 "instanceof" -> {
@@ -277,8 +299,12 @@ class FrameAnalyzer {
         when (instruction.operation) {
             ArrayOperation.LOAD -> {
                 frame.pop(FrameValueKind.INT)
-                frame.pop(FrameValueKind.REFERENCE)
-                frame.push(value(componentKind, index))
+                val array = frame.pop(FrameValueKind.REFERENCE)
+                if (componentKind == FrameValueKind.REFERENCE) {
+                    frame.push(referenceValue(arrayComponentType(array.referenceType), index))
+                } else {
+                    frame.push(value(componentKind, index))
+                }
             }
 
             ArrayOperation.STORE -> {
@@ -367,11 +393,11 @@ class FrameAnalyzer {
     private fun executeField(instruction: RawFieldInstruction, index: Int, frame: MutableFrame) {
         val kind = instruction.type.toFrameValueKind()
         when (instruction.opcode.mnemonic) {
-            "getstatic" -> frame.push(value(kind, index))
+            "getstatic" -> frame.push(value(instruction.type, index))
             "putstatic" -> frame.pop(kind)
             "getfield" -> {
                 frame.pop(FrameValueKind.REFERENCE)
-                frame.push(value(kind, index))
+                frame.push(value(instruction.type, index))
             }
 
             "putfield" -> {
@@ -394,17 +420,47 @@ class FrameAnalyzer {
     }
 
     private fun pushReturn(type: JvmType, index: Int, frame: MutableFrame) {
-        if (type != JvmType.VoidType) frame.push(value(type.toFrameValueKind(), index))
+        if (type != JvmType.VoidType) frame.push(value(type, index))
     }
+
+    private fun value(type: JvmType, instructionIndex: Int): FrameValue =
+        FrameValue.of(type, ValueOrigin.Instruction(instructionIndex))
 
     private fun value(kind: FrameValueKind, instructionIndex: Int): FrameValue =
         FrameValue.of(kind, ValueOrigin.Instruction(instructionIndex))
+
+    private fun referenceValue(type: JvmReferenceType, instructionIndex: Int): FrameValue =
+        FrameValue.reference(type, ValueOrigin.Instruction(instructionIndex))
+
+    private fun constantReferenceType(instruction: RawConstantInstruction): JvmReferenceType = when {
+        instruction.opcode.mnemonic == "aconst_null" -> JvmReferenceType.Null
+        instruction.value.javaClass == String::class.java -> exactObject("java/lang/String")
+        instruction.value is ClassDesc -> exactObject("java/lang/Class")
+        instruction.value is MethodTypeDesc -> exactObject("java/lang/invoke/MethodType")
+        instruction.value is MethodHandleDesc -> exactObject("java/lang/invoke/MethodHandle")
+        else -> JvmReferenceType.Unknown
+    }
+
+    private fun exactObject(internalName: String): JvmReferenceType =
+        JvmReferenceType.Exact(JvmType.ObjectType(internalName))
+
+    private fun arrayComponentType(type: JvmReferenceType?): JvmReferenceType {
+        val array = (type as? JvmReferenceType.Exact)?.type as? JvmType.ArrayType
+            ?: return JvmReferenceType.Unknown
+        val component = array.componentType
+        return if (component is JvmType.ObjectType || component is JvmType.ArrayType) {
+            JvmReferenceType.Exact(component)
+        } else {
+            JvmReferenceType.Unknown
+        }
+    }
 
     private fun mergeFrames(
         current: FrameState,
         incoming: FrameState,
         counters: MergeCounters,
         context: String,
+        consumer: String,
     ): FrameState {
         if (current.stack.size != incoming.stack.size) {
             throw StackInconsistencyException(
@@ -417,12 +473,12 @@ class FrameAnalyzer {
 
         var changed = false
         val locals = current.locals.indices.map { index ->
-            val merged = mergeLocal(current.locals[index], incoming.locals[index], counters, "$context local $index")
+            val merged = mergeLocal(current.locals[index], incoming.locals[index], counters, "$context local $index", consumer)
             if (merged != current.locals[index]) changed = true
             merged
         }
         val stack = current.stack.indices.map { index ->
-            val merged = mergeValue(current.stack[index], incoming.stack[index], counters, "$context stack $index")
+            val merged = mergeValue(current.stack[index], incoming.stack[index], counters, "$context stack $index", consumer)
             if (merged != current.stack[index]) changed = true
             merged
         }
@@ -436,6 +492,7 @@ class FrameAnalyzer {
         incoming: FrameValue?,
         counters: MergeCounters,
         context: String,
+        consumer: String,
     ): FrameValue? {
         // A local slot is allowed to have unrelated types on different control-flow paths as long as
         // the value is not used after those paths merge. In verifier terminology the merged slot
@@ -446,7 +503,7 @@ class FrameAnalyzer {
             counters.valueMerges++
             return null
         }
-        return mergeValue(current, incoming, counters, context)
+        return mergeValue(current, incoming, counters, context, consumer)
     }
 
     private fun mergeValue(
@@ -454,15 +511,37 @@ class FrameAnalyzer {
         incoming: FrameValue,
         counters: MergeCounters,
         context: String,
+        consumer: String,
     ): FrameValue {
         if (current == incoming) return current
         if (current.kind != incoming.kind) {
             throw StackInconsistencyException("Value kind mismatch at $context: ${current.kind} vs ${incoming.kind}.")
         }
         val origins = current.origins + incoming.origins
-        if (origins == current.origins) return current
+        val referenceType = if (current.kind == FrameValueKind.REFERENCE) {
+            val left = requireNotNull(current.referenceType)
+            val right = requireNotNull(incoming.referenceType)
+            hierarchy?.commonSupertype(left, right, consumer) ?: conservativeCommonSupertype(left, right)
+        } else {
+            null
+        }
+        if (origins == current.origins && referenceType == current.referenceType) return current
+        if (current.kind == FrameValueKind.REFERENCE && current.referenceType != incoming.referenceType) {
+            counters.referenceMerges++
+            if (referenceType == JvmReferenceType.Unknown) counters.impreciseReferenceMerges++
+        }
         counters.valueMerges++
-        return FrameValue(current.kind, origins)
+        return FrameValue(current.kind, origins, referenceType)
+    }
+
+    private fun conservativeCommonSupertype(
+        left: JvmReferenceType,
+        right: JvmReferenceType,
+    ): JvmReferenceType = when {
+        left == right -> left
+        left == JvmReferenceType.Null -> right
+        right == JvmReferenceType.Null -> left
+        else -> JvmReferenceType.Unknown
     }
 
     private fun rootContextFrames(
@@ -528,6 +607,8 @@ class FrameAnalyzer {
     private data class MergeCounters(
         var frameMerges: Long = 0,
         var valueMerges: Long = 0,
+        var referenceMerges: Long = 0,
+        var impreciseReferenceMerges: Long = 0,
     )
 
     private class MutableFrame(

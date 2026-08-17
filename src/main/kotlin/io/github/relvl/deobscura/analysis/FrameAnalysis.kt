@@ -7,4 +7,6 @@ data class FrameAnalysis(
     val exitFrames: Map<BasicBlockId, FrameState>,
     val frameMergeCount: Long,
     val valueMergeCount: Long,
+    val referenceMergeCount: Long = 0,
+    val impreciseReferenceMergeCount: Long = 0,
 )

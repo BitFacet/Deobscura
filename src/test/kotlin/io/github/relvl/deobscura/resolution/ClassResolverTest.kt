@@ -97,6 +97,30 @@ class ClassResolverTest {
         }
     }
 
+
+    @Test
+    fun `negative lookup cache still records every analysis use`() {
+        val jarResult = emptyJarResult()
+
+        RuntimeClassSource(Path.of(System.getProperty("java.home"))).use { runtimeSource ->
+            val resolver = ClassResolver(jarResult, runtimeSource)
+
+            repeat(2) { index ->
+                assertEquals(
+                    null,
+                    resolver.findClassForAnalysis(
+                        internalName = "not/a/real/Class",
+                        purpose = ResolutionPurpose.COMMON_SUPERTYPE,
+                        consumer = "consumer-$index",
+                    ),
+                )
+            }
+
+            val requests = resolver.unresolvedAnalysisUses.single().requests
+            assertEquals(listOf("consumer-0", "consumer-1"), requests.map { it.consumer })
+        }
+    }
+
     private fun emptyJarResult() = JarLoadResult(
         classes = emptyMap(),
         inputClassCount = 0,

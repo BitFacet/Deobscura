@@ -10,6 +10,7 @@ class ClassResolver(
 ) {
     private val jarClasses = jarLoadResult.classes
     private val runtimeClasses = mutableMapOf<String, ResolvedClass>()
+    private val missingClasses = mutableSetOf<String>()
     private val impactTracker = ResolutionImpactTracker()
 
     fun findClass(internalName: String): ResolvedClass? = resolveClass(internalName)
@@ -50,8 +51,12 @@ class ClassResolver(
         }
 
         runtimeClasses[internalName]?.let { return it }
+        if (internalName in missingClasses) return null
 
-        val runtimeClass = runtimeSource.findClass(internalName) ?: return null
+        val runtimeClass = runtimeSource.findClass(internalName) ?: run {
+            missingClasses += internalName
+            return null
+        }
         return ResolvedClass(
             internalName = internalName,
             bytes = runtimeClass.bytes,

@@ -261,7 +261,7 @@ class ClassImporter(
 
             is NewReferenceArrayInstruction -> RawNewArrayInstruction(
                 opcode,
-                JvmType.ObjectType(instruction.componentType().asInternalName()),
+                classEntryToJvmType(instruction.componentType().asInternalName()),
             )
 
             is NewMultiArrayInstruction -> {

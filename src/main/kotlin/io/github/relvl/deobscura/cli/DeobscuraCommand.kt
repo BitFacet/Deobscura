@@ -1,6 +1,8 @@
 package io.github.relvl.deobscura.cli
 
 import io.github.relvl.deobscura.analysis.AnalysisDiagnostics
+import io.github.relvl.deobscura.analysis.FrameAnalyzer
+import io.github.relvl.deobscura.analysis.MethodAnalyzer
 import io.github.relvl.deobscura.cfg.ControlFlowDiagnostics
 import io.github.relvl.deobscura.config.ConfigException
 import io.github.relvl.deobscura.config.ConfigLoadResult
@@ -8,6 +10,7 @@ import io.github.relvl.deobscura.config.ConfigRepository
 import io.github.relvl.deobscura.config.ConfigResolver
 import io.github.relvl.deobscura.jar.JarLoader
 import io.github.relvl.deobscura.raw.ClassImporter
+import io.github.relvl.deobscura.resolution.ClassHierarchy
 import io.github.relvl.deobscura.resolution.ClassResolver
 import io.github.relvl.deobscura.resolution.ResolutionDiagnostics
 import io.github.relvl.deobscura.resolution.RuntimeClassSource
@@ -85,7 +88,11 @@ class DeobscuraCommand : Callable<Int> {
             val rawImport = ClassImporter().importInput(jar)
 
             ControlFlowDiagnostics().inspect(rawImport)
-            AnalysisDiagnostics().inspect(rawImport)
+            val hierarchy = ClassHierarchy(classResolver)
+            AnalysisDiagnostics(
+                methodAnalyzer = MethodAnalyzer(frameAnalyzer = FrameAnalyzer(hierarchy)),
+            ).inspect(rawImport)
+            logger.info("Hierarchy analysis loaded {} class definition(s) lazily.", hierarchy.loadedClassCount)
             resolutionDiagnostics.logAnalysisImpact(classResolver, resolutionResult)
         }
         return EXIT_SUCCESS

@@ -1,7 +1,9 @@
 package io.github.relvl.deobscura.analysis
 
 import io.github.relvl.deobscura.raw.JvmComputationalType
+import io.github.relvl.deobscura.raw.JvmReferenceType
 import io.github.relvl.deobscura.raw.JvmType
+import io.github.relvl.deobscura.raw.toReferenceType
 
 enum class FrameValueKind(val category: Int) {
     INT(1),
@@ -23,9 +25,26 @@ sealed interface ValueOrigin {
 data class FrameValue(
     val kind: FrameValueKind,
     val origins: Set<ValueOrigin>,
+    val referenceType: JvmReferenceType? = if (kind == FrameValueKind.REFERENCE) JvmReferenceType.Unknown else null,
 ) {
+    init {
+        require((kind == FrameValueKind.REFERENCE) == (referenceType != null)) {
+            "Reference type must be present exactly for REFERENCE frame values."
+        }
+    }
+
     companion object {
         fun of(kind: FrameValueKind, origin: ValueOrigin): FrameValue = FrameValue(kind, setOf(origin))
+
+        fun reference(type: JvmReferenceType, origin: ValueOrigin): FrameValue =
+            FrameValue(FrameValueKind.REFERENCE, setOf(origin), type)
+
+        fun of(type: JvmType, origin: ValueOrigin): FrameValue =
+            if (type is JvmType.ObjectType || type is JvmType.ArrayType) {
+                reference(type.toReferenceType(), origin)
+            } else {
+                FrameValue(type.toFrameValueKind(), setOf(origin))
+            }
     }
 }
 
