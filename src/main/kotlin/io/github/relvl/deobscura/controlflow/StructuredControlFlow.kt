@@ -16,6 +16,7 @@ data class StructuredControlFlowAnalysis(
     val regions: List<StructuredRegion>,
     val conditionalBranchCount: Int,
     val switchCount: Int,
+    val exceptionRegionCount: Int = 0,
     /** Compiler-generated boolean materialization diamonds folded into their consuming condition. */
     val booleanConditionFolds: List<BooleanConditionFold> = emptyList(),
     /** Linear JVM branch chains folded into source-level short-circuit boolean conditions. */
@@ -38,6 +39,8 @@ data class StructuredControlFlowAnalysis(
     val regionHeaders: Set<BasicBlockId> = regions.mapTo(linkedSetOf()) { it.header }
     val unstructuredConditionalCount: Int
         get() = unstructured.count { it.kind == UnstructuredControlFlowKind.CONDITIONAL }
+    val unstructuredExceptionRegionCount: Int
+        get() = unstructured.count { it.kind == UnstructuredControlFlowKind.EXCEPTION }
 }
 
 /**
@@ -74,6 +77,7 @@ sealed interface StructuredCondition {
 enum class UnstructuredControlFlowKind {
     CONDITIONAL,
     SWITCH,
+    EXCEPTION,
 }
 
 enum class UnstructuredControlFlowReason(val diagnosticName: String) {
@@ -82,6 +86,16 @@ enum class UnstructuredControlFlowReason(val diagnosticName: String) {
     SWITCH_EXTERNAL_ENTRY("switch-case-has-external-entry"),
     SWITCH_OVERLAPPING_CASES("switch-overlapping-case-regions"),
     SWITCH_UNSUPPORTED_EXIT("switch-unsupported-exit-shape"),
+    EXCEPTION_EMPTY_PROTECTED_REGION("exception-empty-protected-region"),
+    EXCEPTION_INVALID_PROTECTED_ENTRY("exception-invalid-protected-entry"),
+    EXCEPTION_INVALID_HANDLER_ENTRY("exception-invalid-handler-entry"),
+    EXCEPTION_CATCH_ALL_UNSUPPORTED("exception-catch-all-finally-unsupported"),
+    EXCEPTION_PROTECTED_REGION_HAS_EXTERNAL_ENTRY("exception-protected-region-has-external-entry"),
+    EXCEPTION_NO_COMMON_CONTINUATION("exception-no-common-continuation"),
+    EXCEPTION_EMPTY_HANDLER_REGION("exception-empty-handler-region"),
+    EXCEPTION_OVERLAPPING_HANDLER_REGIONS("exception-overlapping-handler-regions"),
+    EXCEPTION_HANDLER_HAS_EXTERNAL_ENTRY("exception-handler-has-external-entry"),
+    EXCEPTION_UNSUPPORTED_HANDLER_EXIT("exception-unsupported-handler-exit-shape"),
     MISSING_BRANCH_EDGES("missing-conditional-or-fallthrough-edge"),
     IDENTICAL_SUCCESSORS("identical-successors"),
     NO_COMMON_POST_DOMINATOR("no-common-post-dominator"),
@@ -104,6 +118,8 @@ data class UnstructuredControlFlowDiagnostic(
     val header: BasicBlockId,
     val kind: UnstructuredControlFlowKind,
     val reason: UnstructuredControlFlowReason,
+    val protectedStartInstructionIndex: Int? = null,
+    val protectedEndInstructionIndexExclusive: Int? = null,
 )
 
 enum class StructuredArmExitKind {
@@ -176,6 +192,19 @@ data class StructuredArmExit(
     val target: BasicBlockId? = null,
 )
 
+
+data class StructuredProtectedRange(
+    val startInstructionIndex: Int,
+    val endInstructionIndexExclusive: Int,
+)
+
+data class StructuredCatch(
+    /** Source catch alternatives sharing this handler entry; multiple entries represent multi-catch. */
+    val catchTypes: List<String>,
+    val entry: BasicBlockId,
+    val blocks: Set<BasicBlockId>,
+)
+
 sealed interface StructuredRegion {
     val header: BasicBlockId
     val coveredBlocks: Set<BasicBlockId>
@@ -215,6 +244,24 @@ sealed interface StructuredRegion {
         override val coveredBlocks: Set<BasicBlockId> = linkedSetOf<BasicBlockId>().apply {
             add(header)
             cases.forEach { addAll(it.blocks) }
+        }
+    }
+
+    data class TryCatch(
+        override val header: BasicBlockId,
+        val tryBlocks: Set<BasicBlockId>,
+        val catches: List<StructuredCatch>,
+        /** First block executed after the try/catch when normal control continues, if one exists. */
+        val continuation: BasicBlockId?,
+        val protectedStartInstructionIndex: Int,
+        val protectedEndInstructionIndexExclusive: Int,
+        val protectedRanges: List<StructuredProtectedRange> = listOf(
+            StructuredProtectedRange(protectedStartInstructionIndex, protectedEndInstructionIndexExclusive),
+        ),
+    ) : StructuredRegion {
+        override val coveredBlocks: Set<BasicBlockId> = linkedSetOf<BasicBlockId>().apply {
+            addAll(tryBlocks)
+            catches.forEach { addAll(it.blocks) }
         }
     }
 

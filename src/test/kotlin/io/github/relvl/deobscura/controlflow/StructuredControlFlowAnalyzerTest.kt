@@ -10,6 +10,9 @@ import io.github.relvl.deobscura.raw.JvmComputationalType
 import io.github.relvl.deobscura.raw.JvmOpcode
 import io.github.relvl.deobscura.raw.RawCode
 import io.github.relvl.deobscura.raw.RawNopInstruction
+import io.github.relvl.deobscura.raw.RawExceptionHandler
+import io.github.relvl.deobscura.raw.RawLabel
+import io.github.relvl.deobscura.raw.RawLabelId
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -1247,6 +1250,290 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(UnstructuredControlFlowReason.NO_COMMON_POST_DOMINATOR, diagnostic.reason)
     }
 
+    @Test
+    fun `recognizes sibling typed catches for one protected range`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val b3 = BasicBlockId(3)
+        val edges = listOf(
+            edge(b0, b3, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b0, b1, "java/io/IOException"),
+            exceptionEdge(b0, b2, "java/lang/RuntimeException"),
+            edge(b1, b3, ControlFlowEdgeKind.JUMP),
+        )
+        val graph = exceptionGraph(
+            blockCount = 4,
+            edges = edges,
+            handlers = listOf(
+                exceptionHandler(0, 1, 1, "java/io/IOException"),
+                exceptionHandler(0, 1, 2, "java/lang/RuntimeException"),
+            ),
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(b0, b1, b2, b3), edges, b0),
+            ExpressionAnalysis(emptyMap(), listOf(ExpressionStatement.Return(2, null))),
+        )
+
+        val region = assertIs<StructuredRegion.TryCatch>(result.regions.single())
+        assertEquals(b0, region.header)
+        assertEquals(setOf(b0), region.tryBlocks)
+        assertEquals(b3, region.continuation)
+        assertEquals(2, region.catches.size)
+        assertEquals(listOf("java/io/IOException"), region.catches.single { it.entry == b1 }.catchTypes)
+        assertEquals(listOf("java/lang/RuntimeException"), region.catches.single { it.entry == b2 }.catchTypes)
+        assertEquals(1, result.exceptionRegionCount)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    @Test
+    fun `coalesces source try split around terminal control transfer`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val b3 = BasicBlockId(3)
+        val b4 = BasicBlockId(4)
+        val edges = listOf(
+            edge(b0, b2, ControlFlowEdgeKind.CONDITIONAL),
+            edge(b0, b1, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b0, b4, "java/io/IOException"),
+            edge(b2, b3, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b2, b4, "java/io/IOException"),
+        )
+        val graph = exceptionGraph(
+            blockCount = 5,
+            edges = edges,
+            handlers = listOf(
+                exceptionHandler(0, 1, 4, "java/io/IOException"),
+                exceptionHandler(2, 3, 4, "java/io/IOException"),
+            ),
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(b0, b1, b2, b3, b4), edges, b0),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(1, null),
+                    ExpressionStatement.Return(4, null),
+                ),
+            ),
+        )
+
+        val region = assertIs<StructuredRegion.TryCatch>(result.regions.single())
+        assertEquals(setOf(b0, b1, b2), region.tryBlocks)
+        assertEquals(b3, region.continuation)
+        assertEquals(
+            listOf(
+                StructuredProtectedRange(0, 1),
+                StructuredProtectedRange(2, 3),
+            ),
+            region.protectedRanges,
+        )
+        assertEquals(1, result.exceptionRegionCount)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    @Test
+    fun `treats nested catch body as owned by enclosing catch`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val b3 = BasicBlockId(3)
+        val b4 = BasicBlockId(4)
+        val b5 = BasicBlockId(5)
+        val edges = listOf(
+            edge(b0, b1, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b0, b2, "java/io/IOException"),
+            edge(b2, b3, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(b3, b5, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(b3, b4, "java/io/IOException"),
+            edge(b4, b5, ControlFlowEdgeKind.FALLTHROUGH),
+        )
+        val graph = exceptionGraph(
+            blockCount = 6,
+            edges = edges,
+            handlers = listOf(
+                exceptionHandler(0, 1, 2, "java/io/IOException"),
+                exceptionHandler(3, 4, 4, "java/io/IOException"),
+            ),
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(b0, b1, b2, b3, b4, b5), edges, b0),
+            ExpressionAnalysis(emptyMap(), listOf(ExpressionStatement.Throw(5, ValueId(0)))),
+        )
+
+        val outer = result.regions.filterIsInstance<StructuredRegion.TryCatch>()
+            .single { it.header == b0 }
+        assertEquals(setOf(b2, b3, b4, b5), outer.catches.single().blocks)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    @Test
+    fun `recognizes catch that continues at protected loop header`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val edges = listOf(
+            edge(b0, b1, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b0, b2, "java/lang/Exception"),
+            edge(b1, b0, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(b1, b2, "java/lang/Exception"),
+            edge(b2, b0, ControlFlowEdgeKind.JUMP),
+        )
+        val graph = exceptionGraph(
+            blockCount = 3,
+            edges = edges,
+            handlers = listOf(exceptionHandler(0, 2, 2, "java/lang/Exception")),
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(b0, b1, b2), edges, b0),
+            ExpressionAnalysis(emptyMap(), emptyList()),
+        )
+
+        val region = result.regions.filterIsInstance<StructuredRegion.TryCatch>().single()
+        assertEquals(b0, region.header)
+        assertEquals(setOf(b0, b1), region.tryBlocks)
+        assertEquals(setOf(b2), region.catches.single().blocks)
+        assertEquals(b0, region.continuation)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    @Test
+    fun `keeps shared post-catch join outside handler body after terminal try return`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val b3 = BasicBlockId(3)
+        val b4 = BasicBlockId(4)
+        val b5 = BasicBlockId(5)
+        val edges = listOf(
+            edge(b0, b5, ControlFlowEdgeKind.CONDITIONAL),
+            edge(b0, b1, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(b1, b5, ControlFlowEdgeKind.CONDITIONAL),
+            edge(b1, b2, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(b2, b3, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b2, b4, "java/io/IOException"),
+            edge(b4, b5, ControlFlowEdgeKind.FALLTHROUGH),
+        )
+        val graph = exceptionGraph(
+            blockCount = 6,
+            edges = edges,
+            handlers = listOf(exceptionHandler(2, 3, 4, "java/io/IOException")),
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(b0, b1, b2, b3, b4, b5), edges, b0),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(3, null),
+                    ExpressionStatement.Return(5, null),
+                ),
+            ),
+        )
+
+        val region = result.regions.filterIsInstance<StructuredRegion.TryCatch>().single()
+        assertEquals(setOf(b2, b3), region.tryBlocks)
+        assertEquals(setOf(b4), region.catches.single().blocks)
+        assertEquals(b5, region.continuation)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    @Test
+    fun `uses common source join beyond protected normal bridge`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val b3 = BasicBlockId(3)
+        val b4 = BasicBlockId(4)
+        val edges = listOf(
+            edge(b0, b4, ControlFlowEdgeKind.CONDITIONAL),
+            edge(b0, b1, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(b1, b2, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b1, b3, "java/lang/Exception"),
+            edge(b2, b4, ControlFlowEdgeKind.JUMP),
+            edge(b3, b4, ControlFlowEdgeKind.FALLTHROUGH),
+        )
+        val graph = exceptionGraph(
+            blockCount = 5,
+            edges = edges,
+            handlers = listOf(exceptionHandler(1, 2, 3, "java/lang/Exception")),
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(b0, b1, b2, b3, b4), edges, b0),
+            ExpressionAnalysis(emptyMap(), listOf(ExpressionStatement.Return(4, null))),
+        )
+
+        val region = result.regions.filterIsInstance<StructuredRegion.TryCatch>().single()
+        assertEquals(setOf(b1), region.tryBlocks)
+        assertEquals(setOf(b3), region.catches.single().blocks)
+        assertEquals(b4, region.continuation)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    @Test
+    fun `groups multi-catch table entries sharing one handler`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val edges = listOf(
+            edge(b0, b2, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b0, b1, "java/io/IOException"),
+            exceptionEdge(b0, b1, "java/lang/RuntimeException"),
+            edge(b1, b2, ControlFlowEdgeKind.JUMP),
+        )
+        val graph = exceptionGraph(
+            blockCount = 3,
+            edges = edges,
+            handlers = listOf(
+                exceptionHandler(0, 1, 1, "java/io/IOException"),
+                exceptionHandler(0, 1, 1, "java/lang/RuntimeException"),
+            ),
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(b0, b1, b2), edges, b0),
+            ExpressionAnalysis(emptyMap(), emptyList()),
+        )
+
+        val region = assertIs<StructuredRegion.TryCatch>(result.regions.single())
+        assertEquals(1, region.catches.size)
+        assertEquals(
+            listOf("java/io/IOException", "java/lang/RuntimeException"),
+            region.catches.single().catchTypes,
+        )
+    }
+
+    @Test
+    fun `keeps catch-all exception region block based with explicit diagnostic`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val edges = listOf(
+            exceptionEdge(b0, b1, null),
+        )
+        val graph = exceptionGraph(
+            blockCount = 2,
+            edges = edges,
+            handlers = listOf(exceptionHandler(0, 1, 1, null)),
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(b0, b1), edges, b0),
+            ExpressionAnalysis(emptyMap(), listOf(ExpressionStatement.Throw(1, ValueId(0)))),
+        )
+
+        assertTrue(result.regions.none { it is StructuredRegion.TryCatch })
+        val diagnostic = result.unstructured.single { it.kind == UnstructuredControlFlowKind.EXCEPTION }
+        assertEquals(UnstructuredControlFlowReason.EXCEPTION_CATCH_ALL_UNSUPPORTED, diagnostic.reason)
+        assertEquals(0, diagnostic.protectedStartInstructionIndex)
+        assertEquals(1, diagnostic.protectedEndInstructionIndexExclusive)
+    }
+
     private fun constantDesc(value: Any): java.lang.constant.ConstantDesc = value as java.lang.constant.ConstantDesc
 
     private fun expression(vararg branches: ExpressionStatement.Branch): ExpressionAnalysis {
@@ -1298,6 +1585,44 @@ class StructuredControlFlowAnalyzerTest {
         edges,
         blocks.firstOrNull()?.id,
     )
+
+    private fun exceptionGraph(
+        blockCount: Int,
+        edges: List<ControlFlowEdge>,
+        handlers: List<RawExceptionHandler>,
+    ): ControlFlowGraph {
+        val blocks = blocks(blockCount)
+        val labels = List(blockCount + 1) { index -> RawLabel(RawLabelId(index), index, index) }
+        return ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                List(blockCount) { RawNopInstruction(JvmOpcode("nop")) },
+                labels,
+                handlers,
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            blocks.firstOrNull()?.id,
+        )
+    }
+
+    private fun exceptionHandler(
+        startInstruction: Int,
+        endInstructionExclusive: Int,
+        handlerInstruction: Int,
+        catchType: String?,
+    ) = RawExceptionHandler(
+        tryStart = RawLabelId(startInstruction),
+        tryEnd = RawLabelId(endInstructionExclusive),
+        handler = RawLabelId(handlerInstruction),
+        catchType = catchType,
+    )
+
+    private fun exceptionEdge(from: BasicBlockId, to: BasicBlockId, catchType: String?) =
+        ControlFlowEdge(from, to, ControlFlowEdgeKind.EXCEPTION, catchType = catchType)
 
     private fun switchEdge(from: BasicBlockId, to: BasicBlockId, value: Int?) =
         ControlFlowEdge(from, to, ControlFlowEdgeKind.SWITCH, switchValue = value)

@@ -19,6 +19,7 @@ class StructuredControlFlowAnalyzer {
     private val loopRecognizer = StructuredLoopRecognizer()
     private val switchRecognizer = StructuredSwitchRecognizer()
     private val conditionalRecognizer = StructuredConditionalRecognizer()
+    private val exceptionRecognizer = StructuredExceptionRecognizer()
 
     fun analyze(
         graph: ControlFlowGraph,
@@ -58,6 +59,7 @@ class StructuredControlFlowAnalyzer {
         val shortCircuitFoldedHeaders = shortCircuitFolds.flatMapTo(hashSetOf()) { it.foldedHeaders }
         val loopContexts = loopRecognizer.contexts(loopRecognition.regions, facts, expression)
         val naturalLoopContexts = loopRecognizer.naturalContexts(facts, expression)
+        val exceptionRecognition = exceptionRecognizer.recognize(graph, facts)
         val switchRecognition = switchRecognizer.recognize(
             facts = facts,
             loopContexts = naturalLoopContexts,
@@ -70,30 +72,35 @@ class StructuredControlFlowAnalyzer {
             shortCircuitByRoot = shortCircuitByRoot,
         )
 
-        val regions = (loopRecognition.regions + switchRecognition.regions + ifRecognition.regions).sortedWith(
+        val regions = (loopRecognition.regions + switchRecognition.regions + ifRecognition.regions + exceptionRecognition.regions).sortedWith(
             compareBy<StructuredRegion> { it.header.value }
                 .thenBy {
                     when (it) {
                         is StructuredRegion.While -> 0
-                        is StructuredRegion.Switch -> 1
-                        is StructuredRegion.If -> 2
+                        is StructuredRegion.TryCatch -> 1
+                        is StructuredRegion.Switch -> 2
+                        is StructuredRegion.If -> 3
                     }
                 },
         )
-        val recognizedHeaders = regions.mapTo(hashSetOf()) { it.header }
-        recognizedHeaders += foldedProducerHeaders
-        recognizedHeaders += shortCircuitFoldedHeaders
+        val recognizedConditionalHeaders = linkedSetOf<BasicBlockId>().apply {
+            addAll(loopRecognition.regions.map { it.header })
+            addAll(ifRecognition.regions.map { it.header })
+            addAll(foldedProducerHeaders)
+            addAll(shortCircuitFoldedHeaders)
+        }
+        val recognizedSwitchHeaders = switchRecognition.regions.mapTo(hashSetOf()) { it.header }
 
         val diagnostics = buildList {
             originalBranches.keys.sortedBy { it.value }.forEach { header ->
-                if (header in recognizedHeaders) return@forEach
+                if (header in recognizedConditionalHeaders) return@forEach
                 val reason = loopRecognition.rejections[header]
                     ?: ifRecognition.rejections[header]
                     ?: UnstructuredControlFlowReason.UNSUPPORTED_SHAPE
                 add(UnstructuredControlFlowDiagnostic(header, UnstructuredControlFlowKind.CONDITIONAL, reason))
             }
             switchHeaders.sortedBy { it.value }.forEach { header ->
-                if (header in recognizedHeaders) return@forEach
+                if (header in recognizedSwitchHeaders) return@forEach
                 add(
                     UnstructuredControlFlowDiagnostic(
                         header,
@@ -102,11 +109,27 @@ class StructuredControlFlowAnalyzer {
                     ),
                 )
             }
+            exceptionRecognition.rejections.entries
+                .sortedWith(compareBy<Map.Entry<ExceptionRegionKey, UnstructuredControlFlowReason>> { it.key.protectedStartInstructionIndex }
+                    .thenBy { it.key.protectedEndInstructionIndexExclusive })
+                .forEach { (key, reason) ->
+                    val header = facts.instructionToBlock.getOrNull(key.protectedStartInstructionIndex) ?: return@forEach
+                    add(
+                        UnstructuredControlFlowDiagnostic(
+                            header = header,
+                            kind = UnstructuredControlFlowKind.EXCEPTION,
+                            reason = reason,
+                            protectedStartInstructionIndex = key.protectedStartInstructionIndex,
+                            protectedEndInstructionIndexExclusive = key.protectedEndInstructionIndexExclusive,
+                        ),
+                    )
+                }
         }
         return StructuredControlFlowAnalysis(
             regions = regions,
             conditionalBranchCount = originalBranches.size,
             switchCount = switchHeaders.size,
+            exceptionRegionCount = exceptionRecognition.regionCount,
             booleanConditionFolds = folds,
             shortCircuitConditionFolds = shortCircuitFolds,
             emptyArmNormalizationCount = ifRecognition.emptyArmNormalizationCount,

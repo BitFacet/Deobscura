@@ -54,6 +54,26 @@ class StructuredControlFlowRenderer(
                     appendLine()
                 }
 
+                is StructuredRegion.TryCatch -> {
+                    append("    try B${region.header.value}")
+                    append(" protected=${region.protectedStartInstructionIndex}..<${region.protectedEndInstructionIndexExclusive}")
+                    if (region.protectedRanges.size > 1) {
+                        append(" ranges=")
+                        append(region.protectedRanges.joinToString(prefix = "[", postfix = "]") { range ->
+                            "${range.startInstructionIndex}..<${range.endInstructionIndexExclusive}"
+                        })
+                    }
+                    append(" blocks=${formatBlocks(region.tryBlocks)}")
+                    region.continuation?.let { append(" continuation=B${it.value}") }
+                    appendLine()
+                    region.catches.forEach { catch ->
+                        append("      catch ")
+                        append(catch.catchTypes.joinToString(" | "))
+                        append(" entry=B${catch.entry.value}")
+                        appendLine(" blocks=${formatBlocks(catch.blocks)}")
+                    }
+                }
+
                 is StructuredRegion.Switch -> {
                     append("    switch B${region.header.value} selector=v${region.selector.value}")
                     region.continuation?.let { append(" continuation=B${it.value}") }
@@ -96,8 +116,13 @@ class StructuredControlFlowRenderer(
                 val kind = when (diagnostic.kind) {
                     UnstructuredControlFlowKind.CONDITIONAL -> "conditional"
                     UnstructuredControlFlowKind.SWITCH -> "switch"
+                    UnstructuredControlFlowKind.EXCEPTION -> "exception"
                 }
-                appendLine("      B${diagnostic.header.value} $kind: ${diagnostic.reason.diagnosticName}")
+                append("      B${diagnostic.header.value} $kind: ${diagnostic.reason.diagnosticName}")
+                if (diagnostic.kind == UnstructuredControlFlowKind.EXCEPTION) {
+                    append(" protected=${diagnostic.protectedStartInstructionIndex}..<${diagnostic.protectedEndInstructionIndexExclusive}")
+                }
+                appendLine()
             }
         }
     }

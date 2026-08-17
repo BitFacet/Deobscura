@@ -63,6 +63,9 @@ internal class StructuredControlFlowDiagnosticStats {
     private var ifRegionCount = 0L
     private var whileRegionCount = 0L
     private var switchRegionCount = 0L
+    private var exceptionRegionCount = 0L
+    private var structuredExceptionRegionCount = 0L
+    private var unstructuredExceptionRegionCount = 0L
     private var unstructuredConditionalCount = 0L
     private var unstructuredSwitchCount = 0L
     private var switchCount = 0L
@@ -84,6 +87,7 @@ internal class StructuredControlFlowDiagnosticStats {
         analyzedMethodCount++
         conditionalBranchCount += analysis.conditionalBranchCount
         switchCount += analysis.switchCount
+        exceptionRegionCount += analysis.exceptionRegionCount
         booleanConditionFoldCount += analysis.booleanConditionFolds.size
         shortCircuitConditionFoldCount += analysis.shortCircuitConditionFolds.size
         shortCircuitFoldedHeaderCount += analysis.shortCircuitConditionFolds.sumOf { it.foldedHeaders.size.toLong() }
@@ -100,34 +104,41 @@ internal class StructuredControlFlowDiagnosticStats {
         val ifs = analysis.regions.count { it is StructuredRegion.If }
         val whiles = analysis.regions.count { it is StructuredRegion.While }
         val switches = analysis.regions.count { it is StructuredRegion.Switch }
+        val exceptions = analysis.regions.count { it is StructuredRegion.TryCatch }
         ifRegionCount += ifs
         whileRegionCount += whiles
         switchRegionCount += switches
+        structuredExceptionRegionCount += exceptions
         unstructuredConditionalCount += analysis.unstructuredConditionalCount
         unstructuredSwitchCount += analysis.unstructured.count {
             it.kind == io.github.relvl.deobscura.controlflow.UnstructuredControlFlowKind.SWITCH
         }
-        if (ifs + whiles + switches + analysis.booleanConditionFolds.size + analysis.shortCircuitConditionFolds.size > 0) structuredMethodCount++
+        unstructuredExceptionRegionCount += analysis.unstructuredExceptionRegionCount
+        if (ifs + whiles + switches + exceptions + analysis.booleanConditionFolds.size + analysis.shortCircuitConditionFolds.size > 0) structuredMethodCount++
     }
 
     fun log(logger: Logger) {
         logger.info(
-            "Structured control flow for {}/{} method(s): {} if region(s), {} natural while loop(s), {} switch region(s) in {} method(s).",
+            "Structured control flow for {}/{} method(s): {} if region(s), {} natural while loop(s), {} switch region(s), {} try/catch region(s) in {} method(s).",
             analyzedMethodCount,
             methodCount,
             ifRegionCount,
             whileRegionCount,
             switchRegionCount,
+            structuredExceptionRegionCount,
             structuredMethodCount,
         )
         logger.info(
-            "Control-flow structuring classified {}/{} conditional branch header(s); {} remain block-based. Structured {}/{} switch(es); {} remain block-based.",
+            "Control-flow structuring classified {}/{} conditional branch header(s); {} remain block-based. Structured {}/{} switch(es); {} remain block-based. Structured {}/{} exception region(s); {} remain block-based.",
             ifRegionCount + whileRegionCount + booleanConditionFoldCount + shortCircuitFoldedHeaderCount,
             conditionalBranchCount,
             unstructuredConditionalCount,
             switchRegionCount,
             switchCount,
             unstructuredSwitchCount,
+            structuredExceptionRegionCount,
+            exceptionRegionCount,
+            unstructuredExceptionRegionCount,
         )
         logger.info(
             "Control-flow normalization folded {} boolean materialization diamond(s) and {} short-circuit chain(s) ({} condition header(s)), normalized {} empty if arm(s), recognized {} terminal-arm if region(s), {} continue if region(s), {} break if region(s), {} loop-body regional if(s), and {} loop-continuation if(s).",

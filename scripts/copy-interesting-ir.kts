@@ -1,14 +1,34 @@
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 val interestingIr = listOf(
-    "com/google/gson/stream/JsonReader.ir",
-    "org/antlr/v4/runtime/tree/xpath/XPath.ir",
-    "org/apache/xml/serialize/BaseMarkupSerializer.ir",
-    "cz/vutbr/web/csskit/antlr4/CSSLexer.ir",
-    "de/matthiasmann/twl/utils/PNGDecoder.ir",
-    "org/apache/xerces/impl/XMLDocumentScannerImpl\$XMLDeclDispatcher.ir",
+    // remaining handler-has-external-entry
+    "com/wurmonline/client/WurmClientBase.ir",
+    "org/apache/commons/io/file/PathUtils.ir",
+    "org/apache/commons/io/filefilter/MagicNumberFileFilter.ir",
+    "class/WfJU7pYOaC.ir",
+    "class/GXB3BZNuK.ir",
+
+    // protected-region-has-external-entry
+    "org/cyberneko/html/HTMLScanner\$SpecialScanner.ir",
+    "org/apache/html/dom/ObjectFactory.ir",
+    "org/apache/xerces/dom/ObjectFactory.ir",
+
+    // no-common-continuation
+    "org/cyberneko/html/HTMLScanner\$SpecialScanner.ir",
+    "org/apache/html/dom/ObjectFactory.ir",
+    "class/GXB3BZNuK.ir",
+
+    // unsupported-handler-exit-shape
+    "class/mHp80DMOlW.ir",
+    "class/GXB3BZNuK.ir",
+    "com/wurmonline/client/WurmClientBase.ir",
+
+    // newly exposed overlapping-handler-regions
+    "class/GXB3BZNuK.ir",
 )
 
 fun findProjectRoot(start: Path): Path {
@@ -23,6 +43,7 @@ fun findProjectRoot(start: Path): Path {
 val projectRoot = findProjectRoot(Path.of(System.getProperty("user.dir")))
 val irRoot = projectRoot.resolve("workspace/src/technical-ir")
 val targetDir = projectRoot.resolve("workspace/demo-ir")
+val targetZip = projectRoot.resolve("workspace/demo-ir.zip")
 
 require(Files.isDirectory(irRoot)) { "Technical IR directory does not exist: $irRoot" }
 Files.createDirectories(targetDir)
@@ -37,3 +58,19 @@ interestingIr.forEach { relativePath ->
     Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING)
     println("Copied $relativePath -> $target")
 }
+
+
+ZipOutputStream(Files.newOutputStream(targetZip)).use { zip ->
+    Files.list(targetDir).use { files ->
+        files
+            .filter(Files::isRegularFile)
+            .sorted()
+            .forEach { file ->
+                zip.putNextEntry(ZipEntry(file.fileName.toString()))
+                Files.copy(file, zip)
+                zip.closeEntry()
+            }
+    }
+}
+
+println("Created archive: $targetZip")
