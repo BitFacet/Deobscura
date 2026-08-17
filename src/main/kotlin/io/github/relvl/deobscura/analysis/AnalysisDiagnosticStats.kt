@@ -1,5 +1,6 @@
 package io.github.relvl.deobscura.analysis
 
+import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
 import org.slf4j.Logger
 
@@ -31,7 +32,8 @@ internal class AnalysisDiagnosticStats {
 
     fun log(logger: Logger) {
         if (preparationFailureCount > 0) {
-            logger.warn("Analysis pipeline preparation failed for {} method(s).", preparationFailureCount)
+            val ir = TechnicalIrService.rootHint()
+            logger.warn("Analysis pipeline preparation failed for {} method(s).{}", preparationFailureCount, ir)
         }
         legacy.log(logger)
         frame.log(logger)

@@ -1,5 +1,6 @@
 package io.github.relvl.deobscura.cfg
 
+import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
 import io.github.relvl.deobscura.raw.RawImportResult
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -37,7 +38,8 @@ class ControlFlowDiagnostics(
                     }
                 } catch (exception: Exception) {
                     failureCount++
-                    logger.warn("Failed to build CFG for '{}': {}.", methodName, exception.message)
+                    val ir = TechnicalIrService.methodHint(rawClass.internalName, method.name, method.descriptor)
+                    logger.warn("Failed to build CFG for '{}': {}.{}", methodName, exception.message, ir)
                 }
             }
         }

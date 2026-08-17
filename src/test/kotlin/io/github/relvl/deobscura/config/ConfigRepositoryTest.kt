@@ -28,6 +28,8 @@ class ConfigRepositoryTest {
         assertContains(json, "// Output directory.")
         assertContains(json, "\"output\"")
         assertContains(json, "\"out\"")
+        assertContains(json, "// Relative subdirectory under output for technical IR dumps. null disables technical IR output.")
+        assertContains(json, "\"technicalIr\"")
     }
 
     @Test
@@ -46,6 +48,7 @@ class ConfigRepositoryTest {
               /* Bundled runtime. */
               "runtime": "runtime",
               "output": "deobfuscated",
+              "technicalIr": "technical-ir",
             }
             """.trimIndent(),
         )
@@ -57,6 +60,7 @@ class ConfigRepositoryTest {
         assertEquals(listOf("lib/*.jar"), loaded.config.classpath)
         assertEquals("runtime", loaded.config.runtime)
         assertEquals("deobfuscated", loaded.config.output)
+        assertEquals("technical-ir", loaded.config.technicalIr)
     }
 
     @Test

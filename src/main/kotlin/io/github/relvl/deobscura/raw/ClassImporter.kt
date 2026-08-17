@@ -1,5 +1,6 @@
 package io.github.relvl.deobscura.raw
 
+import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
 import io.github.relvl.deobscura.jar.JarLoadResult
 import io.github.relvl.deobscura.jar.JarRole
 import java.lang.classfile.*
@@ -57,11 +58,13 @@ class ClassImporter(
     }
 
     private fun logImportResult(result: RawImportResult) {
-        result.warnings.forEach { logger.warn(it) }
+        val ir = TechnicalIrService.rootHint()
+        result.warnings.forEach { logger.warn("{}{}", it, ir) }
         if (result.unknownInstructionCount > 0) {
             logger.warn(
-                "Raw importer encountered {} instruction(s) with an unknown representation.",
+                "Raw importer encountered {} instruction(s) with an unknown representation.{}",
                 result.unknownInstructionCount,
+                ir,
             )
         }
         logger.info(

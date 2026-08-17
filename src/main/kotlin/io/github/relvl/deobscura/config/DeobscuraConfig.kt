@@ -18,4 +18,9 @@ data class DeobscuraConfig(
 
     @ConfigProperty("Output directory.")
     val output: String = "out",
+
+    @ConfigProperty(
+        "Relative subdirectory under output for technical IR dumps. null disables technical IR output.",
+    )
+    val technicalIr: String? = null,
 )

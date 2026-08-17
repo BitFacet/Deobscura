@@ -8,6 +8,7 @@ import io.github.relvl.deobscura.config.ConfigException
 import io.github.relvl.deobscura.config.ConfigLoadResult
 import io.github.relvl.deobscura.config.ConfigRepository
 import io.github.relvl.deobscura.config.ConfigResolver
+import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
 import io.github.relvl.deobscura.jar.JarLoader
 import io.github.relvl.deobscura.raw.ClassImporter
 import io.github.relvl.deobscura.resolution.ClassHierarchy
@@ -40,11 +41,12 @@ class DeobscuraCommand : Callable<Int> {
     var rewriteConfig: Boolean = false
 
     override fun call(): Int {
+        val startedAt = System.nanoTime()
         val workingDirectory = Path.of("").toAbsolutePath().normalize()
         val absoluteConfigPath = resolveAgainst(workingDirectory, configPath)
         logger.info("Working directory: {}", workingDirectory)
 
-        return try {
+        val result = try {
             when (val loaded = ConfigRepository().loadOrCreate(absoluteConfigPath)) {
                 is ConfigLoadResult.Created -> configurationCreated(loaded)
                 is ConfigLoadResult.Loaded -> run(workingDirectory, absoluteConfigPath, loaded)
@@ -53,10 +55,14 @@ class DeobscuraCommand : Callable<Int> {
             logger.error(exception.message)
             EXIT_FAILURE
         } catch (exception: Exception) {
-            logger.error("Failed to load project: {}", exception.message)
-            logger.debug("Project loading failure", exception)
+            logger.error("Failed to load project.", exception)
             EXIT_FAILURE
         }
+
+        if (result == EXIT_SUCCESS) {
+            logger.info("Deobscura completed successfully in {}.", formatElapsed(System.nanoTime() - startedAt))
+        }
+        return result
     }
 
     private fun configurationCreated(loaded: ConfigLoadResult.Created): Int {
@@ -74,34 +80,45 @@ class DeobscuraCommand : Callable<Int> {
         }
 
         val resolution = ConfigResolver(workingDirectory).resolve(loaded.config)
-        logger.info("Input JAR: {}", resolution.config.input)
-        resolution.warnings.forEach { logger.warn(it) }
+        TechnicalIrService.configure(resolution.config.technicalIr, resolution.config.input)
 
-        val jar = JarLoader().load(resolution.config)
+        try {
+            logger.info("Input JAR: {}", resolution.config.input)
+            resolution.config.technicalIr?.let { logger.info("Technical IR output: {}", it) }
+            resolution.warnings.forEach { logger.warn("{}{}", it, TechnicalIrService.rootHint()) }
 
-        RuntimeClassSource(resolution.config.runtime).use { runtimeSource ->
-            logger.info("Runtime: {} (Java {})", resolution.config.runtime, resolution.config.runtimeVersion)
+            val jar = JarLoader().load(resolution.config)
 
-            val classResolver = ClassResolver(jar, runtimeSource)
-            val resolutionDiagnostics = ResolutionDiagnostics()
-            val resolutionResult = resolutionDiagnostics.inspect(jar, classResolver)
-            val rawImport = ClassImporter().importInput(jar)
+            RuntimeClassSource(resolution.config.runtime).use { runtimeSource ->
+                logger.info("Runtime: {} (Java {})", resolution.config.runtime, resolution.config.runtimeVersion)
 
-            ControlFlowDiagnostics().inspect(rawImport)
-            val hierarchy = ClassHierarchy(classResolver)
-            AnalysisDiagnostics(
-                methodAnalyzer = MethodAnalyzer(frameAnalyzer = FrameAnalyzer(hierarchy)),
-            ).inspect(rawImport)
-            logger.info("Hierarchy analysis loaded {} class definition(s) lazily.", hierarchy.loadedClassCount)
-            resolutionDiagnostics.logAnalysisImpact(classResolver, resolutionResult)
+                val classResolver = ClassResolver(jar, runtimeSource)
+                val resolutionDiagnostics = ResolutionDiagnostics()
+                val resolutionResult = resolutionDiagnostics.inspect(jar, classResolver)
+                val rawImport = ClassImporter().importInput(jar)
+
+                ControlFlowDiagnostics().inspect(rawImport)
+                val hierarchy = ClassHierarchy(classResolver)
+                AnalysisDiagnostics(
+                    methodAnalyzer = MethodAnalyzer(frameAnalyzer = FrameAnalyzer(hierarchy)),
+                ).inspect(rawImport)
+                TechnicalIrService.writeAll()
+                logger.info("Hierarchy analysis loaded {} class definition(s) lazily.", hierarchy.loadedClassCount)
+                resolutionDiagnostics.logAnalysisImpact(classResolver, resolutionResult)
+            }
+            return EXIT_SUCCESS
+        } finally {
+            TechnicalIrService.reset()
         }
-        return EXIT_SUCCESS
     }
 
     private fun resolveAgainst(base: Path, value: String): Path {
         val path = Path.of(value)
         return (if (path.isAbsolute) path else base.resolve(path)).normalize()
     }
+
+    private fun formatElapsed(nanos: Long): String =
+        String.format(java.util.Locale.ROOT, "%.1f s", nanos / 1_000_000_000.0)
 
     private companion object {
         const val DEFAULT_CONFIG = "default.jsonc"

@@ -22,6 +22,7 @@ class ConfigResolverTest {
                 input = "input.jar",
                 classpath = listOf("lib/*.jar", "missing.jar"),
                 output = "result",
+                technicalIr = "technical-ir",
             ),
         )
 
@@ -31,7 +32,49 @@ class ConfigResolverTest {
             resolution.config.classpath,
         )
         assertEquals(workingDirectory.resolve("result"), resolution.config.output)
+        assertEquals(workingDirectory.resolve("result/technical-ir"), resolution.config.technicalIr)
         assertTrue(resolution.warnings.any { "missing.jar" in it })
+    }
+
+    @Test
+    fun `technical IR must stay inside output directory`() {
+        val workingDirectory = Files.createTempDirectory("deobscura-resolver-test")
+        createJar(workingDirectory.resolve("input.jar"))
+
+        listOf("", ".", "../outside").forEach { technicalIr ->
+            assertFailsWith<ConfigException> {
+                ConfigResolver(workingDirectory).resolve(
+                    DeobscuraConfig(input = "input.jar", output = "result", technicalIr = technicalIr),
+                )
+            }
+        }
+
+        assertFailsWith<ConfigException> {
+            ConfigResolver(workingDirectory).resolve(
+                DeobscuraConfig(
+                    input = "input.jar",
+                    output = "result",
+                    technicalIr = workingDirectory.resolve("absolute-ir").toString(),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `technical IR cannot contain configured input data`() {
+        val workingDirectory = Files.createTempDirectory("deobscura-resolver-test")
+        val irDirectory = Files.createDirectories(workingDirectory.resolve("result/technical-ir"))
+        createJar(irDirectory.resolve("input.jar"))
+
+        assertFailsWith<ConfigException> {
+            ConfigResolver(workingDirectory).resolve(
+                DeobscuraConfig(
+                    input = "result/technical-ir/input.jar",
+                    output = "result",
+                    technicalIr = "technical-ir",
+                ),
+            )
+        }
     }
 
     @Test

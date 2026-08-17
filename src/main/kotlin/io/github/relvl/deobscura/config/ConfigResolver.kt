@@ -26,6 +26,9 @@ class ConfigResolver(
         }
 
         val runtimeVersion = resolveRuntimeVersion(runtime, config.runtime != null, warnings)
+        val output = resolvePath(config.output)
+        val technicalIr = config.technicalIr?.let { resolveOutputSubdirectory(output, it) }
+        technicalIr?.let { validateTechnicalIrDoesNotContainInputs(it, input, classpath, runtime) }
 
         return ConfigResolution(
             config = ResolvedConfig(
@@ -33,7 +36,8 @@ class ConfigResolver(
                 classpath = classpath,
                 runtime = runtime,
                 runtimeVersion = runtimeVersion,
-                output = resolvePath(config.output),
+                output = output,
+                technicalIr = technicalIr,
             ),
             warnings = warnings,
         )
@@ -138,6 +142,39 @@ class ConfigResolver(
     private fun resolvePath(value: String): Path {
         val path = Path.of(value)
         return (if (path.isAbsolute) path else normalizedWorkingDirectory.resolve(path)).normalize()
+    }
+
+    private fun resolveOutputSubdirectory(output: Path, value: String): Path {
+        if (value.isBlank()) {
+            throw ConfigException("technicalIr must be null or a non-empty relative subdirectory under output.")
+        }
+        val configured = Path.of(value)
+        if (configured.isAbsolute) {
+            throw ConfigException("technicalIr must be relative to output, not absolute: $value")
+        }
+        val normalizedOutput = output.toAbsolutePath().normalize()
+        val resolved = normalizedOutput.resolve(configured).normalize()
+        if (resolved == normalizedOutput || !resolved.startsWith(normalizedOutput)) {
+            throw ConfigException("technicalIr must name a subdirectory inside output: $value")
+        }
+        return resolved
+    }
+
+    private fun validateTechnicalIrDoesNotContainInputs(
+        technicalIr: Path,
+        input: Path,
+        classpath: List<Path>,
+        runtime: Path,
+    ) {
+        val protectedPaths = listOf(input) + classpath + runtime
+        protectedPaths.forEach { protectedPath ->
+            val normalized = protectedPath.toAbsolutePath().normalize()
+            if (normalized.startsWith(technicalIr)) {
+                throw ConfigException(
+                    "technicalIr '$technicalIr' would delete configured input data '$normalized' on startup.",
+                )
+            }
+        }
     }
 
     private fun requireJar(path: Path, description: String) {

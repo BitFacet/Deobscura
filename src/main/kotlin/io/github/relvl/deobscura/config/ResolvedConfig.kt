@@ -8,6 +8,7 @@ data class ResolvedConfig(
     val runtime: Path,
     val runtimeVersion: Runtime.Version,
     val output: Path,
+    val technicalIr: Path?,
 )
 
 data class ConfigResolution(

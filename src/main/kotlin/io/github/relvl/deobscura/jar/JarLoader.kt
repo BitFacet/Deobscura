@@ -74,11 +74,12 @@ class JarLoader(
             classpathOnlyClassCount = classpathOnlyClassCount,
             shadowedClasspathClassCount = shadowedClasspathClassCount,
             warnings = warnings,
-        ).also { result -> logLoadResult(result, config.classpath.size) }
+        ).also { result -> logLoadResult(result, config.classpath.size, config.technicalIr) }
     }
 
-    private fun logLoadResult(result: JarLoadResult, classpathJarCount: Int) {
-        result.warnings.forEach { logger.warn(it) }
+    private fun logLoadResult(result: JarLoadResult, classpathJarCount: Int, technicalIr: Path?) {
+        val ir = technicalIr?.let { " Technical IR root: $it." } ?: ""
+        result.warnings.forEach { logger.warn("{}{}", it, ir) }
         logger.info("Loaded {} classes from input JAR.", result.inputClassCount)
         logger.info(
             "Loaded {} classes from {} classpath JAR(s).",

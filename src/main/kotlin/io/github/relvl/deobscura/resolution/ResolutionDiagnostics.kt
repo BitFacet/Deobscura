@@ -1,5 +1,6 @@
 package io.github.relvl.deobscura.resolution
 
+import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
 import io.github.relvl.deobscura.jar.JarLoadResult
 import io.github.relvl.deobscura.jar.JarRole
 import org.slf4j.Logger
@@ -59,12 +60,15 @@ class ResolutionDiagnostics(
         val unresolvedAnalysisUses = resolver.unresolvedAnalysisUses
         unresolvedAnalysisUses.forEach { use ->
             val discovered = diagnostics.unresolved.firstOrNull { it.internalName == use.internalName }
+            val locations = TechnicalIrService.consumerLocations(use.requests.map { it.consumer })
+            val ir = if (locations.isEmpty()) "" else " Technical IR: ${locations.joinToString()}."
             logger.warn(
-                "Unresolved class '{}'{} affected analysis [{}]: {}.",
+                "Unresolved class '{}'{} affected analysis [{}]: {}.{}",
                 use.internalName,
                 discovered?.let { " [${it.kind}]" } ?: "",
                 use.strongestImpact,
                 formatAnalysisRequests(use.requests),
+                ir,
             )
         }
 
@@ -79,7 +83,8 @@ class ResolutionDiagnostics(
     }
 
     private fun logResolutionResult(result: ResolutionDiagnosticsResult, resolver: ClassResolver) {
-        result.warnings.forEach { logger.warn(it) }
+        val ir = TechnicalIrService.rootHint()
+        result.warnings.forEach { logger.warn("{}{}", it, ir) }
         logger.info(
             "Resolved {} referenced classes from the runtime; {} class(es) remain unresolved.",
             resolver.resolvedRuntimeClassCount,
