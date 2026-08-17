@@ -3,14 +3,15 @@ package io.github.relvl.deobscura.resolution
 import io.github.relvl.deobscura.raw.JvmReferenceType
 import io.github.relvl.deobscura.raw.JvmType
 import java.lang.classfile.ClassFile
+import java.util.concurrent.ConcurrentHashMap
 
 /** Lazy hierarchy view over input, classpath and runtime classes. */
 class ClassHierarchy(
     private val resolver: ClassResolver,
 ) {
     private val classFile = ClassFile.of()
-    private val nodes = mutableMapOf<String, ClassHierarchyNode>()
-    private val unparseable = mutableSetOf<String>()
+    private val nodes = ConcurrentHashMap<String, ClassHierarchyNode>()
+    private val unparseable = ConcurrentHashMap.newKeySet<String>()
 
     fun commonSupertype(
         left: JvmReferenceType,
@@ -145,6 +146,17 @@ class ClassHierarchy(
     }
 
     private fun node(
+        internalName: String,
+        purpose: ResolutionPurpose,
+        consumer: String,
+    ): ClassHierarchyNode? {
+        nodes[internalName]?.let { return it }
+        if (internalName in unparseable) return null
+        return loadNode(internalName, purpose, consumer)
+    }
+
+    @Synchronized
+    private fun loadNode(
         internalName: String,
         purpose: ResolutionPurpose,
         consumer: String,

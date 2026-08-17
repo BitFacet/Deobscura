@@ -1,61 +1,129 @@
 package io.github.relvl.deobscura.analysis
 
 import io.github.relvl.deobscura.controlflow.UnstructuredControlFlowKind
+import io.github.relvl.deobscura.diagnostics.ir.MethodAnalysisTrace
 import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
-import io.github.relvl.deobscura.raw.RawImportResult
 import io.github.relvl.deobscura.expression.ExpressionIrInconsistencyException
+import io.github.relvl.deobscura.raw.RawClass
+import io.github.relvl.deobscura.raw.RawImportResult
+import io.github.relvl.deobscura.raw.RawMethod
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Runs method analysis for the imported application and reports aggregate diagnostics. */
 class AnalysisDiagnostics(
     private val methodAnalyzer: MethodAnalyzer = MethodAnalyzer(),
     private val logger: Logger = LoggerFactory.getLogger(AnalysisDiagnostics::class.java),
+    private val availableProcessors: () -> Int = { Runtime.getRuntime().availableProcessors() },
 ) {
     fun inspect(rawImport: RawImportResult) {
         val stats = AnalysisDiagnosticStats()
-        val methodCount = rawImport.classes.values.sumOf { rawClass ->
-            rawClass.methods.count { it.code != null }
-        }
+        val classes = rawImport.classes.values.toList()
+        val methodCount = classes.sumOf { rawClass -> rawClass.methods.count { it.code != null } }
+        val technicalIrEnabled = TechnicalIrService.enabled
         val progress = MethodAnalysisProgressLogger(
             totalMethodCount = methodCount,
-            technicalIrEnabled = TechnicalIrService.enabled,
+            technicalIrEnabled = technicalIrEnabled,
             logger = logger,
         )
-        progress.start()
+        val processorCount = availableProcessors().coerceAtLeast(1)
+        val workerCount = analysisWorkerCount(processorCount)
 
-        for (rawClass in rawImport.classes.values) {
-            TechnicalIrService.captureClass(rawClass)
-            for (method in rawClass.methods) {
-                if (method.code == null) continue
-                stats.startMethod()
-                val methodName = "${rawClass.internalName}.${method.name}${method.descriptor}"
+        classes.forEach(TechnicalIrService::captureClass)
+        progress.start(workerCount, processorCount)
 
-                try {
-                    val analysis = methodAnalyzer.analyze(rawClass.internalName, method)
-                    analysis.structuredControlFlow.unstructured
-                        .filter { it.kind == UnstructuredControlFlowKind.SWITCH }
-                        .forEach { diagnostic ->
-                            logger.warn(
-                                "Unstructured switch in '{}': B{} ({}).{}",
-                                methodName,
-                                diagnostic.header.value,
-                                diagnostic.reason.diagnosticName,
-                                TechnicalIrService.methodHint(rawClass.internalName, method.name, method.descriptor),
-                            )
-                        }
-                    stats.record(methodName, analysis)
-                } catch (exception: MethodAnalysisException) {
-                    stats.recordProgress(exception.progress)
-                    recordFailure(rawClass.internalName, method.name, method.descriptor, methodName, exception, stats)
-                } finally {
-                    progress.methodCompleted()
-                }
+        val threadNumber = AtomicInteger()
+        val executor = Executors.newFixedThreadPool(workerCount) { runnable ->
+            Thread(runnable, "deobscura-analysis-${threadNumber.incrementAndGet()}").apply { isDaemon = true }
+        }
+        try {
+            val classIterator = classes.iterator()
+            val pending = ArrayDeque<Future<ClassAnalysisResult>>()
+            val maxInFlight = workerCount * MAX_IN_FLIGHT_CLASSES_PER_WORKER
+
+            fun submitNext(): Boolean {
+                if (!classIterator.hasNext()) return false
+                val rawClass = classIterator.next()
+                pending.add(
+                    executor.submit(Callable { analyzeClass(rawClass, technicalIrEnabled, progress) }),
+                )
+                return true
             }
+
+            repeat(maxInFlight) { if (!submitNext()) return@repeat }
+            while (pending.isNotEmpty()) {
+                recordClassResult(pending.removeFirst().get(), stats)
+                submitNext()
+            }
+        } finally {
+            executor.shutdownNow()
         }
 
         progress.finish()
         stats.log(logger)
+    }
+
+    private fun analyzeClass(
+        rawClass: RawClass,
+        technicalIrEnabled: Boolean,
+        progress: MethodAnalysisProgressLogger,
+    ): ClassAnalysisResult {
+        val methods = rawClass.methods.mapNotNull { method ->
+            if (method.code == null) return@mapNotNull null
+            val trace = if (technicalIrEnabled) MethodAnalysisTrace(method) else null
+            try {
+                MethodTaskResult(method, methodAnalyzer.analyze(rawClass.internalName, method, trace), null, trace)
+            } catch (exception: MethodAnalysisException) {
+                MethodTaskResult(method, null, exception, trace)
+            } finally {
+                progress.methodCompleted()
+            }
+        }
+        return ClassAnalysisResult(rawClass, methods)
+    }
+
+    private fun recordClassResult(result: ClassAnalysisResult, stats: AnalysisDiagnosticStats) {
+        result.methods.forEach { methodResult ->
+            stats.startMethod()
+            methodResult.trace?.let { TechnicalIrService.captureMethod(result.rawClass.internalName, it) }
+            val method = methodResult.method
+            val methodName = "${result.rawClass.internalName}.${method.name}${method.descriptor}"
+            val analysis = methodResult.analysis
+            if (analysis != null) {
+                analysis.structuredControlFlow.unstructured
+                    .filter { it.kind == UnstructuredControlFlowKind.SWITCH }
+                    .forEach { diagnostic ->
+                        logger.warn(
+                            "Unstructured switch in '{}': B{} ({}).{}",
+                            methodName,
+                            diagnostic.header.value,
+                            diagnostic.reason.diagnosticName,
+                            TechnicalIrService.methodHint(result.rawClass.internalName, method.name, method.descriptor),
+                        )
+                    }
+                stats.record(methodName, analysis)
+                return@forEach
+            }
+
+            val exception = requireNotNull(methodResult.failure)
+            stats.recordProgress(exception.progress)
+            recordFailure(
+                result.rawClass.internalName,
+                method.name,
+                method.descriptor,
+                methodName,
+                exception,
+                stats,
+            )
+        }
+    }
+
+    private companion object {
+        const val MAX_IN_FLIGHT_CLASSES_PER_WORKER = 8
     }
 
     private fun recordFailure(
@@ -155,6 +223,7 @@ class AnalysisDiagnostics(
     }
 }
 
+
 private class MethodAnalysisProgressLogger(
     private val totalMethodCount: Int,
     private val technicalIrEnabled: Boolean,
@@ -165,17 +234,20 @@ private class MethodAnalysisProgressLogger(
     private var startedAt = 0L
     private var nextProgressAt = 0L
 
-    fun start() {
+    fun start(workerCount: Int, availableProcessorCount: Int) {
         startedAt = nanoTime()
         nextProgressAt = startedAt + PROGRESS_INTERVAL_NANOS
         val ir = if (technicalIrEnabled) "; technical IR snapshots enabled" else ""
         logger.info(
-            "Starting method analysis pipeline for {} method(s): legacy normalization, JVM frames, value flow, SSA optimization, expression IR{}.",
+            "Starting method analysis pipeline for {} method(s) on {} worker(s) / {} available processor(s): legacy normalization, JVM frames, value flow, SSA optimization, expression IR{}.",
             totalMethodCount,
+            workerCount,
+            availableProcessorCount,
             ir,
         )
     }
 
+    @Synchronized
     fun methodCompleted() {
         completedMethodCount++
         val now = nanoTime()
@@ -195,6 +267,7 @@ private class MethodAnalysisProgressLogger(
         nextProgressAt = now + PROGRESS_INTERVAL_NANOS
     }
 
+    @Synchronized
     fun finish() {
         logger.info(
             "Method analysis pipeline completed: {}/{} method(s) processed in {}.",
@@ -211,3 +284,20 @@ private class MethodAnalysisProgressLogger(
 
 private fun formatElapsed(nanos: Long): String =
     String.format(java.util.Locale.ROOT, "%.1f s", nanos / 1_000_000_000.0)
+
+internal fun analysisWorkerCount(availableProcessors: Int): Int {
+    val processors = availableProcessors.coerceAtLeast(1)
+    return ((processors * 3) + 3) / 4
+}
+
+private data class ClassAnalysisResult(
+    val rawClass: RawClass,
+    val methods: List<MethodTaskResult>,
+)
+
+private data class MethodTaskResult(
+    val method: RawMethod,
+    val analysis: MethodAnalysis?,
+    val failure: MethodAnalysisException?,
+    val trace: MethodAnalysisTrace?,
+)

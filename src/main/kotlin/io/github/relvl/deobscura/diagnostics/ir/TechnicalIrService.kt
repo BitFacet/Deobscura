@@ -1,17 +1,6 @@
 package io.github.relvl.deobscura.diagnostics.ir
 
-import io.github.relvl.deobscura.analysis.FrameAnalysis
-import io.github.relvl.deobscura.analysis.MethodAnalysis
-import io.github.relvl.deobscura.analysis.MethodAnalysisException
-import io.github.relvl.deobscura.analysis.SsaAnalysis
-import io.github.relvl.deobscura.analysis.SsaOptimizationResult
-import io.github.relvl.deobscura.analysis.ValueFlowAnalysis
-import io.github.relvl.deobscura.cfg.ControlFlowGraph
-import io.github.relvl.deobscura.expression.ExpressionAnalysis
-import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
-import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
 import io.github.relvl.deobscura.raw.RawClass
-import io.github.relvl.deobscura.raw.RawMethod
 import org.slf4j.LoggerFactory
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -51,52 +40,12 @@ object TechnicalIrService {
         classes.getOrPut(rawClass.internalName) { ClassSnapshot(rawClass) }
     }
 
-    fun captureNormalization(
-        ownerInternalName: String,
-        originalMethod: RawMethod,
-        normalizedMethod: RawMethod,
-        normalization: LegacySubroutineNormalizationResult,
-    ) {
-        method(ownerInternalName, originalMethod)?.apply {
-            this.normalizedMethod = normalizedMethod
-            this.normalization = normalization
-        }
-    }
-
-    fun captureGraph(ownerInternalName: String, method: RawMethod, graph: ControlFlowGraph) {
-        method(ownerInternalName, method)?.graph = graph
-    }
-
-    fun captureFrames(ownerInternalName: String, method: RawMethod, frames: FrameAnalysis) {
-        method(ownerInternalName, method)?.frames = frames
-    }
-
-    fun captureValueFlow(ownerInternalName: String, method: RawMethod, valueFlow: ValueFlowAnalysis) {
-        method(ownerInternalName, method)?.valueFlow = valueFlow
-    }
-
-    fun captureInitialSsa(ownerInternalName: String, method: RawMethod, ssa: SsaAnalysis) {
-        method(ownerInternalName, method)?.initialSsa = ssa
-    }
-
-    fun captureOptimization(ownerInternalName: String, method: RawMethod, optimization: SsaOptimizationResult) {
-        method(ownerInternalName, method)?.optimization = optimization
-    }
-
-    fun captureExpression(ownerInternalName: String, method: RawMethod, expression: ExpressionAnalysis) {
-        method(ownerInternalName, method)?.expression = expression
-    }
-
-    fun captureStructuredControlFlow(
-        ownerInternalName: String,
-        method: RawMethod,
-        structuredControlFlow: StructuredControlFlowAnalysis,
-    ) {
-        method(ownerInternalName, method)?.structuredControlFlow = structuredControlFlow
-    }
-
-    fun captureFailure(ownerInternalName: String, method: RawMethod, exception: MethodAnalysisException) {
-        method(ownerInternalName, method)?.failure = exception
+    /** Stores a completed method-local trace after analysis; callers control deterministic order. */
+    internal fun captureMethod(ownerInternalName: String, trace: MethodAnalysisTrace) {
+        if (!enabled) return
+        val owner = classes[ownerInternalName]
+            ?: error("Technical IR class '$ownerInternalName' was not captured before method analysis.")
+        owner.methods[MethodKey(trace.originalMethod.name, trace.originalMethod.descriptor)] = trace
     }
 
     fun rootHint(): String = locator?.let { " Technical IR root: ${it.rootLocation()}." } ?: ""
@@ -145,13 +94,6 @@ object TechnicalIrService {
         root = null
         inputJar = null
         currentLocator = null
-    }
-
-    private fun method(ownerInternalName: String, method: RawMethod): MethodSnapshot? {
-        if (!enabled) return null
-        val owner = classes[ownerInternalName]
-            ?: error("Technical IR class '$ownerInternalName' was not captured before method analysis.")
-        return owner.methods.getOrPut(MethodKey(method.name, method.descriptor)) { MethodSnapshot(method) }
     }
 
     private fun writeClass(outputDirectory: Path, snapshot: ClassSnapshot) {
@@ -203,51 +145,13 @@ object TechnicalIrService {
 
 internal data class ClassSnapshot(
     val rawClass: RawClass,
-    val methods: LinkedHashMap<MethodKey, MethodSnapshot> = linkedMapOf(),
+    val methods: LinkedHashMap<MethodKey, MethodAnalysisTrace> = linkedMapOf(),
 )
 
 internal data class MethodKey(
     val name: String,
     val descriptor: String,
 )
-
-internal class MethodSnapshot(
-    val originalMethod: RawMethod,
-) {
-    var normalizedMethod: RawMethod? = null
-    var normalization: LegacySubroutineNormalizationResult? = null
-    var graph: ControlFlowGraph? = null
-    var frames: FrameAnalysis? = null
-    var valueFlow: ValueFlowAnalysis? = null
-    var initialSsa: SsaAnalysis? = null
-    var optimization: SsaOptimizationResult? = null
-    var expression: ExpressionAnalysis? = null
-    var structuredControlFlow: StructuredControlFlowAnalysis? = null
-    var failure: MethodAnalysisException? = null
-
-    fun completeAnalysis(): MethodAnalysis? {
-        val method = normalizedMethod ?: return null
-        val currentGraph = graph ?: return null
-        val currentFrames = frames ?: return null
-        val currentValueFlow = valueFlow ?: return null
-        val currentInitialSsa = initialSsa ?: return null
-        val currentOptimization = optimization ?: return null
-        val currentExpression = expression ?: return null
-        val currentStructuredControlFlow = structuredControlFlow ?: return null
-        val currentNormalization = normalization ?: return null
-        return MethodAnalysis(
-            method = method,
-            graph = currentGraph,
-            frames = currentFrames,
-            valueFlow = currentValueFlow,
-            initialSsa = currentInitialSsa,
-            optimization = currentOptimization,
-            expression = currentExpression,
-            structuredControlFlow = currentStructuredControlFlow,
-            normalization = currentNormalization,
-        )
-    }
-}
 
 internal fun String.escapeMalformedUtf16(): String {
     var firstMalformed = -1

@@ -34,6 +34,7 @@ class RuntimeClassSource(
         packagesRoot = fileSystem.getPath("/packages")
     }
 
+    @Synchronized
     fun findClass(internalName: String): RuntimeClass? {
         if (cache.containsKey(internalName)) {
             return cache[internalName]

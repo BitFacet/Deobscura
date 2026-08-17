@@ -2,7 +2,7 @@ package io.github.relvl.deobscura.analysis
 
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.cfg.ControlFlowGraphBuilder
-import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
+import io.github.relvl.deobscura.diagnostics.ir.MethodAnalysisTrace
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizer
 import io.github.relvl.deobscura.raw.RawMethod
@@ -22,62 +22,71 @@ class MethodAnalyzer(
     private val structuredControlFlowAnalyzer: StructuredControlFlowAnalyzer = StructuredControlFlowAnalyzer(),
     private val legacySubroutineNormalizer: LegacySubroutineNormalizer = LegacySubroutineNormalizer(),
 ) {
-    fun analyze(ownerInternalName: String, method: RawMethod): MethodAnalysis {
+    fun analyze(ownerInternalName: String, method: RawMethod): MethodAnalysis =
+        analyze(ownerInternalName, method, null)
+
+    internal fun analyze(
+        ownerInternalName: String,
+        method: RawMethod,
+        trace: MethodAnalysisTrace?,
+    ): MethodAnalysis {
         val code = requireNotNull(method.code) { "Cannot analyze a method without code." }
 
         val normalization = try {
             legacySubroutineNormalizer.normalize(code)
         } catch (exception: Exception) {
-            throw failure(ownerInternalName, method, MethodAnalysisStage.PREPARATION, cause = exception)
+            throw failure(trace, MethodAnalysisStage.PREPARATION, cause = exception)
         }
 
         val normalizedCode = normalization.code
         val normalizedMethod = if (normalizedCode === code) method else method.copy(code = normalizedCode)
-        TechnicalIrService.captureNormalization(ownerInternalName, method, normalizedMethod, normalization)
+        trace?.apply {
+            this.normalizedMethod = normalizedMethod
+            this.normalization = normalization
+        }
 
         val graph = try {
             graphBuilder.build(normalizedCode)
         } catch (exception: Exception) {
-            throw failure(ownerInternalName, method, MethodAnalysisStage.PREPARATION, normalization, cause = exception)
+            throw failure(trace, MethodAnalysisStage.PREPARATION, normalization, cause = exception)
         }
-        TechnicalIrService.captureGraph(ownerInternalName, method, graph)
+        trace?.graph = graph
 
         val frames = try {
             frameAnalyzer.analyze(ownerInternalName, normalizedMethod, graph)
         } catch (exception: Exception) {
-            throw failure(ownerInternalName, method, MethodAnalysisStage.FRAME, normalization, cause = exception)
+            throw failure(trace, MethodAnalysisStage.FRAME, normalization, cause = exception)
         }
-        TechnicalIrService.captureFrames(ownerInternalName, method, frames)
+        trace?.frames = frames
 
         val valueFlow = try {
             valueFlowAnalyzer.analyze(graph, frames)
         } catch (exception: Exception) {
-            throw failure(ownerInternalName, method, MethodAnalysisStage.VALUE_FLOW, normalization, frames, cause = exception)
+            throw failure(trace, MethodAnalysisStage.VALUE_FLOW, normalization, frames, cause = exception)
         }
-        TechnicalIrService.captureValueFlow(ownerInternalName, method, valueFlow)
+        trace?.valueFlow = valueFlow
 
         val initialSsa = try {
             ssaAnalyzer.analyze(graph, valueFlow)
         } catch (exception: Exception) {
-            throw failure(ownerInternalName, method, MethodAnalysisStage.SSA, normalization, frames, valueFlow, cause = exception)
+            throw failure(trace, MethodAnalysisStage.SSA, normalization, frames, valueFlow, cause = exception)
         }
-        TechnicalIrService.captureInitialSsa(ownerInternalName, method, initialSsa)
+        trace?.initialSsa = initialSsa
 
         val optimization = try {
             ssaOptimizer.optimize(graph, initialSsa)
         } catch (exception: Exception) {
             throw failure(
-                ownerInternalName, method, MethodAnalysisStage.SSA, normalization, frames, valueFlow, initialSsa, cause = exception,
+                trace, MethodAnalysisStage.SSA, normalization, frames, valueFlow, initialSsa, cause = exception,
             )
         }
-        TechnicalIrService.captureOptimization(ownerInternalName, method, optimization)
+        trace?.optimization = optimization
 
         val expression = try {
             expressionBuilder.build(optimization.analysis)
         } catch (exception: Exception) {
             throw failure(
-                ownerInternalName,
-                method,
+                trace,
                 MethodAnalysisStage.EXPRESSION,
                 normalization,
                 frames,
@@ -87,14 +96,13 @@ class MethodAnalyzer(
                 exception,
             )
         }
-        TechnicalIrService.captureExpression(ownerInternalName, method, expression)
+        trace?.expression = expression
 
         val structuredControlFlow = try {
             structuredControlFlowAnalyzer.analyze(graph, optimization.controlFlow, expression)
         } catch (exception: Exception) {
             throw failure(
-                ownerInternalName,
-                method,
+                trace,
                 MethodAnalysisStage.STRUCTURED_CONTROL_FLOW,
                 normalization,
                 frames,
@@ -104,7 +112,7 @@ class MethodAnalyzer(
                 exception,
             )
         }
-        TechnicalIrService.captureStructuredControlFlow(ownerInternalName, method, structuredControlFlow)
+        trace?.structuredControlFlow = structuredControlFlow
 
         return MethodAnalysis(
             method = normalizedMethod,
@@ -120,8 +128,7 @@ class MethodAnalyzer(
     }
 
     private fun failure(
-        ownerInternalName: String,
-        method: RawMethod,
+        trace: MethodAnalysisTrace?,
         stage: MethodAnalysisStage,
         normalization: LegacySubroutineNormalizationResult? = null,
         frames: FrameAnalysis? = null,
@@ -135,7 +142,7 @@ class MethodAnalyzer(
             progress = MethodAnalysisProgress(normalization, frames, valueFlow, initialSsa, optimization),
             cause = cause,
         )
-        TechnicalIrService.captureFailure(ownerInternalName, method, exception)
+        trace?.failure = exception
         return exception
     }
 }

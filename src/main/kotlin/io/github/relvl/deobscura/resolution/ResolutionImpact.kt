@@ -34,6 +34,7 @@ data class ResolutionRequest(
 internal class ResolutionImpactTracker {
     private val unresolvedUses = linkedMapOf<String, MutableSet<ResolutionRequest>>()
 
+    @Synchronized
     fun record(
         internalName: String,
         purpose: ResolutionPurpose,
@@ -45,6 +46,7 @@ internal class ResolutionImpactTracker {
             .add(ResolutionRequest(purpose, consumer, impact))
     }
 
+    @Synchronized
     fun snapshot(): List<UnresolvedAnalysisUse> = unresolvedUses
         .toSortedMap()
         .map { (internalName, requests) ->

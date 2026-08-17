@@ -31,6 +31,7 @@ class ClassResolver(
     val unresolvedAnalysisUses: List<UnresolvedAnalysisUse>
         get() = impactTracker.snapshot()
 
+    @Synchronized
     private fun resolveClass(internalName: String): ResolvedClass? {
         jarClasses[internalName]?.let { loadedClass ->
             return ResolvedClass(
@@ -65,7 +66,7 @@ class ClassResolver(
     }
 
     val resolvedRuntimeClassCount: Int
-        get() = runtimeClasses.size
+        @Synchronized get() = runtimeClasses.size
 }
 
 data class ResolvedClass(
