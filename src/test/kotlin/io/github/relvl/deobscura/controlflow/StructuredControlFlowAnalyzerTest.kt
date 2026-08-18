@@ -13,6 +13,7 @@ import kotlin.test.*
 class StructuredControlFlowAnalyzerTest {
     private val analyzer = StructuredControlFlowAnalyzer()
 
+    // Pseudocode: if (cond) A else B; C
     @Test
     fun `recognizes a single-entry if-else diamond`() {
         val b0 = BasicBlockId(0)
@@ -39,6 +40,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredConditionalCount)
     }
 
+    // Pseudocode: while (cond) { BODY }
     @Test
     fun `recognizes a natural while loop and preserves branch orientation`() {
         val b0 = BasicBlockId(0)
@@ -64,6 +66,7 @@ class StructuredControlFlowAnalyzerTest {
         assertFalse(region.negateCondition)
     }
 
+    // Pseudocode: while (!exitCond) { BODY }
     @Test
     fun `negates while condition when conditional edge exits the loop`() {
         val b0 = BasicBlockId(0)
@@ -85,6 +88,7 @@ class StructuredControlFlowAnalyzerTest {
     }
 
 
+    // Pseudocode: if (!cond) { BODY }
     @Test
     fun `normalizes an empty conditional arm into a non-empty then arm`() {
         val b0 = BasicBlockId(0)
@@ -109,6 +113,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(1, result.emptyArmNormalizationCount)
     }
 
+    // Pseudocode: if (cond) return; BODY
     @Test
     fun `recognizes a return arm without a common post-dominator`() {
         val b0 = BasicBlockId(0)
@@ -146,6 +151,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredConditionalCount)
     }
 
+    // Pseudocode: if (!cond) return; BODY
     @Test
     fun `inverts condition when the fallthrough arm terminates`() {
         val b0 = BasicBlockId(0)
@@ -182,6 +188,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(b1, region.continuation)
     }
 
+    // Pseudocode: while (...) { if (cond) continue; BODY }
     @Test
     fun `recognizes continue arm inside natural loop`() {
         val b0 = BasicBlockId(0)
@@ -210,6 +217,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(1, result.continueIfRegionCount)
     }
 
+    // Pseudocode: while (...) { if (cond) continue; else continue; }
     @Test
     fun `does not classify one arm as continue when both branches continue`() {
         val b0 = BasicBlockId(0)
@@ -238,6 +246,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.continueIfRegionCount)
     }
 
+    // Pseudocode: while (...) { if (cond) break; BODY }
     @Test
     fun `recognizes break arm to canonical loop exit`() {
         val b0 = BasicBlockId(0)
@@ -266,6 +275,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(1, result.breakIfRegionCount)
     }
 
+    // Pseudocode: boolean t = cond ? true : false; if (t) BODY
     @Test
     fun `folds boolean materialization diamond into consuming condition`() {
         val b0 = BasicBlockId(0)
@@ -346,6 +356,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredConditionalCount)
     }
 
+    // Pseudocode: if (a && b && c) BODY
     @Test
     fun `folds linear short circuit branch chain into compound condition`() {
         val b0 = BasicBlockId(0)
@@ -381,6 +392,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredConditionalCount)
     }
 
+    // Pseudocode: while (...) { if (a && b) continue; BODY }
     @Test
     fun `folds short circuit chain inside loop before recognizing continue arm`() {
         val b0 = BasicBlockId(0)
@@ -430,6 +442,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.none { it.header in setOf(b1, b2, b3) })
     }
 
+    // Pseudocode: while (...) { if (cond) A; B; continue; }
     @Test
     fun `reconstructs sequential loop-body if around a transparent continue latch`() {
         val b0 = BasicBlockId(0)
@@ -472,6 +485,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.none { it.header in setOf(b1, b2) })
     }
 
+    // Pseudocode: while (...) { if (cond) continue; A; B; }
     @Test
     fun `uses forward loop continuation spine to recover early continue`() {
         val b0 = BasicBlockId(0)
@@ -510,6 +524,7 @@ class StructuredControlFlowAnalyzerTest {
     }
 
 
+    // Pseudocode: switch (x) { case A: ...; break; case B: ...; break; } AFTER
     @Test
     fun `recognizes switch cases and common continuation`() {
         val b0 = BasicBlockId(0)
@@ -542,6 +557,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.isEmpty())
     }
 
+    // Pseudocode: switch (x) { case A: case B: BODY; break; }
     @Test
     fun `groups multiple switch labels that share one body`() {
         val b0 = BasicBlockId(0)
@@ -566,6 +582,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(2, region.cases.size)
     }
 
+    // Pseudocode: switch (x) { case A: A; case B: B; break; }
     @Test
     fun `recognizes switch case fallthrough into another case`() {
         val b0 = BasicBlockId(0)
@@ -592,6 +609,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(b3, region.continuation)
     }
 
+    // Pseudocode: switch (x) { case A: A; case B: B; } AFTER  // A joins B first
     @Test
     fun `does not mistake a join inside a fallthrough chain for switch continuation`() {
         val b0 = BasicBlockId(0)
@@ -638,6 +656,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.none { it.header == b0 })
     }
 
+    // Pseudocode: case A: if (cond) break; FALLTHROUGH_BODY
     @Test
     fun `recognizes conditional break and fallthrough from the same switch case`() {
         val b0 = BasicBlockId(0)
@@ -672,6 +691,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.none { it.header == b0 })
     }
 
+    // Pseudocode: outer: for (;;) { switch (x) { case A: break outer; } }
     @Test
     fun `recognizes switch case break from an enclosing natural infinite loop`() {
         val b0 = BasicBlockId(0)
@@ -704,6 +724,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.none { it.header == b1 })
     }
 
+    // Pseudocode: while (...) { switch (x) { case A: break; /* loop */ } }
     @Test
     fun `preserves switch case that directly breaks an enclosing natural loop`() {
         val b0 = BasicBlockId(0)
@@ -746,6 +767,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.none { it.header == b1 })
     }
 
+    // Pseudocode: while (...) { switch (x) { case A: break; /* loop */ } if (...) return; }
     @Test
     fun `recognizes switch case targeting canonical loop exit despite another terminal loop exit`() {
         val b0 = BasicBlockId(0)
@@ -779,6 +801,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.none { it.header == b1 })
     }
 
+    // Pseudocode: while (...) { switch (x) { ... } LOCAL_JOIN; }
     @Test
     fun `prefers local switch join before re-entering enclosing loop`() {
         val b0 = BasicBlockId(0)
@@ -811,6 +834,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.none { it.header == b2 })
     }
 
+    // Pseudocode: switch (x) { case A: return; case B: B; break; } AFTER
     @Test
     fun `recognizes switch continuation despite a terminal case`() {
         val b0 = BasicBlockId(0)
@@ -837,6 +861,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(StructuredSwitchCaseExitKind.BREAK, region.cases.single { it.entry == b2 }.exit?.kind)
     }
 
+    // Pseudocode: switch (x) { case A: BODY; break; case B: } AFTER
     @Test
     fun `recognizes continuation that is also an empty switch case target`() {
         val b0 = BasicBlockId(0)
@@ -865,6 +890,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(StructuredSwitchCaseExitKind.RETURN_OR_THROW, region.cases.single { it.entry == b3 }.exit?.kind)
     }
 
+    // Pseudocode: if (...) goto AFTER; switch (x) { ... break; } AFTER
     @Test
     fun `recognizes switch target shared with surrounding control flow as continuation`() {
         val b0 = BasicBlockId(0)
@@ -898,6 +924,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(StructuredSwitchCaseExitKind.NORMAL, region.cases.single { it.entry == b4 }.exit?.kind)
     }
 
+    // Pseudocode: switch (x) { case A: A; default: return; }
     @Test
     fun `recognizes terminal switch with fallthrough into terminal default`() {
         val b0 = BasicBlockId(0)
@@ -927,6 +954,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(StructuredSwitchCaseExitKind.RETURN_OR_THROW, region.cases.single { it.entry == b3 }.exit?.kind)
     }
 
+    // Pseudocode: case A: if (cond) return; A; break;
     @Test
     fun `keeps case local terminal branch inside case body`() {
         val b0 = BasicBlockId(0)
@@ -966,6 +994,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.isEmpty())
     }
 
+    // Pseudocode: switch (x) { case A: ...; case B: ...; } return;
     @Test
     fun `recognizes common terminal post dominator as switch continuation`() {
         val b0 = BasicBlockId(0)
@@ -996,6 +1025,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.isEmpty())
     }
 
+    // Pseudocode: case A: goto RETURN; ...; RETURN: return;
     @Test
     fun `recognizes jump to reachable externally shared terminal block as terminal case exit`() {
         val b0 = BasicBlockId(0)
@@ -1033,6 +1063,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.isEmpty())
     }
 
+    // Pseudocode: case A: if (...) return; break; case B: break; AFTER
     @Test
     fun `recognizes continuation reached by multiple cases despite local terminal branches`() {
         val b0 = BasicBlockId(0)
@@ -1074,6 +1105,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.isEmpty())
     }
 
+    // Pseudocode: case A: if (...) X; LOCAL_JOIN; break; ... OUTER_JOIN
     @Test
     fun `prefers local case join over later surrounding-flow join`() {
         val b0 = BasicBlockId(0)
@@ -1116,6 +1148,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.none { it.header == b0 })
     }
 
+    // Pseudocode: switch (...) { ... break; } SHARED; NEXT
     @Test
     fun `recognizes non-terminal non-entry continuation shared with surrounding flow`() {
         val b0 = BasicBlockId(0)
@@ -1150,6 +1183,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.isEmpty())
     }
 
+    // Pseudocode: while (...) { switch (x) { case A: continue; } UPSTREAM_JOIN; }
     @Test
     fun `recognizes proven natural loop continue without using upstream join as switch continuation`() {
         val b0 = BasicBlockId(0)
@@ -1192,6 +1226,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(result.unstructured.none { it.header == b1 })
     }
 
+    // Pseudocode: switch (x) { case A: return; default: throw; }
     @Test
     fun `recognizes fully terminal switch without common continuation`() {
         val b0 = BasicBlockId(0)
@@ -1220,6 +1255,7 @@ class StructuredControlFlowAnalyzerTest {
         assertTrue(region.cases.all { it.exit?.kind == StructuredSwitchCaseExitKind.RETURN_OR_THROW })
     }
 
+    // Pseudocode: if/CFG shape with no provable structured region -> diagnostic only
     @Test
     fun `records why a conditional remains block based`() {
         val b0 = BasicBlockId(0)
@@ -1241,6 +1277,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(UnstructuredControlFlowReason.NO_COMMON_POST_DOMINATOR, diagnostic.reason)
     }
 
+    // Pseudocode: try { BODY } catch (A e) { A } catch (B e) { B }
     @Test
     fun `recognizes sibling typed catches for one protected range`() {
         val b0 = BasicBlockId(0)
@@ -1278,6 +1315,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { if (...) return; BODY } catch (E e) { ... }
     @Test
     fun `coalesces source try split around terminal control transfer`() {
         val b0 = BasicBlockId(0)
@@ -1326,6 +1364,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { split physical ranges } catch (A e) { ... } catch (B e) { ... }
     @Test
     fun `coalesced physical ranges retain one typed scope with sibling catches`() {
         val b0 = BasicBlockId(0)
@@ -1383,6 +1422,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { try { ... } catch (...) {} } catch (...) {}  // crossing ranges rejected
     @Test
     fun `builds exception scope nesting and reports crossing scopes`() {
         val outer = setOf(BasicBlockId(0), BasicBlockId(1), BasicBlockId(2), BasicBlockId(3))
@@ -1407,6 +1447,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(listOf(crossingLeft to crossingRight), crossing.crossingPairs)
     }
 
+    // Pseudocode: try { try { BODY } catch (A e) {} } catch (B e) {} AFTER
     @Test
     fun `reconstructs nested typed catch scopes through a shared continuation`() {
         val outerTry = BasicBlockId(0)
@@ -1448,6 +1489,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { ... } catch (A e) { try { ... } catch (B e) { ... } }
     @Test
     fun `closes catch ownership over recursively nested exception regions`() {
         val outerTry = BasicBlockId(0)
@@ -1494,6 +1536,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { ... } catch (A e) { try { ... } catch (B e) { ... } AFTER_IN_CATCH }
     @Test
     fun `treats nested catch body as owned by enclosing catch`() {
         val b0 = BasicBlockId(0)
@@ -1530,6 +1573,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { ... } catch (A|B e) { ... }  // unrelated handler peer is not allowed
     @Test
     fun `handler peer entry allowance is local to one typed catch scope`() {
         val catchEntry = BasicBlockId(10)
@@ -1563,6 +1607,7 @@ class StructuredControlFlowAnalyzerTest {
         )
     }
 
+    // Pseudocode: goto CATCH_BODY from outside; try { ... } catch (E e) { CATCH_BODY } -> reject
     @Test
     fun `rejects unrelated external entry into ordinary catch body`() {
         val entry = BasicBlockId(0)
@@ -1596,6 +1641,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(UnstructuredControlFlowReason.EXCEPTION_HANDLER_HAS_EXTERNAL_ENTRY, diagnostic.reason)
     }
 
+    // Pseudocode: try { BODY } finally { try { CLEANUP } catch (...) { ... } }  // JSR-era copies
     @Test
     fun `recognizes legacy finally family with recursive exception ownership`() {
         val anchor = BasicBlockId(0)
@@ -1717,6 +1763,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { ... } catch (E e) { ... } finally { CLEANUP }  // copied cleanup joins via gotos
     @Test
     fun `recognizes legacy try catch finally copies through converging goto trampolines`() {
         val b0 = BasicBlockId(0)
@@ -1818,6 +1865,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { ... } catch (E e) { ... } finally { CLEANUP }  // exception table split into peers
     @Test
     fun `recognizes legacy try catch finally split across identical mixed ranges`() {
         val b0 = BasicBlockId(0)
@@ -1924,6 +1972,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: loop: try { ... } catch (E e) { continue loop; }
     @Test
     fun `recognizes catch that continues at protected loop header`() {
         val b0 = BasicBlockId(0)
@@ -1955,6 +2004,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { if (...) return; } catch (E e) { CATCH } AFTER
     @Test
     fun `keeps shared post-catch join outside handler body after terminal try return`() {
         val b0 = BasicBlockId(0)
@@ -1996,6 +2046,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { BODY } catch (E e) { CATCH } BRIDGE; AFTER
     @Test
     fun `uses common source join beyond protected normal bridge`() {
         val b0 = BasicBlockId(0)
@@ -2029,6 +2080,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: synchronized (m) { BODY }  // astore ex; aload m; monitorexit; aload ex; athrow
     @Test
     fun `recognizes canonical synchronized monitor cleanup`() {
         val b0 = BasicBlockId(0)
@@ -2097,6 +2149,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: m = expr; synchronized (m) { BODY }  // astore m; aload m; monitorenter
     @Test
     fun `recognizes synchronized monitor loaded from stored local before monitorenter`() {
         val b0 = BasicBlockId(0)
@@ -2157,6 +2210,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: synchronized (m) { BODY }  // cleanup handler is itself covered by companion catch-all range
     @Test
     fun `absorbs self-protecting monitor cleanup range into synchronized region`() {
         val b0 = BasicBlockId(0)
@@ -2225,6 +2279,197 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: synchronized (m) { A; B; }  // A and B are separate protected fragments with cleanup copies
+    @Test
+    fun `recognizes synchronized body fragmented across catch-all handler copies`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val b3 = BasicBlockId(3)
+        val h1 = BasicBlockId(4)
+        val h2 = BasicBlockId(5)
+        val edges = listOf(
+            edge(b0, b1, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(b1, b2, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b1, h1, null),
+            edge(b2, b3, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b2, h2, null),
+        )
+        val instructions = listOf(
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 2),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorenter")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 3),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 3),
+            RawThrowInstruction(JvmOpcode("athrow")),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 4),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 4),
+            RawThrowInstruction(JvmOpcode("athrow")),
+        )
+        val blocks = listOf(
+            BasicBlock(b0, 0, 3, emptyList(), emptyList()),
+            BasicBlock(b1, 3, 4, emptyList(), emptyList()),
+            BasicBlock(b2, 4, 5, emptyList(), emptyList()),
+            BasicBlock(b3, 5, 8, emptyList(), emptyList()),
+            BasicBlock(h1, 8, 13, emptyList(), emptyList()),
+            BasicBlock(h2, 13, 18, emptyList(), emptyList()),
+        )
+        val labels = List(19) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                instructions,
+                labels,
+                listOf(
+                    exceptionHandler(3, 4, 8, null),
+                    exceptionHandler(4, 5, 13, null),
+                ),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            b0,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(b0, b1, b2, b3, h1, h2), edges, b0),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(7, null),
+                    ExpressionStatement.Throw(12, ValueId(0)),
+                    ExpressionStatement.Throw(17, ValueId(1)),
+                ),
+            ),
+            legacySubroutineNormalized = true,
+        )
+
+        val region = assertIs<StructuredRegion.Synchronized>(result.regions.single())
+        assertEquals(b0, region.header)
+        assertEquals(b1, region.bodyEntry)
+        assertEquals(setOf(b1, b2, b3), region.bodyBlocks)
+        assertEquals(setOf(h1, h2), region.handlerBlocks)
+        assertEquals(2, region.monitorSlot)
+        assertEquals(2, region.monitorEnterInstructionIndex)
+        assertEquals(listOf(6), region.normalMonitorExitInstructionIndices)
+        assertEquals(
+            listOf(
+                StructuredProtectedRange(3, 4),
+                StructuredProtectedRange(4, 5),
+            ),
+            region.protectedRanges,
+        )
+        assertEquals(2, result.exceptionRegionCount)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    // Pseudocode: synchronized (m) { try { A } catch (E e) { H } B }  // H rejoins B; fragments have monitor cleanup
+    @Test
+    fun `recognizes fragmented synchronized body containing a rejoining typed catch`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val b3 = BasicBlockId(3)
+        val nestedHandler = BasicBlockId(4)
+        val h1 = BasicBlockId(5)
+        val h2 = BasicBlockId(6)
+        val edges = listOf(
+            edge(b0, b1, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(b1, b2, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b1, nestedHandler, "java/lang/Exception"),
+            exceptionEdge(b1, h1, null),
+            edge(nestedHandler, b2, ControlFlowEdgeKind.JUMP),
+            edge(b2, b3, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b2, h2, null),
+        )
+        val instructions = listOf(
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 2),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorenter")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 5),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 3),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 3),
+            RawThrowInstruction(JvmOpcode("athrow")),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 4),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 4),
+            RawThrowInstruction(JvmOpcode("athrow")),
+        )
+        val blocks = listOf(
+            BasicBlock(b0, 0, 3, emptyList(), emptyList()),
+            BasicBlock(b1, 3, 4, emptyList(), emptyList()),
+            BasicBlock(b2, 4, 5, emptyList(), emptyList()),
+            BasicBlock(b3, 5, 8, emptyList(), emptyList()),
+            BasicBlock(nestedHandler, 8, 10, emptyList(), emptyList()),
+            BasicBlock(h1, 10, 15, emptyList(), emptyList()),
+            BasicBlock(h2, 15, 20, emptyList(), emptyList()),
+        )
+        val labels = List(21) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                instructions,
+                labels,
+                listOf(
+                    exceptionHandler(3, 4, 8, "java/lang/Exception"),
+                    exceptionHandler(3, 4, 10, null),
+                    exceptionHandler(4, 5, 15, null),
+                ),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            b0,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(b0, b1, b2, b3, nestedHandler, h1, h2), edges, b0),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(7, null),
+                    ExpressionStatement.Throw(14, ValueId(0)),
+                    ExpressionStatement.Throw(19, ValueId(1)),
+                ),
+            ),
+            legacySubroutineNormalized = true,
+        )
+
+        val region = assertIs<StructuredRegion.Synchronized>(result.regions.single())
+        assertEquals(b0, region.header)
+        assertEquals(b1, region.bodyEntry)
+        assertEquals(setOf(b1, b2, b3, nestedHandler), region.bodyBlocks)
+        assertEquals(setOf(h1, h2), region.handlerBlocks)
+        assertEquals(2, region.monitorSlot)
+        assertEquals(2, region.monitorEnterInstructionIndex)
+        assertEquals(listOf(6), region.normalMonitorExitInstructionIndices)
+        assertEquals(2, result.exceptionRegionCount)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    // Pseudocode: try { BODY } catch (A | B e) { HANDLER }
     @Test
     fun `groups multi-catch table entries sharing one handler`() {
         val b0 = BasicBlockId(0)
@@ -2258,6 +2503,7 @@ class StructuredControlFlowAnalyzerTest {
         )
     }
 
+    // Pseudocode: try { BODY } finally { CLEANUP }  // CLEANUP copied on normal and exceptional paths
     @Test
     fun `recognizes canonical finally from duplicated normal body`() {
         val b0 = BasicBlockId(0)
@@ -2317,6 +2563,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { if (...) return; else return; } finally { CLEANUP }  // handler store/body/rethrow split
     @Test
     fun `recognizes split linear finally with terminal normal copies`() {
         val tryBlock = BasicBlockId(0)
@@ -2386,6 +2633,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { BODY; return; } finally { if (...) A else B }
     @Test
     fun `recognizes branching finally copied before terminal return`() {
         val tryBlock = BasicBlockId(0)
@@ -2450,6 +2698,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { BODY } finally { if (...) A else B }  // branch graph duplicated normally
     @Test
     fun `recognizes branching finally from duplicated normal body`() {
         val b0 = BasicBlockId(0)
@@ -2532,6 +2781,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { BODY } finally { BRANCHING_CLEANUP }  // astore ex shares first cleanup block
     @Test
     fun `recognizes branching finally when exception store shares body entry block`() {
         val b0 = BasicBlockId(0)
@@ -2612,6 +2862,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { BODY } finally { CLEANUP }  // jsr/ret normalized into cloned cleanup
     @Test
     fun `recognizes legacy jsr finally shape after normalization`() {
         val b0 = BasicBlockId(0)
@@ -2698,6 +2949,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { BODY } finally { CLEANUP }  // normalized JSR copies span multiple physical ranges
     @Test
     fun `recognizes legacy jsr finally with physically split copies`() {
         val b0 = BasicBlockId(0)
@@ -2791,6 +3043,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { BODY } catch (E e) { CATCH } finally { CLEANUP }  // normalized JSR/RET
     @Test
     fun `recognizes legacy jsr try catch finally shape after normalization`() {
         val b0 = BasicBlockId(0)
@@ -2890,6 +3143,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { BODY } finally { unsupported cleanup shape } -> remain block-based with reason
     @Test
     fun `keeps catch-all exception region block based with explicit diagnostic`() {
         val b0 = BasicBlockId(0)
@@ -2961,6 +3215,7 @@ class StructuredControlFlowAnalyzerTest {
     }
 
 
+    // Pseudocode: synchronized (m) { BODY }  // handler keeps Throwable on stack: aload m; monitorexit; athrow
     @Test
     fun `recognizes synchronized cleanup with exception kept on operand stack`() {
         val enterBlock = BasicBlockId(0)
@@ -3017,6 +3272,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { BODY } finally { CLEANUP }  // handler is CLEANUP; athrow with implicit Throwable still on stack
     @Test
     fun `recognizes finally with exception kept on operand stack`() {
         val tryBlock = BasicBlockId(0)
@@ -3072,6 +3328,7 @@ class StructuredControlFlowAnalyzerTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { CLEANUP; return; } finally { CLEANUP }  // normal copy is suffix inside protected block
     @Test
     fun `recognizes stack preserved finally copied before protected terminal return`() {
         val tryBlock = BasicBlockId(0)

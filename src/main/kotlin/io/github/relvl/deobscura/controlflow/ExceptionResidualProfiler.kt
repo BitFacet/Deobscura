@@ -24,9 +24,25 @@ internal object ExceptionResidualProfiler {
         facts: ControlFlowFacts,
         legacyDetail: String?,
     ): String {
-        if (legacyDetail != null) return "legacy [$legacyDetail]"
-
         val group = topology.group
+        if (legacyDetail != null) {
+            val catchAllCount = group.handlers.count { it.catchType == null }
+            val typedCount = group.handlers.size - catchAllCount
+            val entries = groupedHandlers.keys.filterNotNull()
+            val entryShapes = entries
+                .map { entry -> classifyLegacyHandlerEntry(graph, entry) }
+                .distinct()
+                .sorted()
+
+            return buildString {
+                append("legacy [").append(legacyDetail).append(']')
+                append(", catch-all=").append(countBucket(catchAllCount))
+                append(", typed=").append(countBucket(typedCount))
+                append(", entries=").append(countBucket(entries.size))
+                if (entryShapes.isNotEmpty()) append(", entry=").append(entryShapes.joinToString("+"))
+            }
+        }
+
         val catchAllHandlers = group.handlers.filter { it.catchType == null }
         val typedHandlerCount = group.handlers.size - catchAllHandlers.size
         val boundaryCount = normalBoundaryTargets(protectedBlocks, topology.handlerEntries, facts).size
@@ -51,6 +67,18 @@ internal object ExceptionResidualProfiler {
             append(", peers=").append(countBucket(peerCount))
             append(", nested=").append(countBucket(nestedGroupCount))
             if (hasExternalProtectedEntry(header, protectedBlocks, facts)) append(", protected-external-entry")
+        }
+    }
+
+    private fun classifyLegacyHandlerEntry(graph: ControlFlowGraph, entry: BasicBlockId): String {
+        val size = graph.instructions(graph.block(entry)).size
+        return when (size) {
+            0 -> "empty"
+            1 -> "size-1"
+            2 -> "size-2"
+            3 -> "size-3"
+            in 4..6 -> "size-4-6"
+            else -> "size-7+"
         }
     }
 

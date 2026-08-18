@@ -5,9 +5,9 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 val interestingIr = listOf(
-    "com/jcraft/jorbis/Floor0.ir",
-    "com/bulletphysics/collision/broadphase/AxisSweep3Internal.ir",
-    "com/wurmonline/client/WurmClientBase.ir",
+    "org/apache/xerces/dom/ObjectFactory.ir",
+    "org/apache/html/dom/ObjectFactory.ir",
+    "class/IfNs7Jz1Q.ir",
     "org/apache/commons/io/input/ReadAheadInputStream.ir",
 )
 

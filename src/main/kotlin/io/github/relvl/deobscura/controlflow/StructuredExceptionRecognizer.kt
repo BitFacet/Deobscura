@@ -72,6 +72,20 @@ internal class StructuredExceptionRecognizer {
                 return@forEach
             }
 
+            val synchronizedRecognition = SynchronizedExceptionRecognizer.recognize(
+                graph = graph,
+                topology = topology,
+                header = header,
+                groupedHandlers = groupedHandlers,
+                allGroups = groupTopologies,
+                facts = facts,
+            )
+            if (synchronizedRecognition != null) {
+                regions += synchronizedRecognition.region
+                consumedGroups += synchronizedRecognition.consumedGroupKeys
+                return@forEach
+            }
+
             val legacyTryCatchFinallyTrace = mutableListOf<String>()
             val legacyTryCatchFinallyRecognition = if (legacySubroutineNormalized) {
                 legacyFinallyRecognizer.recognizeTryCatchFinally(
@@ -111,20 +125,6 @@ internal class StructuredExceptionRecognizer {
             if (legacyFinallyRecognition != null) {
                 regions += legacyFinallyRecognition.region
                 consumedGroups += legacyFinallyRecognition.consumedGroupKeys
-                return@forEach
-            }
-
-            val synchronizedRecognition = SynchronizedExceptionRecognizer.recognize(
-                graph = graph,
-                topology = topology,
-                header = header,
-                groupedHandlers = groupedHandlers,
-                allGroups = groupTopologies,
-                facts = facts,
-            )
-            if (synchronizedRecognition != null) {
-                regions += synchronizedRecognition.region
-                consumedGroups += synchronizedRecognition.consumedGroupKeys
                 return@forEach
             }
 
