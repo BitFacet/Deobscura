@@ -73,3 +73,29 @@ internal fun isCanonicalRethrowBlock(graph: ControlFlowGraph, block: BasicBlockI
             reload.slot == exceptionSlot &&
             instructions[1] is RawThrowInstruction
 }
+
+/**
+ * Collects a typed catch body that is followed by a proven normal finally copy. The copy is a stop
+ * boundary rather than source catch ownership; walking back into the try or a sibling handler
+ * rejects the candidate.
+ */
+internal fun collectCatchBodyBeforeFinally(
+    typedCatchRecognizer: TypedCatchRecognizer,
+    entry: BasicBlockId,
+    protectedBlocks: Set<BasicBlockId>,
+    otherHandlerEntries: Set<BasicBlockId>,
+    finallyCopyBlocks: Set<BasicBlockId>,
+    continuation: BasicBlockId?,
+    facts: ControlFlowFacts,
+): Set<BasicBlockId>? {
+    val collection = typedCatchRecognizer.collectCatchBodyRegion(
+        entry = entry,
+        protectedBlocks = protectedBlocks,
+        handlerEntries = otherHandlerEntries,
+        continuation = continuation,
+        stopBlocks = finallyCopyBlocks,
+        rejectTargets = protectedBlocks + otherHandlerEntries,
+        facts = facts,
+    ) ?: return null
+    return collection.blocks.takeUnless { it.isEmpty() }
+}

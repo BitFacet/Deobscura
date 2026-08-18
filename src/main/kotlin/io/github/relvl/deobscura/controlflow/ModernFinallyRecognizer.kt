@@ -8,6 +8,14 @@ import io.github.relvl.deobscura.raw.*
  * Proves modern compiler-style catch-all cleanup by matching the exceptional cleanup body against
  * equivalent normal-flow copies. It owns semantic finally equivalence, not exception-table topology.
  */
+internal data class ModernFinallyShape(
+    val handlerEntry: BasicBlockId,
+    val handlerBlocks: Set<BasicBlockId>,
+    val bodyInstructionRanges: List<IntRange>,
+    val normalCopies: List<FinallyBodyMatch>,
+    val continuation: BasicBlockId?,
+)
+
 internal object ModernFinallyRecognizer {
     /** Tries the supported modern finally shapes, from strict linear form to branching cleanup. */
     fun recognize(
@@ -240,6 +248,41 @@ internal object ModernFinallyRecognizer {
         if (hasExternalProtectedEntry(header, protectedBlocks, facts)) return null
 
         val handlerEntry = groupedHandlers.keys.single() ?: return null
+        val shape = analyzeBranchingFinallyShape(
+            graph = graph,
+            handlerEntry = handlerEntry,
+            protectedBlocks = protectedBlocks,
+            facts = facts,
+        ) ?: return null
+
+        return StructuredRegion.TryFinally(
+            header = header,
+            tryBlocks = protectedBlocks,
+            handlerEntry = shape.handlerEntry,
+            handlerBlocks = shape.handlerBlocks,
+            finallyBodyInstructionRanges = shape.bodyInstructionRanges,
+            normalCopyInstructionIndices = shape.normalCopies.flatMap { it.instructionRanges },
+            normalCopyBlocks = shape.normalCopies.flatMapTo(linkedSetOf()) { it.blocks },
+            continuation = shape.continuation,
+            protectedStartInstructionIndex = group.envelope.start,
+            protectedEndInstructionIndexExclusive = group.envelope.endExclusive,
+            protectedRanges = group.segments.map { segment ->
+                StructuredProtectedRange(segment.range.start, segment.range.endExclusive)
+            },
+        )
+    }
+
+    /**
+     * Proves a branching exceptional cleanup against every matching normal boundary copy. This is
+     * intentionally independent from handler-set topology so the same semantic proof can be reused
+     * by a mixed try/catch/finally family.
+     */
+    internal fun analyzeBranchingFinallyShape(
+        graph: ControlFlowGraph,
+        handlerEntry: BasicBlockId,
+        protectedBlocks: Set<BasicBlockId>,
+        facts: ControlFlowFacts,
+    ): ModernFinallyShape? {
         val entryBlock = graph.block(handlerEntry)
         val entryInstructions = graph.instructions(entryBlock)
         if (entryInstructions.isEmpty()) return null
@@ -268,7 +311,6 @@ internal object ModernFinallyRecognizer {
 
         val boundaryTargets = normalBoundaryTargets(protectedBlocks, setOf(handlerEntry), facts)
         if (boundaryTargets.isEmpty()) return null
-
         val matches = boundaryTargets.mapNotNull { target ->
             FinallyBodyMatcher.match(
                 graph = graph,
@@ -283,6 +325,7 @@ internal object ModernFinallyRecognizer {
         if (matches.isEmpty()) return null
         val continuations = matches.mapTo(linkedSetOf()) { it.continuation }
         if (continuations.size != 1) return null
+        val continuation = continuations.single()
 
         val handlerRange = bodyBlocks.asSequence()
             .map(graph::block)
@@ -296,22 +339,16 @@ internal object ModernFinallyRecognizer {
                 first..last
             }
 
-        return StructuredRegion.TryFinally(
-            header = header,
-            tryBlocks = protectedBlocks,
+        return ModernFinallyShape(
             handlerEntry = handlerEntry,
             handlerBlocks = linkedSetOf<BasicBlockId>().apply {
                 add(handlerEntry)
                 addAll(bodyBlocks)
                 add(rethrow)
             },
-            finallyBodyInstructionRanges = listOf(handlerRange),
-            normalCopyInstructionIndices = matches.flatMap { it.instructionRanges },
-            normalCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks },
-            continuation = continuations.single(),
-            protectedStartInstructionIndex = group.envelope.start,
-            protectedEndInstructionIndexExclusive = group.envelope.endExclusive,
-            protectedRanges = group.segments.map { segment -> StructuredProtectedRange(segment.range.start, segment.range.endExclusive) },
+            bodyInstructionRanges = listOf(handlerRange),
+            normalCopies = matches,
+            continuation = continuation,
         )
     }
 

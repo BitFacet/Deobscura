@@ -11,6 +11,7 @@ import io.github.relvl.deobscura.normalize.LegacySubroutineProvenance
 internal class StructuredExceptionRecognizer {
     private val typedCatchRecognizer = TypedCatchRecognizer()
     private val legacyFinallyRecognizer = LegacyFinallyRecognizer(typedCatchRecognizer)
+    private val modernTryCatchFinallyRecognizer = ModernTryCatchFinallyRecognizer(typedCatchRecognizer)
 
     /** Reconstructs all exception constructs for one method without weakening failed proofs. */
     fun recognize(
@@ -125,6 +126,19 @@ internal class StructuredExceptionRecognizer {
             if (legacyFinallyRecognition != null) {
                 regions += legacyFinallyRecognition.region
                 consumedGroups += legacyFinallyRecognition.consumedGroupKeys
+                return@forEach
+            }
+
+            val modernTryCatchFinallyRecognition = modernTryCatchFinallyRecognizer.recognize(
+                graph = graph,
+                topology = topology,
+                header = header,
+                exceptionTopology = exceptionTopology,
+                facts = facts,
+            )
+            if (modernTryCatchFinallyRecognition != null) {
+                regions += modernTryCatchFinallyRecognition.region
+                consumedGroups += modernTryCatchFinallyRecognition.consumedGroupKeys
                 return@forEach
             }
 

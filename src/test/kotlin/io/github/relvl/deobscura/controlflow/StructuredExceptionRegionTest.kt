@@ -1,13 +1,11 @@
 package io.github.relvl.deobscura.controlflow
 
-import io.github.relvl.deobscura.analysis.JvmValueType
 import io.github.relvl.deobscura.analysis.SsaControlFlowGraph
 import io.github.relvl.deobscura.analysis.ValueId
-import io.github.relvl.deobscura.analysis.ValueOrigin
-import io.github.relvl.deobscura.cfg.*
-import io.github.relvl.deobscura.expression.*
-import io.github.relvl.deobscura.raw.*
-import java.lang.constant.ConstantDescs
+import io.github.relvl.deobscura.cfg.BasicBlockId
+import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
+import io.github.relvl.deobscura.expression.ExpressionAnalysis
+import io.github.relvl.deobscura.expression.ExpressionStatement
 import kotlin.test.*
 
 class StructuredExceptionRegionTest {

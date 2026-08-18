@@ -1,14 +1,14 @@
 package io.github.relvl.deobscura.controlflow
 
-import io.github.relvl.deobscura.analysis.JvmValueType
 import io.github.relvl.deobscura.analysis.SsaControlFlowGraph
 import io.github.relvl.deobscura.analysis.ValueId
-import io.github.relvl.deobscura.analysis.ValueOrigin
-import io.github.relvl.deobscura.cfg.*
-import io.github.relvl.deobscura.expression.*
-import io.github.relvl.deobscura.raw.*
-import java.lang.constant.ConstantDescs
-import kotlin.test.*
+import io.github.relvl.deobscura.cfg.BasicBlockId
+import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
+import io.github.relvl.deobscura.expression.ExpressionStatement
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class StructuredSwitchTest {
     private val analyzer = StructuredControlFlowAnalyzer()

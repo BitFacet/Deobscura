@@ -20,12 +20,12 @@ internal data class ExceptionTopology(
 )
 
 /**
- * Exception-table topology belonging to one proven legacy finally handler. The duplicated cleanup
+ * Exception-table topology belonging to one proven finally handler. The duplicated cleanup
  * body itself is proved separately; this descriptor only groups the physical catch-all family,
  * typed source scopes living under it, and the outer protected ownership after compiler scaffolding
  * has been excluded.
  */
-internal data class LegacyFinallyFamilyTopology(
+internal data class FinallyFamilyTopology(
     val groups: List<ExceptionGroupTopology>,
     val mixedGroups: List<ExceptionGroupTopology>,
     val typedTopology: TypedCatchScopeTopologyForest,
@@ -33,36 +33,36 @@ internal data class LegacyFinallyFamilyTopology(
     val protectedRanges: List<StructuredProtectedRange>,
 )
 
-internal enum class LegacyFinallyFamilyTopologyFailure {
+internal enum class FinallyFamilyTopologyFailure {
     EMPTY_CATCH_ALL_FAMILY,
     NOT_FAMILY_ANCHOR,
 }
 
-internal data class LegacyFinallyFamilyTopologyBuild(
-    val topology: LegacyFinallyFamilyTopology? = null,
-    val failure: LegacyFinallyFamilyTopologyFailure? = null,
+internal data class FinallyFamilyTopologyBuild(
+    val topology: FinallyFamilyTopology? = null,
+    val failure: FinallyFamilyTopologyFailure? = null,
     val typedFailure: TypedCatchTopologyFailure? = null,
 )
 
 /**
- * Projects one catch-all peer family into source-oriented exception topology after a legacy finally
- * shape has already identified its compiler-owned blocks. This function does not prove finally body
+ * Projects one catch-all peer family into source-oriented exception topology after a finally shape
+ * has already identified its compiler-owned blocks. This function does not prove finally body
  * equivalence; it only combines exception-table relationships and typed-scope nesting.
  */
-internal fun buildLegacyFinallyFamilyTopology(
+internal fun buildFinallyFamilyTopology(
     anchor: ExceptionGroupTopology,
     catchAllHandlerInstructionIndex: Int,
     exceptionTopology: ExceptionTopology,
     excludedBlocks: Set<BasicBlockId>,
     continuation: BasicBlockId,
     facts: ControlFlowFacts,
-): LegacyFinallyFamilyTopologyBuild {
+): FinallyFamilyTopologyBuild {
     val groups = exceptionTopology.catchAllPeersByHandlerInstructionIndex[catchAllHandlerInstructionIndex].orEmpty()
     if (groups.isEmpty()) {
-        return LegacyFinallyFamilyTopologyBuild(failure = LegacyFinallyFamilyTopologyFailure.EMPTY_CATCH_ALL_FAMILY)
+        return FinallyFamilyTopologyBuild(failure = FinallyFamilyTopologyFailure.EMPTY_CATCH_ALL_FAMILY)
     }
     if (groups.first() !== anchor) {
-        return LegacyFinallyFamilyTopologyBuild(failure = LegacyFinallyFamilyTopologyFailure.NOT_FAMILY_ANCHOR)
+        return FinallyFamilyTopologyBuild(failure = FinallyFamilyTopologyFailure.NOT_FAMILY_ANCHOR)
     }
 
     val mixedGroups = groups.filter { candidate -> candidate.group.handlers.any { it.catchType != null } }
@@ -73,7 +73,7 @@ internal fun buildLegacyFinallyFamilyTopology(
         excludedBlocks = excludedBlocks,
     )
     if (typedBuild.failure != null) {
-        return LegacyFinallyFamilyTopologyBuild(typedFailure = typedBuild.failure)
+        return FinallyFamilyTopologyBuild(typedFailure = typedBuild.failure)
     }
 
     val protectedBlocks = groups.flatMapTo(linkedSetOf()) { candidate ->
@@ -85,8 +85,8 @@ internal fun buildLegacyFinallyFamilyTopology(
         .distinct()
         .sortedWith(compareBy<StructuredProtectedRange> { it.startInstructionIndex }.thenBy { it.endInstructionIndexExclusive })
 
-    return LegacyFinallyFamilyTopologyBuild(
-        topology = LegacyFinallyFamilyTopology(
+    return FinallyFamilyTopologyBuild(
+        topology = FinallyFamilyTopology(
             groups = groups,
             mixedGroups = mixedGroups,
             typedTopology = requireNotNull(typedBuild.topology),

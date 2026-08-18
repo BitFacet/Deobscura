@@ -2,11 +2,7 @@ package io.github.relvl.deobscura.controlflow
 
 import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
-import io.github.relvl.deobscura.raw.JvmComputationalType
-import io.github.relvl.deobscura.raw.LocalOperation
-import io.github.relvl.deobscura.raw.RawExceptionHandler
-import io.github.relvl.deobscura.raw.RawLocalInstruction
-import io.github.relvl.deobscura.raw.RawThrowInstruction
+import io.github.relvl.deobscura.raw.*
 
 /** Builds coarse structural fingerprints for unsupported exception regions used only for corpus triage. */
 internal object ExceptionResidualProfiler {

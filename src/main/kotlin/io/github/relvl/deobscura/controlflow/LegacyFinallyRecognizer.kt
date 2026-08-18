@@ -172,7 +172,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
         val continuation = finallyShape.continuation
 
         val finallyCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks }
-        val familyBuild = buildLegacyFinallyFamilyTopology(
+        val familyBuild = buildFinallyFamilyTopology(
             anchor = topology,
             catchAllHandlerInstructionIndex = handlerInstructionIndex,
             exceptionTopology = exceptionTopology,
@@ -182,8 +182,8 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
         )
         if (familyBuild.failure != null) {
             val reason = when (familyBuild.failure) {
-                LegacyFinallyFamilyTopologyFailure.EMPTY_CATCH_ALL_FAMILY -> "empty-catch-all-family"
-                LegacyFinallyFamilyTopologyFailure.NOT_FAMILY_ANCHOR -> "not-first-catch-all-peer"
+                FinallyFamilyTopologyFailure.EMPTY_CATCH_ALL_FAMILY -> "empty-catch-all-family"
+                FinallyFamilyTopologyFailure.NOT_FAMILY_ANCHOR -> "not-first-catch-all-peer"
             }
             return rejectLegacy(rejectionTrace, reason)
         }
@@ -233,7 +233,8 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
             rejectNormalBoundaryWithoutContinuation = false,
             allowLoopBackContinuation = false,
             collectCatch = { entry, _, scopeContinuation ->
-                collectLegacyCatchBody(
+                collectCatchBodyBeforeFinally(
+                    typedCatchRecognizer = typedCatchRecognizer,
                     entry = entry,
                     protectedBlocks = sourceTryBlocks,
                     otherHandlerEntries = typedEntries + handlerEntry,
@@ -290,7 +291,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
 
     private fun recognizeLegacyNestedTryCatchFinally(
         graph: ControlFlowGraph,
-        family: LegacyFinallyFamilyTopology,
+        family: FinallyFamilyTopology,
         allGroups: List<ExceptionGroupTopology>,
         finallyShape: LegacyFinallyShape,
         labelPositions: Map<RawLabelId, Int>,
@@ -318,7 +319,8 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
                 rejectNormalBoundaryWithoutContinuation = false,
                 allowLoopBackContinuation = false,
                 collectCatch = { entry, _, nestedContinuation ->
-                    collectLegacyCatchBody(
+                    collectCatchBodyBeforeFinally(
+                        typedCatchRecognizer = typedCatchRecognizer,
                         entry = entry,
                         protectedBlocks = scope.protectedBlocks,
                         otherHandlerEntries = typedHandlerEntries + handlerEntry,
@@ -394,29 +396,6 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
         )
     }
 
-    private fun collectLegacyCatchBody(
-        entry: BasicBlockId,
-        protectedBlocks: Set<BasicBlockId>,
-        otherHandlerEntries: Set<BasicBlockId>,
-        finallyCopyBlocks: Set<BasicBlockId>,
-        continuation: BasicBlockId? = null,
-        facts: ControlFlowFacts,
-    ): Set<BasicBlockId>? {
-        // Legacy-normalized catches use the same region walker as ordinary catches, but preserve the
-        // stricter source-shape proof established by the old recognizer: a finally copy is a valid
-        // stop boundary, while walking back into the protected try or a sibling handler rejects the
-        // candidate rather than silently absorbing that flow.
-        val collection = typedCatchRecognizer.collectCatchBodyRegion(
-            entry = entry,
-            protectedBlocks = protectedBlocks,
-            handlerEntries = otherHandlerEntries,
-            continuation = continuation,
-            stopBlocks = finallyCopyBlocks,
-            rejectTargets = protectedBlocks + otherHandlerEntries,
-            facts = facts,
-        ) ?: return null
-        return collection.blocks.takeUnless { it.isEmpty() }
-    }
 
     /**
      * Recognizes the characteristic shape left by `LegacySubroutineNormalizer` for old javac
@@ -587,7 +566,8 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
                 var changed = false
                 for (entry in entries) {
                     if (entry in owned) continue
-                    val blocks = collectLegacyCatchBody(
+                    val blocks = collectCatchBodyBeforeFinally(
+                        typedCatchRecognizer = typedCatchRecognizer,
                         entry = entry,
                         protectedBlocks = candidate.protectedBlocks,
                         otherHandlerEntries = containedHandlerEntries + excludedHandlerEntries,

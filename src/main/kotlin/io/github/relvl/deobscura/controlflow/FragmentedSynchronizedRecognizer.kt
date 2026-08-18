@@ -122,7 +122,8 @@ internal object FragmentedSynchronizedRecognizer {
                     groups = allGroups,
                     synchronizedHandlerBlocks = handlerBlocks,
                     facts = facts,
-                )) continue
+                )
+            ) continue
             if (hasExternalProtectedEntry(bodyEntry, bodyBlocks, facts)) continue
 
             val protectedRanges = family.flatMap { candidate -> candidate.group.segments }

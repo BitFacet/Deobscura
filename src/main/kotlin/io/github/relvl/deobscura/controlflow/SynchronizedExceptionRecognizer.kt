@@ -3,7 +3,10 @@ package io.github.relvl.deobscura.controlflow
 import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
-import io.github.relvl.deobscura.raw.*
+import io.github.relvl.deobscura.raw.LocalOperation
+import io.github.relvl.deobscura.raw.RawExceptionHandler
+import io.github.relvl.deobscura.raw.RawLocalInstruction
+import io.github.relvl.deobscura.raw.RawMonitorInstruction
 import java.util.*
 
 /**
