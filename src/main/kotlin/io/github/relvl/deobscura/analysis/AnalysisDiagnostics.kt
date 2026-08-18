@@ -109,12 +109,13 @@ class AnalysisDiagnostics(
                     .filter { it.kind == UnstructuredControlFlowKind.EXCEPTION }
                     .forEach { diagnostic ->
                         logger.warn(
-                            "Unstructured exception region in '{}': B{} protected={}..<{} ({}).{}",
+                            "Unstructured exception region in '{}': B{} protected={}..<{} ({}){}.{}",
                             methodName,
                             diagnostic.header.value,
                             diagnostic.protectedStartInstructionIndex,
                             diagnostic.protectedEndInstructionIndexExclusive,
                             diagnostic.reason.diagnosticName,
+                            diagnostic.detail?.let { " [$it]" } ?: "",
                             TechnicalIrService.methodHint(result.rawClass.internalName, method.name, method.descriptor),
                         )
                     }

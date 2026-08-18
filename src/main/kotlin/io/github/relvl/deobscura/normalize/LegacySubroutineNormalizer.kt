@@ -23,6 +23,7 @@ class LegacySubroutineNormalizer(
                 jsrCallSiteCount = 0,
                 clonedBlockCount = 0,
                 normalizedInstructionCount = code.instructions.size,
+                provenance = null,
             )
         }
 
@@ -85,7 +86,7 @@ class LegacySubroutineNormalizer(
                     }
                     val target = targetBlock(terminator.target)
                     val nested = instance.context.enter(
-                        LegacyFrame(returnInstructionIndex = returnInstructionIndex),
+                        LegacyFrame(callSiteInstructionIndex = block.endInstructionIndexExclusive - 1, returnInstructionIndex = returnInstructionIndex),
                     )
                     discover(BlockInstance(target, nested))
                 } else {
@@ -110,6 +111,7 @@ class LegacySubroutineNormalizer(
         orderedInstances.forEach { instanceLabels[it] = RawLabelId(nextLabelId++) }
 
         val instructions = mutableListOf<RawInstruction>()
+        val instructionOrigins = mutableListOf<LegacyInstructionOrigin>()
         val labels = mutableListOf<RawLabel>()
         val lineNumbers = mutableListOf<RawLineNumber>()
         val emittedRanges = mutableMapOf<BlockInstance, EmittedRange>()
@@ -123,6 +125,19 @@ class LegacySubroutineNormalizer(
 
         fun ordinaryEdges(instance: BlockInstance): List<ControlFlowEdge> =
             ordinaryEdgesByBlock[instance.block].orEmpty()
+
+        fun recordOrigin(
+            instance: BlockInstance,
+            originalInstructionIndex: Int?,
+            kind: LegacySyntheticInstructionKind?,
+        ) {
+            instructionOrigins += LegacyInstructionOrigin(
+                originalBlock = instance.block,
+                context = instance.context.toProvenance(),
+                originalInstructionIndex = originalInstructionIndex,
+                syntheticKind = kind,
+            )
+        }
 
         orderedInstances.forEach { instance ->
             val block = graph.block(instance.block)
@@ -160,13 +175,14 @@ class LegacySubroutineNormalizer(
                                 "JSR block ${block.id.value} does not have exactly one direct subroutine edge.",
                             )
                         val nestedContext = instance.context.enter(
-                            LegacyFrame(returnInstructionIndex = block.endInstructionIndexExclusive),
+                            LegacyFrame(callSiteInstructionIndex = originalIndex, returnInstructionIndex = block.endInstructionIndexExclusive),
                         )
                         instructions += RawConstantInstruction(
                             opcode = JvmOpcode("aconst_null"),
                             type = JvmComputationalType.REFERENCE,
                             value = ConstantDescs.NULL,
                         )
+                        recordOrigin(instance, originalIndex, LegacySyntheticInstructionKind.JSR_NULL_SEED)
                         RawBranchInstruction(
                             JvmOpcode("goto"),
                             instanceLabels.getValue(BlockInstance(directEdge.to, nestedContext)),
@@ -187,10 +203,22 @@ class LegacySubroutineNormalizer(
                     else -> instruction
                 }
                 instructions += rewritten
+                val syntheticKind = when {
+                    instruction is RawRetInstruction -> LegacySyntheticInstructionKind.RET_GOTO
+                    instruction is RawBranchInstruction && instruction.opcode.mnemonic in LEGACY_JSR_OPCODES -> LegacySyntheticInstructionKind.JSR_GOTO
+                    else -> null
+                }
+                recordOrigin(instance, originalIndex, syntheticKind)
             }
 
             val originalEnd = instructions.size
+            val beforeFallthrough = instructions.size
             appendExplicitFallthroughIfNeeded(instance, ordinaryEdges(instance), instanceLabels, instructions)
+            if (instructions.size > beforeFallthrough) {
+                repeat(instructions.size - beforeFallthrough) {
+                    recordOrigin(instance, null, LegacySyntheticInstructionKind.EXPLICIT_FALLTHROUGH_GOTO)
+                }
+            }
             emittedRanges[instance] = EmittedRange(blockStart, originalEnd)
         }
 
@@ -239,6 +267,9 @@ class LegacySubroutineNormalizer(
             lineNumbers = lineNumbers,
         )
         check(!normalized.hasLegacySubroutines()) { "Normalizer left JSR/RET instructions in the output." }
+        check(instructionOrigins.size == normalized.instructions.size) {
+            "Legacy provenance has ${instructionOrigins.size} origin(s) for ${normalized.instructions.size} normalized instruction(s)."
+        }
         graphBuilder.build(normalized)
 
         return LegacySubroutineNormalizationResult(
@@ -250,6 +281,7 @@ class LegacySubroutineNormalizer(
                 .values
                 .sumOf { count -> (count - 1).coerceAtLeast(0) },
             normalizedInstructionCount = normalized.instructions.size,
+            provenance = LegacySubroutineProvenance(instructionOrigins),
         )
     }
 
@@ -316,6 +348,7 @@ class LegacySubroutineNormalizer(
     )
 
     private data class LegacyFrame(
+        val callSiteInstructionIndex: Int,
         val returnInstructionIndex: Int,
     )
 
@@ -333,6 +366,15 @@ class LegacySubroutineNormalizer(
             }
             return LegacyContext(frames + frame)
         }
+
+        fun toProvenance(): LegacySubroutineContext = LegacySubroutineContext(
+            frames.map { frame ->
+                LegacySubroutineFrame(
+                    callSiteInstructionIndex = frame.callSiteInstructionIndex,
+                    returnInstructionIndex = frame.returnInstructionIndex,
+                )
+            },
+        )
 
         fun exit(): LegacyContext {
             if (frames.isEmpty()) {
@@ -372,7 +414,40 @@ data class LegacySubroutineNormalizationResult(
     val jsrCallSiteCount: Int,
     val clonedBlockCount: Int,
     val normalizedInstructionCount: Int,
+    val provenance: LegacySubroutineProvenance?,
 ) {
     val changed: Boolean
         get() = jsrCallSiteCount > 0
+}
+
+data class LegacySubroutineProvenance(
+    val instructionOrigins: List<LegacyInstructionOrigin>,
+) {
+    init { require(instructionOrigins.isNotEmpty()) }
+
+    fun originAt(instructionIndex: Int): LegacyInstructionOrigin? = instructionOrigins.getOrNull(instructionIndex)
+}
+
+data class LegacyInstructionOrigin(
+    val originalBlock: BasicBlockId,
+    val context: LegacySubroutineContext,
+    val originalInstructionIndex: Int?,
+    val syntheticKind: LegacySyntheticInstructionKind?,
+)
+
+data class LegacySubroutineContext(val frames: List<LegacySubroutineFrame>) {
+    val parent: LegacySubroutineContext?
+        get() = if (frames.isEmpty()) null else LegacySubroutineContext(frames.dropLast(1))
+}
+
+data class LegacySubroutineFrame(
+    val callSiteInstructionIndex: Int,
+    val returnInstructionIndex: Int,
+)
+
+enum class LegacySyntheticInstructionKind {
+    JSR_NULL_SEED,
+    JSR_GOTO,
+    RET_GOTO,
+    EXPLICIT_FALLTHROUGH_GOTO,
 }

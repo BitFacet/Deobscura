@@ -88,7 +88,15 @@ class StructuredControlFlowRenderer(
                     append("      finally entry=B${region.handlerEntry.value}")
                     append(" handler=${formatBlocks(region.handlerBlocks)}")
                     append(" normal=${formatBlocks(region.normalCopyBlocks)}")
-                    append(" body=@${region.finallyBodyInstructionIndices.first}..@${region.finallyBodyInstructionIndices.last}")
+                    append(" body=")
+                    if (region.finallyBodyInstructionRanges.size == 1) {
+                        val range = region.finallyBodyInstructionRanges.single()
+                        append("@${range.first}..@${range.last}")
+                    } else {
+                        append(region.finallyBodyInstructionRanges.joinToString(prefix = "[", postfix = "]") { range ->
+                            "@${range.first}..@${range.last}"
+                        })
+                    }
                     append(" copies=")
                     append(region.normalCopyInstructionIndices.joinToString(prefix = "[", postfix = "]") { range ->
                         "@${range.first}..@${range.last}"
@@ -111,7 +119,15 @@ class StructuredControlFlowRenderer(
                     append("      finally entry=B${region.handlerEntry.value}")
                     append(" handler=${formatBlocks(region.handlerBlocks)}")
                     append(" normal=${formatBlocks(region.normalCopyBlocks)}")
-                    append(" body=@${region.finallyBodyInstructionIndices.first}..@${region.finallyBodyInstructionIndices.last}")
+                    append(" body=")
+                    if (region.finallyBodyInstructionRanges.size == 1) {
+                        val range = region.finallyBodyInstructionRanges.single()
+                        append("@${range.first}..@${range.last}")
+                    } else {
+                        append(region.finallyBodyInstructionRanges.joinToString(prefix = "[", postfix = "]") { range ->
+                            "@${range.first}..@${range.last}"
+                        })
+                    }
                     append(" copies=")
                     append(region.normalCopyInstructionIndices.joinToString(prefix = "[", postfix = "]") { range ->
                         "@${range.first}..@${range.last}"

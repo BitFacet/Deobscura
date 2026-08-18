@@ -103,7 +103,7 @@ class MethodAnalyzer(
                 graph = graph,
                 flow = optimization.controlFlow,
                 expression = expression,
-                legacySubroutineNormalized = normalization.changed,
+                legacySubroutineProvenance = normalization.provenance,
             )
         } catch (exception: Exception) {
             throw failure(

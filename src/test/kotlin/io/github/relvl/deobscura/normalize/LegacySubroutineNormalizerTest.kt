@@ -61,6 +61,12 @@ class LegacySubroutineNormalizerTest {
         assertTrue(result.changed)
         assertEquals(2, result.jsrCallSiteCount)
         assertTrue(result.clonedBlockCount > 0)
+        val provenance = assertNotNull(result.provenance)
+        assertEquals(result.code.instructions.size, provenance.instructionOrigins.size)
+        assertEquals(2, provenance.instructionOrigins.count { it.syntheticKind == LegacySyntheticInstructionKind.JSR_GOTO })
+        assertEquals(2, provenance.instructionOrigins.count { it.syntheticKind == LegacySyntheticInstructionKind.JSR_NULL_SEED })
+        assertTrue(provenance.instructionOrigins.any { it.syntheticKind == LegacySyntheticInstructionKind.RET_GOTO })
+        assertTrue(provenance.instructionOrigins.any { it.context.frames.isNotEmpty() })
         assertTrue(result.code.instructions.none { it is RawRetInstruction })
         assertTrue(
             result.code.instructions.none {

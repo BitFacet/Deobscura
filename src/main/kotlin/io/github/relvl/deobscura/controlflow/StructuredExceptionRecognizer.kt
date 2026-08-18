@@ -4,6 +4,9 @@ import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.raw.*
+import io.github.relvl.deobscura.normalize.LegacySubroutineContext
+import io.github.relvl.deobscura.normalize.LegacySubroutineProvenance
+import io.github.relvl.deobscura.normalize.LegacySyntheticInstructionKind
 import java.util.*
 
 /**
@@ -24,6 +27,7 @@ internal class StructuredExceptionRecognizer {
         graph: ControlFlowGraph,
         facts: ControlFlowFacts,
         legacySubroutineNormalized: Boolean,
+        legacySubroutineProvenance: LegacySubroutineProvenance? = null,
     ): ExceptionRecognition {
         if (graph.code.exceptionHandlers.isEmpty()) return ExceptionRecognition(emptyList(), emptyMap(), 0)
 
@@ -51,6 +55,7 @@ internal class StructuredExceptionRecognizer {
 
         val regions = mutableListOf<StructuredRegion>()
         val rejections = linkedMapOf<ExceptionRegionKey, UnstructuredControlFlowReason>()
+        val legacyRejectionDetails = linkedMapOf<ExceptionRegionKey, String>()
         val consumedGroups = mutableSetOf<ExceptionRegionKey>()
 
         groupTopologies.forEach { topology ->
@@ -80,6 +85,7 @@ internal class StructuredExceptionRecognizer {
             }
             val handlerEntries = groupedHandlers.keys.filterNotNull().toSet()
             if (handlers.any { it.catchType == null }) {
+                val legacyTryCatchFinallyTrace = mutableListOf<String>()
                 val legacyTryCatchFinallyRecognition = if (legacySubroutineNormalized) recognizeLegacySubroutineTryCatchFinally(
                     graph = graph,
                     topology = topology,
@@ -87,12 +93,16 @@ internal class StructuredExceptionRecognizer {
                     allGroups = groupTopologies,
                     labelPositions = labelPositions,
                     facts = facts,
+                    provenance = legacySubroutineProvenance,
+                    rejectionTrace = legacyTryCatchFinallyTrace,
                 ) else null
                 if (legacyTryCatchFinallyRecognition != null) {
                     regions += legacyTryCatchFinallyRecognition.region
+                    regions += legacyTryCatchFinallyRecognition.additionalRegions
                     consumedGroups += legacyTryCatchFinallyRecognition.consumedGroupKeys
                     return@forEach
                 }
+                val legacyFinallyTrace = mutableListOf<String>()
                 val legacyFinallyRecognition = if (legacySubroutineNormalized) recognizeLegacySubroutineFinally(
                     graph = graph,
                     topology = topology,
@@ -100,6 +110,8 @@ internal class StructuredExceptionRecognizer {
                     allGroups = groupTopologies,
                     labelPositions = labelPositions,
                     facts = facts,
+                    provenance = legacySubroutineProvenance,
+                    rejectionTrace = legacyFinallyTrace,
                 ) else null
                 if (legacyFinallyRecognition != null) {
                     regions += legacyFinallyRecognition.region
@@ -131,6 +143,14 @@ internal class StructuredExceptionRecognizer {
                     regions += finallyRegion
                 } else {
                     rejections[key] = UnstructuredControlFlowReason.EXCEPTION_CATCH_ALL_UNSUPPORTED
+                    if (legacySubroutineNormalized) {
+                        legacyRejectionDetails[key] = buildString {
+                            append("legacy-try-catch-finally=")
+                            append(legacyTryCatchFinallyTrace.lastOrNull() ?: "not-attempted")
+                            append(", legacy-finally=")
+                            append(legacyFinallyTrace.lastOrNull() ?: "not-attempted")
+                        }
+                    }
                 }
                 return@forEach
             }
@@ -229,7 +249,7 @@ internal class StructuredExceptionRecognizer {
             )
         }
 
-        return ExceptionRecognition(regions, rejections, groups.size)
+        return ExceptionRecognition(regions, rejections, groups.size, legacyRejectionDetails)
     }
 
     private fun protectedBlocks(
@@ -655,61 +675,91 @@ internal class StructuredExceptionRecognizer {
      * range carries both typed catches and the catch-all finally handler, while additional ranges
      * protect the catch bodies themselves with the same finally handler.
      */
-    private fun recognizeLegacySubroutineTryCatchFinally(
+    private fun <T> rejectLegacy(
+        rejectionTrace: MutableList<String>?,
+        reason: String,
+    ): T? {
+        rejectionTrace?.add(reason)
+        return null
+    }
+
+
+    private data class LegacyFinallyShape(
+        val handlerEntry: BasicBlockId,
+        val handlerBlocks: Set<BasicBlockId>,
+        val bodyInstructionRanges: List<IntRange>,
+        val normalCopies: List<FinallyBodyMatch>,
+        val continuation: BasicBlockId,
+    )
+
+    /**
+     * Proves the JSR/RET-normalized finally scaffolding shared by legacy `try/finally` and
+     * `try/catch/finally` recognition. Source-level ownership of protected ranges and typed
+     * catches is deliberately left to the caller; this helper only establishes the synthetic
+     * exceptional copy, equivalent normal copies, and their common continuation.
+     */
+    private fun analyzeLegacyFinallyShape(
         graph: ControlFlowGraph,
-        topology: ExceptionGroupTopology,
-        header: BasicBlockId,
-        allGroups: List<ExceptionGroupTopology>,
-        labelPositions: Map<RawLabelId, Int>,
+        handlerInstructionIndex: Int,
         facts: ControlFlowFacts,
-    ): LegacyTryCatchFinallyRecognition? {
-        val group = topology.group
-        val catchAllHandlers = group.handlers.filter { it.catchType == null }
-        val typedHandlers = group.handlers.filter { it.catchType != null }
-        if (catchAllHandlers.size != 1 || typedHandlers.isEmpty()) return null
-
-        val catchAll = catchAllHandlers.single()
-        val handlerInstructionIndex = labelPosition(labelPositions, catchAll.handler)
-        val handlerEntry = facts.instructionToBlock.getOrNull(handlerInstructionIndex) ?: return null
+        provenance: LegacySubroutineProvenance?,
+        rejectionTrace: MutableList<String>?,
+    ): LegacyFinallyShape? {
+        val handlerEntry = facts.instructionToBlock.getOrNull(handlerInstructionIndex)
+            ?: return rejectLegacy(rejectionTrace, "handler-entry")
         val handlerInstructions = graph.instructions(graph.block(handlerEntry))
-        if (handlerInstructions.size != 3) return null
+        if (handlerInstructions.size != 3) return rejectLegacy(rejectionTrace, "handler-size")
 
-        val store = handlerInstructions[0] as? RawLocalInstruction ?: return null
-        if (store.operation != LocalOperation.STORE || store.type != JvmComputationalType.REFERENCE) return null
-        val nullSeed = handlerInstructions[1] as? RawConstantInstruction ?: return null
-        if (nullSeed.opcode.mnemonic != "aconst_null") return null
-        val trampoline = handlerInstructions[2] as? RawBranchInstruction ?: return null
-        if (trampoline.opcode.mnemonic !in setOf("goto", "goto_w")) return null
+        val store = handlerInstructions[0] as? RawLocalInstruction
+            ?: return rejectLegacy(rejectionTrace, "exception-store")
+        if (store.operation != LocalOperation.STORE || store.type != JvmComputationalType.REFERENCE) {
+            return rejectLegacy(rejectionTrace, "exception-store-shape")
+        }
+        val nullSeed = handlerInstructions[1] as? RawConstantInstruction
+            ?: return rejectLegacy(rejectionTrace, "null-seed")
+        if (nullSeed.opcode.mnemonic != "aconst_null") return rejectLegacy(rejectionTrace, "null-seed-opcode")
+        val trampoline = handlerInstructions[2] as? RawBranchInstruction
+            ?: return rejectLegacy(rejectionTrace, "handler-goto")
+        if (trampoline.opcode.mnemonic !in setOf("goto", "goto_w")) {
+            return rejectLegacy(rejectionTrace, "handler-goto-opcode")
+        }
 
         val bodyEntry = facts.outgoing[handlerEntry].orEmpty()
             .filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION }
             .map { edge -> edge.to }
             .distinct()
-            .singleOrNull() ?: return null
-        val reachable = collectAcyclicNormalRegion(bodyEntry, facts) ?: return null
+            .singleOrNull() ?: return rejectLegacy(rejectionTrace, "handler-successor")
+        val reachable = collectAcyclicNormalRegion(bodyEntry, facts)
+            ?: return rejectLegacy(rejectionTrace, "cyclic-finally-body")
         val rethrowBlocks = reachable.filter { block -> isCanonicalRethrowBlock(graph, block, store.slot) }
-        if (rethrowBlocks.size != 1) return null
+        if (rethrowBlocks.size != 1) return rejectLegacy(rejectionTrace, "rethrow-count=${rethrowBlocks.size}")
         val rethrow = rethrowBlocks.single()
 
         val bodyBlocks = collectUntil(bodyEntry, rethrow, facts)
-        if (bodyBlocks.isEmpty() || rethrow in bodyBlocks) return null
-        if (bodyBlocks.any { block -> rethrow !in facts.postDominators[block].orEmpty() }) return null
-        if (bodyBlocks.any { block -> graph.instructions(graph.block(block)).any { it is RawSwitchInstruction } }) return null
+        if (bodyBlocks.isEmpty() || rethrow in bodyBlocks) return rejectLegacy(rejectionTrace, "empty-finally-body")
+        if (bodyBlocks.any { block -> rethrow !in facts.postDominators[block].orEmpty() }) {
+            return rejectLegacy(rejectionTrace, "rethrow-not-postdominator")
+        }
+        if (bodyBlocks.any { block -> graph.instructions(graph.block(block)).any { it is RawSwitchInstruction } }) {
+            return rejectLegacy(rejectionTrace, "switch-in-finally-body")
+        }
         if (bodyBlocks.any { block ->
                 facts.outgoing[block].orEmpty().any { edge -> edge.to !in bodyBlocks && edge.to != rethrow }
-            }) return null
+            }) {
+            return rejectLegacy(rejectionTrace, "finally-body-exit")
+        }
 
-        val finallyHandlerBlocks = linkedSetOf<BasicBlockId>().apply {
+        val handlerBlocks = linkedSetOf<BasicBlockId>().apply {
             add(handlerEntry)
             addAll(bodyBlocks)
             add(rethrow)
         }
         val candidateEntries = graph.blocks.asSequence()
             .map { it.id }
-            .filter { it !in finallyHandlerBlocks }
-            .filter { candidate -> hasLegacyFinallyCallSite(candidate, graph, facts) }
+            .filter { it !in handlerBlocks }
+            .filter { candidate -> hasLegacyFinallyCallSite(candidate, graph, facts, provenance) }
             .toList()
-        val matches = candidateEntries.mapNotNull { candidate ->
+        val normalCopies = candidateEntries.mapNotNull { candidate ->
             matchFinallyBodyGraph(
                 graph = graph,
                 handlerEntry = bodyEntry,
@@ -718,33 +768,107 @@ internal class StructuredExceptionRecognizer {
                 handlerEntryInstructionOffset = 0,
                 normalEntry = candidate,
                 facts = facts,
+                allowSplitNormalCopy = true,
             )
         }
-        if (matches.isEmpty()) return null
-        val continuations = matches.mapTo(linkedSetOf()) { it.continuation }
-        if (continuations.size != 1) return null
-        val continuation = continuations.single()
+        if (normalCopies.isEmpty()) {
+            return rejectLegacy(rejectionTrace, "no-normal-copy-match candidates=${candidateEntries.size}")
+        }
+        if (provenance != null) {
+            val handlerRanges = instructionRanges(bodyBlocks, graph)
+            if (handlerRanges.size > 1 && !hasSingleLegacyContext(bodyBlocks, graph, provenance)) {
+                return rejectLegacy(rejectionTrace, "split-exceptional-body-crosses-context")
+            }
+            if (normalCopies.any { match ->
+                    match.instructionRanges.size > 1 && !hasSingleLegacyContext(match.blocks, graph, provenance)
+                }) {
+                return rejectLegacy(rejectionTrace, "split-normal-copy-crosses-context")
+            }
+        }
+        val continuations = normalCopies.mapTo(linkedSetOf()) { match ->
+            normalizeLegacyFinallyContinuation(match.continuation, graph, facts, provenance)
+        }
+        if (continuations.size != 1) return rejectLegacy(rejectionTrace, "continuation-count=${continuations.size}")
+
+        return LegacyFinallyShape(
+            handlerEntry = handlerEntry,
+            handlerBlocks = handlerBlocks,
+            bodyInstructionRanges = instructionRanges(bodyBlocks, graph),
+            normalCopies = normalCopies,
+            continuation = continuations.single(),
+        )
+    }
+
+    private fun recognizeLegacySubroutineTryCatchFinally(
+        graph: ControlFlowGraph,
+        topology: ExceptionGroupTopology,
+        header: BasicBlockId,
+        allGroups: List<ExceptionGroupTopology>,
+        labelPositions: Map<RawLabelId, Int>,
+        facts: ControlFlowFacts,
+        provenance: LegacySubroutineProvenance?,
+        rejectionTrace: MutableList<String>? = null,
+    ): LegacyTryCatchFinallyRecognition? {
+        val group = topology.group
+        val catchAllHandlers = group.handlers.filter { it.catchType == null }
+        val typedHandlers = group.handlers.filter { it.catchType != null }
+        if (catchAllHandlers.size != 1 || typedHandlers.isEmpty()) return rejectLegacy(rejectionTrace, "handler-set")
+
+        val catchAll = catchAllHandlers.single()
+        val handlerInstructionIndex = labelPosition(labelPositions, catchAll.handler)
+        val finallyShape = analyzeLegacyFinallyShape(
+            graph = graph,
+            handlerInstructionIndex = handlerInstructionIndex,
+            facts = facts,
+            provenance = provenance,
+            rejectionTrace = rejectionTrace,
+        ) ?: return null
+        val handlerEntry = finallyShape.handlerEntry
+        val finallyHandlerBlocks = finallyShape.handlerBlocks
+        val matches = finallyShape.normalCopies
+        val continuation = finallyShape.continuation
 
         val catchAllRelated = allGroups.filter { candidate ->
             candidate.group.handlers.any { handler ->
                 handler.catchType == null && labelPosition(labelPositions, handler.handler) == handlerInstructionIndex
             }
         }
-        // Keep this first slice unambiguous: one mixed primary range plus any catch-all-only ranges
-        // protecting its catch bodies / synthetic finally transfers. Additional mixed ranges sharing
-        // the same finally handler represent nested exception structure and are handled separately.
-        val mixedRelated = catchAllRelated.filter { candidate -> candidate.group.handlers.any { it.catchType != null } }
-        if (mixedRelated.size != 1 || mixedRelated.single() !== topology) return null
+        // Legacy JSR/RET normalization may split one source try/catch/finally into several
+        // physical ranges while preserving the exact same typed-catch + catch-all handler set.
+        // Treat those peer ranges as one source try. If the typed handler signature changes,
+        // however, we are looking at nested/overlapping exception structure and keep it
+        // block-based for a more explicit recognizer.
+        val mixedSignature = handlerSignature(group.handlers, labelPositions)
+        val mixedRelated = catchAllRelated
+            .filter { candidate -> candidate.group.handlers.any { it.catchType != null } }
+            .sortedBy { candidate -> candidate.group.envelope.start }
+        if (mixedRelated.isEmpty()) return rejectLegacy(rejectionTrace, "no-mixed-peers")
+        if (mixedRelated.first() !== topology) return rejectLegacy(rejectionTrace, "not-first-mixed-peer")
+        if (mixedRelated.any { candidate -> handlerSignature(candidate.group.handlers, labelPositions) != mixedSignature }) {
+            return recognizeLegacyNestedTryCatchFinally(
+                graph = graph,
+                topology = topology,
+                catchAllFamily = catchAllRelated,
+                mixedRelated = mixedRelated,
+                finallyShape = finallyShape,
+                labelPositions = labelPositions,
+                facts = facts,
+                provenance = provenance,
+                rejectionTrace = rejectionTrace,
+            )
+        }
         val catchAllFamily = catchAllRelated
 
-        val sourceTryBlocks = extendWithTerminalTransfers(topology.protectedBlocks, facts) - finallyHandlerBlocks
-        if (header !in sourceTryBlocks) return null
-        if (hasExternalProtectedEntry(header, sourceTryBlocks, facts)) return null
+        val sourceTryBlocks = mixedRelated.flatMapTo(linkedSetOf()) { candidate ->
+            extendWithTerminalTransfers(candidate.protectedBlocks, facts)
+        } - finallyHandlerBlocks
+        if (header !in sourceTryBlocks) return rejectLegacy(rejectionTrace, "header-not-in-source-try")
+        if (hasExternalProtectedEntry(header, sourceTryBlocks, facts)) return rejectLegacy(rejectionTrace, "source-try-external-entry")
 
         val typedByEntry = typedHandlers.groupBy { handler ->
             facts.instructionToBlock.getOrNull(labelPosition(labelPositions, handler.handler))
         }
-        if (typedByEntry.keys.any { it == null }) return null
+        if (typedByEntry.keys.any { it == null }) return rejectLegacy(rejectionTrace, "typed-handler-entry")
         val typedEntries = typedByEntry.keys.filterNotNull().toSet()
         val catches = mutableListOf<StructuredCatch>()
         val occupiedCatchBlocks = linkedSetOf<BasicBlockId>()
@@ -757,9 +881,10 @@ internal class StructuredExceptionRecognizer {
                 finallyCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks },
                 graph = graph,
                 facts = facts,
-            ) ?: return null
-            if (blocks.isEmpty() || blocks.any { it in occupiedCatchBlocks }) return null
-            if (hasExternalHandlerEntry(entry, blocks, typedEntries, facts)) return null
+            ) ?: return rejectLegacy(rejectionTrace, "catch-body-shape")
+            if (blocks.isEmpty()) return rejectLegacy(rejectionTrace, "empty-catch-body")
+            if (blocks.any { it in occupiedCatchBlocks }) return rejectLegacy(rejectionTrace, "overlapping-catch-bodies")
+            if (hasExternalHandlerEntry(entry, blocks, typedEntries, facts)) return rejectLegacy(rejectionTrace, "catch-external-entry")
             occupiedCatchBlocks += blocks
             catches += StructuredCatch(
                 catchTypes = entries.mapNotNull { it.catchType }.distinct(),
@@ -768,7 +893,7 @@ internal class StructuredExceptionRecognizer {
             )
         }
 
-        val handlerRange = contiguousInstructionRange(bodyBlocks, graph) ?: return null
+        val handlerRanges = finallyShape.bodyInstructionRanges
         val protectedRanges = catchAllFamily
             .flatMap { candidate -> candidate.group.segments }
             .sortedWith(compareBy<ExceptionTableSegment> { it.range.start }.thenBy { it.range.endExclusive })
@@ -782,8 +907,8 @@ internal class StructuredExceptionRecognizer {
             catches = catches,
             handlerEntry = handlerEntry,
             handlerBlocks = finallyHandlerBlocks,
-            finallyBodyInstructionIndices = handlerRange,
-            normalCopyInstructionIndices = matches.map { it.instructionRange },
+            finallyBodyInstructionRanges = handlerRanges,
+            normalCopyInstructionIndices = matches.flatMap { it.instructionRanges },
             normalCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks },
             continuation = continuation,
             protectedStartInstructionIndex = firstRange.startInstructionIndex,
@@ -792,6 +917,158 @@ internal class StructuredExceptionRecognizer {
         )
         return LegacyTryCatchFinallyRecognition(
             region = region,
+            consumedGroupKeys = catchAllFamily.mapTo(linkedSetOf()) { candidate ->
+                ExceptionRegionKey(candidate.group.envelope.start, candidate.group.envelope.endExclusive)
+            },
+        )
+    }
+
+
+    private fun recognizeLegacyNestedTryCatchFinally(
+        graph: ControlFlowGraph,
+        topology: ExceptionGroupTopology,
+        catchAllFamily: List<ExceptionGroupTopology>,
+        mixedRelated: List<ExceptionGroupTopology>,
+        finallyShape: LegacyFinallyShape,
+        labelPositions: Map<RawLabelId, Int>,
+        facts: ControlFlowFacts,
+        provenance: LegacySubroutineProvenance?,
+        rejectionTrace: MutableList<String>?,
+    ): LegacyTryCatchFinallyRecognition? {
+        // A legacy JSR finally can surround several nested try/catch regions. In that shape every
+        // fragment carries the same outer catch-all handler, while typed handlers vary according
+        // to the nested scope that is active. Never flatten those handlers into sibling catches.
+        if (mixedRelated.first() !== topology) return rejectLegacy(rejectionTrace, "not-first-mixed-peer")
+
+        val handlerEntry = finallyShape.handlerEntry
+        val finallyHandlerBlocks = finallyShape.handlerBlocks
+        val handlerRanges = finallyShape.bodyInstructionRanges
+        val matches = finallyShape.normalCopies
+        val continuation = finallyShape.continuation
+        val finallyCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks }
+        val typedHandlerEntries = mixedRelated.flatMap { it.group.handlers }
+            .filter { it.catchType != null }
+            .mapNotNullTo(linkedSetOf()) { handler ->
+                facts.instructionToBlock.getOrNull(labelPosition(labelPositions, handler.handler))
+            }
+        if (typedHandlerEntries.isEmpty()) return rejectLegacy(rejectionTrace, "mixed-handler-signature")
+
+        val groupsByEntry = linkedMapOf<BasicBlockId, MutableList<ExceptionGroupTopology>>()
+        val handlersByEntry = linkedMapOf<BasicBlockId, MutableList<RawExceptionHandler>>()
+        for (candidate in mixedRelated) {
+            for (handler in candidate.group.handlers) {
+                if (handler.catchType == null) continue
+                val entry = facts.instructionToBlock.getOrNull(labelPosition(labelPositions, handler.handler))
+                    ?: return rejectLegacy(rejectionTrace, "typed-handler-entry")
+                groupsByEntry.getOrPut(entry) { mutableListOf() } += candidate
+                handlersByEntry.getOrPut(entry) { mutableListOf() } += handler
+            }
+        }
+
+        val entriesByScope = groupsByEntry.entries.groupBy { (_, groups) ->
+            groups.map { candidate -> ExceptionRegionKey(candidate.group.envelope.start, candidate.group.envelope.endExclusive) }
+                .distinct()
+                .sortedWith(compareBy<ExceptionRegionKey> { it.protectedStartInstructionIndex }.thenBy { it.protectedEndInstructionIndexExclusive })
+        }
+        val scopeBlocks = linkedMapOf<List<ExceptionRegionKey>, Set<BasicBlockId>>()
+        for ((scope, entries) in entriesByScope) {
+            val groups = entries.flatMap { it.value }.distinct()
+            scopeBlocks[scope] = groups.flatMapTo(linkedSetOf()) { candidate ->
+                extendWithTerminalTransfers(candidate.protectedBlocks, facts)
+            } - finallyHandlerBlocks - finallyCopyBlocks
+        }
+
+        val scopes = scopeBlocks.keys.toList()
+        for (i in scopes.indices) {
+            val left = scopeBlocks.getValue(scopes[i])
+            if (left.isEmpty()) return rejectLegacy(rejectionTrace, "empty-nested-try")
+            for (j in i + 1 until scopes.size) {
+                val right = scopeBlocks.getValue(scopes[j])
+                val overlap = left intersect right
+                if (overlap.isNotEmpty() && !left.containsAll(right) && !right.containsAll(left)) {
+                    return rejectLegacy(rejectionTrace, "crossing-mixed-handler-scopes")
+                }
+            }
+        }
+
+        val nestedRegions = mutableListOf<StructuredRegion>()
+        for ((scope, entries) in entriesByScope.entries.sortedBy { it.key.first().protectedStartInstructionIndex }) {
+            val protectedBlocks = scopeBlocks.getValue(scope)
+            val scopeGroups = entries.flatMap { it.value }.distinct().sortedBy { it.group.envelope.start }
+            val scopeStart = scopeGroups.first().group.envelope.start
+            val scopeHeader = facts.instructionToBlock.getOrNull(scopeStart)
+                ?: return rejectLegacy(rejectionTrace, "nested-try-header")
+            if (scopeHeader !in protectedBlocks || hasExternalProtectedEntry(scopeHeader, protectedBlocks, facts)) {
+                return rejectLegacy(rejectionTrace, "nested-try-external-entry")
+            }
+
+            val catches = mutableListOf<StructuredCatch>()
+            val occupied = linkedSetOf<BasicBlockId>()
+            for ((entry, _) in entries.sortedBy { it.key.value }) {
+                val blocks = collectLegacyCatchBody(
+                    entry = entry,
+                    protectedBlocks = protectedBlocks,
+                    otherHandlerEntries = typedHandlerEntries + handlerEntry,
+                    finallyCopyBlocks = finallyCopyBlocks,
+                    graph = graph,
+                    facts = facts,
+                ) ?: return rejectLegacy(rejectionTrace, "nested-catch-body-shape")
+                if (blocks.isEmpty() || blocks.any { it in occupied }) return rejectLegacy(rejectionTrace, "nested-catch-overlap")
+                if (hasExternalLegacyHandlerEntry(entry, blocks, typedHandlerEntries, facts, graph, provenance)) {
+                    return rejectLegacy(rejectionTrace, "nested-catch-external-entry")
+                }
+                occupied += blocks
+                catches += StructuredCatch(
+                    catchTypes = handlersByEntry.getValue(entry).mapNotNull { it.catchType }.distinct(),
+                    entry = entry,
+                    blocks = blocks,
+                )
+            }
+
+            val protectedRanges = scopeGroups.flatMap { it.group.segments }
+                .map { StructuredProtectedRange(it.range.start, it.range.endExclusive) }
+                .distinct()
+                .sortedWith(compareBy<StructuredProtectedRange> { it.startInstructionIndex }.thenBy { it.endInstructionIndexExclusive })
+            nestedRegions += StructuredRegion.TryCatch(
+                header = scopeHeader,
+                tryBlocks = protectedBlocks,
+                catches = catches,
+                continuation = selectContinuation(protectedBlocks, entries.mapTo(linkedSetOf()) { it.key }, facts),
+                protectedStartInstructionIndex = protectedRanges.first().startInstructionIndex,
+                protectedEndInstructionIndexExclusive = protectedRanges.last().endInstructionIndexExclusive,
+                protectedRanges = protectedRanges,
+            )
+        }
+
+        val outerTryBlocks = catchAllFamily.flatMapTo(linkedSetOf()) { candidate ->
+            extendWithTerminalTransfers(candidate.protectedBlocks, facts)
+        } - finallyHandlerBlocks - finallyCopyBlocks
+        val outerStart = catchAllFamily.minOf { it.group.envelope.start }
+        val outerHeader = facts.instructionToBlock.getOrNull(outerStart)
+            ?: return rejectLegacy(rejectionTrace, "outer-finally-header")
+        if (outerHeader !in outerTryBlocks || hasExternalProtectedEntry(outerHeader, outerTryBlocks, facts)) {
+            return rejectLegacy(rejectionTrace, "outer-finally-external-entry")
+        }
+        val outerRanges = catchAllFamily.flatMap { it.group.segments }
+            .map { StructuredProtectedRange(it.range.start, it.range.endExclusive) }
+            .distinct()
+            .sortedWith(compareBy<StructuredProtectedRange> { it.startInstructionIndex }.thenBy { it.endInstructionIndexExclusive })
+        val outerFinally = StructuredRegion.TryFinally(
+            header = outerHeader,
+            tryBlocks = outerTryBlocks,
+            handlerEntry = handlerEntry,
+            handlerBlocks = finallyHandlerBlocks,
+            finallyBodyInstructionRanges = handlerRanges,
+            normalCopyInstructionIndices = matches.flatMap { it.instructionRanges },
+            normalCopyBlocks = finallyCopyBlocks,
+            continuation = continuation,
+            protectedStartInstructionIndex = outerRanges.first().startInstructionIndex,
+            protectedEndInstructionIndexExclusive = outerRanges.last().endInstructionIndexExclusive,
+            protectedRanges = outerRanges,
+        )
+        return LegacyTryCatchFinallyRecognition(
+            region = outerFinally,
+            additionalRegions = nestedRegions,
             consumedGroupKeys = catchAllFamily.mapTo(linkedSetOf()) { candidate ->
                 ExceptionRegionKey(candidate.group.envelope.start, candidate.group.envelope.endExclusive)
             },
@@ -833,7 +1110,8 @@ internal class StructuredExceptionRecognizer {
     }
 
     private data class LegacyTryCatchFinallyRecognition(
-        val region: StructuredRegion.TryCatchFinally,
+        val region: StructuredRegion,
+        val additionalRegions: List<StructuredRegion> = emptyList(),
         val consumedGroupKeys: Set<ExceptionRegionKey>,
     )
 
@@ -855,76 +1133,35 @@ internal class StructuredExceptionRecognizer {
         allGroups: List<ExceptionGroupTopology>,
         labelPositions: Map<RawLabelId, Int>,
         facts: ControlFlowFacts,
+        provenance: LegacySubroutineProvenance?,
+        rejectionTrace: MutableList<String>? = null,
     ): LegacyFinallyRecognition? {
         val group = topology.group
-        if (group.handlers.size != 1 || group.handlers.single().catchType != null) return null
+        if (group.handlers.size != 1 || group.handlers.single().catchType != null) return rejectLegacy(rejectionTrace, "handler-set")
 
         val signature = handlerSignature(group.handlers, labelPositions)
         val handlerInstructionIndex = signature.single().handlerInstructionIndex
-        val handlerEntry = facts.instructionToBlock.getOrNull(handlerInstructionIndex) ?: return null
-        val handlerInstructions = graph.instructions(graph.block(handlerEntry))
-        if (handlerInstructions.size != 3) return null
-
-        val store = handlerInstructions[0] as? RawLocalInstruction ?: return null
-        if (store.operation != LocalOperation.STORE || store.type != JvmComputationalType.REFERENCE) return null
-        val nullSeed = handlerInstructions[1] as? RawConstantInstruction ?: return null
-        if (nullSeed.opcode.mnemonic != "aconst_null") return null
-        val trampoline = handlerInstructions[2] as? RawBranchInstruction ?: return null
-        if (trampoline.opcode.mnemonic !in setOf("goto", "goto_w")) return null
-
-        val bodyEntry = facts.outgoing[handlerEntry].orEmpty()
-            .filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION }
-            .map { edge -> edge.to }
-            .distinct()
-            .singleOrNull() ?: return null
-        val reachable = collectAcyclicNormalRegion(bodyEntry, facts) ?: return null
-        val rethrowBlocks = reachable.filter { block -> isCanonicalRethrowBlock(graph, block, store.slot) }
-        if (rethrowBlocks.size != 1) return null
-        val rethrow = rethrowBlocks.single()
-
-        val bodyBlocks = collectUntil(bodyEntry, rethrow, facts)
-        if (bodyBlocks.isEmpty() || rethrow in bodyBlocks) return null
-        if (bodyBlocks.any { block -> rethrow !in facts.postDominators[block].orEmpty() }) return null
-        if (bodyBlocks.any { block -> graph.instructions(graph.block(block)).any { it is RawSwitchInstruction } }) return null
-        if (bodyBlocks.any { block ->
-                facts.outgoing[block].orEmpty().any { edge -> edge.to !in bodyBlocks && edge.to != rethrow }
-            }) return null
-
-        val handlerBlocks = linkedSetOf<BasicBlockId>().apply {
-            add(handlerEntry)
-            addAll(bodyBlocks)
-            add(rethrow)
-        }
-        val candidateEntries = graph.blocks.asSequence()
-            .map { it.id }
-            .filter { it !in handlerBlocks }
-            .filter { candidate -> hasLegacyFinallyCallSite(candidate, graph, facts) }
-            .toList()
-        val matches = candidateEntries.mapNotNull { candidate ->
-            matchFinallyBodyGraph(
-                graph = graph,
-                handlerEntry = bodyEntry,
-                handlerBlocks = bodyBlocks,
-                handlerExit = rethrow,
-                handlerEntryInstructionOffset = 0,
-                normalEntry = candidate,
-                facts = facts,
-            )
-        }
-        if (matches.isEmpty()) return null
-        val continuations = matches.mapTo(linkedSetOf()) { it.continuation }
-        if (continuations.size != 1) return null
+        val finallyShape = analyzeLegacyFinallyShape(
+            graph = graph,
+            handlerInstructionIndex = handlerInstructionIndex,
+            facts = facts,
+            provenance = provenance,
+            rejectionTrace = rejectionTrace,
+        ) ?: return null
+        val handlerEntry = finallyShape.handlerEntry
+        val handlerBlocks = finallyShape.handlerBlocks
+        val matches = finallyShape.normalCopies
 
         val family = allGroups.filter { candidate ->
             handlerSignature(candidate.group.handlers, labelPositions) == signature
         }
-        if (family.isEmpty()) return null
+        if (family.isEmpty()) return rejectLegacy(rejectionTrace, "empty-handler-family")
         val protectedBlocks = family.flatMapTo(linkedSetOf()) { candidate ->
             extendWithTerminalTransfers(candidate.protectedBlocks, facts)
         } - handlerBlocks
-        if (header !in protectedBlocks) return null
+        if (header !in protectedBlocks) return rejectLegacy(rejectionTrace, "header-not-in-protected-blocks")
 
-        val handlerRange = contiguousInstructionRange(bodyBlocks, graph) ?: return null
+        val handlerRanges = finallyShape.bodyInstructionRanges
         val protectedRanges = family
             .flatMap { candidate -> candidate.group.segments }
             .sortedWith(compareBy<ExceptionTableSegment> { it.range.start }.thenBy { it.range.endExclusive })
@@ -936,10 +1173,10 @@ internal class StructuredExceptionRecognizer {
             tryBlocks = protectedBlocks,
             handlerEntry = handlerEntry,
             handlerBlocks = handlerBlocks,
-            finallyBodyInstructionIndices = handlerRange,
-            normalCopyInstructionIndices = matches.map { it.instructionRange },
+            finallyBodyInstructionRanges = handlerRanges,
+            normalCopyInstructionIndices = matches.flatMap { it.instructionRanges },
             normalCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks },
-            continuation = continuations.single(),
+            continuation = finallyShape.continuation,
             protectedStartInstructionIndex = firstRange.startInstructionIndex,
             protectedEndInstructionIndexExclusive = lastRange.endInstructionIndexExclusive,
             protectedRanges = protectedRanges,
@@ -952,30 +1189,130 @@ internal class StructuredExceptionRecognizer {
         )
     }
 
+    /**
+     * Legacy JSR/RET normalization can leave one pure `goto` block after a cloned finally body.
+     * The block is not always an instruction synthesized by the normalizer itself: cloning can
+     * preserve an original compiler-generated trampoline whose source-level role is still only to
+     * return from the shared finally subroutine. Therefore instruction provenance alone is not a
+     * complete proof for this equivalence yet.
+     *
+     * Keep the established legacy-only shape rule here and use provenance elsewhere for facts it
+     * models exactly (JSR call sites, clone contexts and synthetic transfers). Once normalization
+     * provenance records return-path equivalence explicitly, this fallback can be tightened again.
+     */
+    private fun normalizeLegacyFinallyContinuation(
+        continuation: BasicBlockId,
+        graph: ControlFlowGraph,
+        facts: ControlFlowFacts,
+        provenance: LegacySubroutineProvenance?,
+    ): BasicBlockId {
+        var current = continuation
+        val visited = linkedSetOf<BasicBlockId>()
+        while (visited.add(current)) {
+            val instructions = graph.instructions(graph.block(current))
+            if (instructions.size != 1) break
+            val jump = instructions.single() as? RawBranchInstruction ?: break
+            if (jump.opcode.mnemonic !in setOf("goto", "goto_w")) break
+
+            val outgoing = facts.outgoing[current].orEmpty()
+            if (outgoing.any { edge -> edge.kind == ControlFlowEdgeKind.EXCEPTION }) break
+            val next = outgoing.singleOrNull()?.to ?: break
+            current = next
+        }
+        return current
+    }
+
     private fun hasLegacyFinallyCallSite(
         bodyEntry: BasicBlockId,
         graph: ControlFlowGraph,
         facts: ControlFlowFacts,
+        provenance: LegacySubroutineProvenance?,
     ): Boolean = facts.incoming[bodyEntry].orEmpty().any { edge ->
         if (edge.kind == ControlFlowEdgeKind.EXCEPTION) return@any false
-        val instructions = graph.instructions(graph.block(edge.from))
+        val predecessor = graph.block(edge.from)
+        if (provenance != null) {
+            val lastOrigin = provenance.originAt(predecessor.endInstructionIndexExclusive - 1)
+            return@any lastOrigin?.syntheticKind == LegacySyntheticInstructionKind.JSR_GOTO
+        }
+
+        // Synthetic unit tests can construct already-normalized legacy shapes directly.
+        val instructions = graph.instructions(predecessor)
         if (instructions.size < 2) return@any false
         val nullSeed = instructions[instructions.lastIndex - 1] as? RawConstantInstruction ?: return@any false
         val jump = instructions.last() as? RawBranchInstruction ?: return@any false
         nullSeed.opcode.mnemonic == "aconst_null" && jump.opcode.mnemonic in setOf("goto", "goto_w")
     }
 
+    private fun hasSingleLegacyContext(
+        blocks: Set<BasicBlockId>,
+        graph: ControlFlowGraph,
+        provenance: LegacySubroutineProvenance,
+    ): Boolean {
+        val contexts = blocks.mapNotNullTo(linkedSetOf()) { block ->
+            provenance.originAt(graph.block(block).startInstructionIndex)?.context
+        }
+        return contexts.size == 1 && contexts.single().frames.isNotEmpty()
+    }
+
+    private fun hasExternalLegacyHandlerEntry(
+        entry: BasicBlockId,
+        blocks: Set<BasicBlockId>,
+        handlerEntries: Set<BasicBlockId>,
+        facts: ControlFlowFacts,
+        graph: ControlFlowGraph,
+        provenance: LegacySubroutineProvenance?,
+    ): Boolean = blocks.any { block ->
+        facts.incoming[block].orEmpty().any { edge ->
+            if (edge.from in blocks || block == entry && edge.from in handlerEntries) return@any false
+            if (provenance == null) return@any true
+            !isNormalizerOwnedTransfer(edge.from, block, graph, provenance)
+        }
+    }
+
+    private fun isNormalizerOwnedTransfer(
+        from: BasicBlockId,
+        to: BasicBlockId,
+        graph: ControlFlowGraph,
+        provenance: LegacySubroutineProvenance,
+    ): Boolean {
+        val fromBlock = graph.block(from)
+        val toBlock = graph.block(to)
+        val transfer = provenance.originAt(fromBlock.endInstructionIndexExclusive - 1) ?: return false
+        val target = provenance.originAt(toBlock.startInstructionIndex) ?: return false
+        if (transfer.syntheticKind == null) return false
+        return contextsRelated(transfer.context, target.context)
+    }
+
+    private fun contextsRelated(left: LegacySubroutineContext, right: LegacySubroutineContext): Boolean =
+        left == right || left.parent == right || right.parent == left
+
+    private fun instructionRanges(
+        blocks: Set<BasicBlockId>,
+        graph: ControlFlowGraph,
+    ): List<IntRange> {
+        val physical = blocks.map(graph::block).sortedBy { it.startInstructionIndex }
+        if (physical.isEmpty()) return emptyList()
+
+        val ranges = mutableListOf<IntRange>()
+        var rangeStart = physical.first().startInstructionIndex
+        var rangeEndExclusive = physical.first().endInstructionIndexExclusive
+        for (block in physical.drop(1)) {
+            if (block.startInstructionIndex == rangeEndExclusive) {
+                rangeEndExclusive = block.endInstructionIndexExclusive
+            } else {
+                ranges += rangeStart until rangeEndExclusive
+                rangeStart = block.startInstructionIndex
+                rangeEndExclusive = block.endInstructionIndexExclusive
+            }
+        }
+        ranges += rangeStart until rangeEndExclusive
+        return ranges
+    }
+
     private fun contiguousInstructionRange(
         blocks: Set<BasicBlockId>,
         graph: ControlFlowGraph,
-    ): IntRange? {
-        val physical = blocks.map(graph::block).sortedBy { it.startInstructionIndex }
-        if (physical.isEmpty()) return null
-        val first = physical.first().startInstructionIndex
-        val last = physical.last().endInstructionIndexExclusive - 1
-        val instructionCount = physical.sumOf { it.endInstructionIndexExclusive - it.startInstructionIndex }
-        return (first..last).takeIf { it.count() == instructionCount }
-    }
+    ): IntRange? = instructionRanges(blocks, graph).singleOrNull()
 
     private data class LegacyFinallyRecognition(
         val region: StructuredRegion.TryFinally,
@@ -1057,7 +1394,7 @@ internal class StructuredExceptionRecognizer {
             tryBlocks = protectedBlocks,
             handlerEntry = handlerEntry,
             handlerBlocks = setOf(handlerEntry),
-            finallyBodyInstructionIndices = handlerBodyStart..(handlerBodyStart + body.size - 1),
+            finallyBodyInstructionRanges = listOf(handlerBodyStart..(handlerBodyStart + body.size - 1)),
             normalCopyInstructionIndices = matches.map { it.second },
             normalCopyBlocks = matches.mapTo(linkedSetOf()) { it.first },
             continuation = continuationCandidates.singleOrNull(),
@@ -1154,8 +1491,8 @@ internal class StructuredExceptionRecognizer {
                 addAll(bodyBlocks)
                 add(rethrow)
             },
-            finallyBodyInstructionIndices = handlerRange,
-            normalCopyInstructionIndices = matches.map { it.instructionRange },
+            finallyBodyInstructionRanges = listOf(handlerRange),
+            normalCopyInstructionIndices = matches.flatMap { it.instructionRanges },
             normalCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks },
             continuation = continuations.single(),
             protectedStartInstructionIndex = group.envelope.start,
@@ -1222,7 +1559,7 @@ internal class StructuredExceptionRecognizer {
     private data class FinallyBodyMatch(
         val blocks: Set<BasicBlockId>,
         val continuation: BasicBlockId,
-        val instructionRange: IntRange,
+        val instructionRanges: List<IntRange>,
     )
 
     private fun matchFinallyBodyGraph(
@@ -1233,6 +1570,7 @@ internal class StructuredExceptionRecognizer {
         handlerEntryInstructionOffset: Int,
         normalEntry: BasicBlockId,
         facts: ControlFlowFacts,
+        allowSplitNormalCopy: Boolean = false,
     ): FinallyBodyMatch? {
         val mapping = linkedMapOf<BasicBlockId, BasicBlockId>()
         var continuation: BasicBlockId? = null
@@ -1293,10 +1631,21 @@ internal class StructuredExceptionRecognizer {
         if (normalBlocks.any { block -> facts.incoming[block].orEmpty().any { it.from !in normalBlocks && block != normalEntry } }) return null
 
         val physical = normalBlocks.map(graph::block).sortedBy { it.startInstructionIndex }
-        val first = physical.first().startInstructionIndex
-        val last = physical.last().endInstructionIndexExclusive - 1
-        if ((first..last).count() != physical.sumOf { it.endInstructionIndexExclusive - it.startInstructionIndex }) return null
-        return FinallyBodyMatch(normalBlocks, resolvedContinuation, first..last)
+        val ranges = mutableListOf<IntRange>()
+        var rangeStart = physical.first().startInstructionIndex
+        var rangeEndExclusive = physical.first().endInstructionIndexExclusive
+        for (block in physical.drop(1)) {
+            if (block.startInstructionIndex == rangeEndExclusive) {
+                rangeEndExclusive = block.endInstructionIndexExclusive
+            } else {
+                ranges += rangeStart until rangeEndExclusive
+                rangeStart = block.startInstructionIndex
+                rangeEndExclusive = block.endInstructionIndexExclusive
+            }
+        }
+        ranges += rangeStart until rangeEndExclusive
+        if (!allowSplitNormalCopy && ranges.size != 1) return null
+        return FinallyBodyMatch(normalBlocks, resolvedContinuation, ranges)
     }
 
     private fun equivalentFinallyInstruction(
@@ -1365,4 +1714,5 @@ internal data class ExceptionRecognition(
     val regions: List<StructuredRegion>,
     val rejections: Map<ExceptionRegionKey, UnstructuredControlFlowReason>,
     val regionCount: Int,
+    val legacyRejectionDetails: Map<ExceptionRegionKey, String> = emptyMap(),
 )

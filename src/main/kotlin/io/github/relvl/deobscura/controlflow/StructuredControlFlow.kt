@@ -120,6 +120,7 @@ data class UnstructuredControlFlowDiagnostic(
     val reason: UnstructuredControlFlowReason,
     val protectedStartInstructionIndex: Int? = null,
     val protectedEndInstructionIndexExclusive: Int? = null,
+    val detail: String? = null,
 )
 
 enum class StructuredArmExitKind {
@@ -277,7 +278,7 @@ sealed interface StructuredRegion {
         val catches: List<StructuredCatch>,
         val handlerEntry: BasicBlockId,
         val handlerBlocks: Set<BasicBlockId>,
-        val finallyBodyInstructionIndices: IntRange,
+        val finallyBodyInstructionRanges: List<IntRange>,
         val normalCopyInstructionIndices: List<IntRange>,
         val normalCopyBlocks: Set<BasicBlockId>,
         val continuation: BasicBlockId?,
@@ -307,7 +308,7 @@ sealed interface StructuredRegion {
         val tryBlocks: Set<BasicBlockId>,
         val handlerEntry: BasicBlockId,
         val handlerBlocks: Set<BasicBlockId>,
-        val finallyBodyInstructionIndices: IntRange,
+        val finallyBodyInstructionRanges: List<IntRange>,
         val normalCopyInstructionIndices: List<IntRange>,
         val normalCopyBlocks: Set<BasicBlockId>,
         val continuation: BasicBlockId?,

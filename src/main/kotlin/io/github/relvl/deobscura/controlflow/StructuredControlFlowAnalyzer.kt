@@ -7,6 +7,7 @@ import io.github.relvl.deobscura.cfg.ControlFlowEdge
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.expression.*
+import io.github.relvl.deobscura.normalize.LegacySubroutineProvenance
 
 /** Recognizes conservative single-entry reducible `if`, terminal-arm `if`, and natural `while` regions. */
 class StructuredControlFlowAnalyzer {
@@ -20,6 +21,7 @@ class StructuredControlFlowAnalyzer {
         flow: SsaControlFlowGraph,
         expression: ExpressionAnalysis,
         legacySubroutineNormalized: Boolean = false,
+        legacySubroutineProvenance: LegacySubroutineProvenance? = null,
     ): StructuredControlFlowAnalysis {
         val facts = ControlFlowFacts.build(graph, flow, expression)
             ?: return StructuredControlFlowAnalysis(emptyList(), 0, 0)
@@ -57,7 +59,8 @@ class StructuredControlFlowAnalyzer {
         val exceptionRecognition = exceptionRecognizer.recognize(
             graph = graph,
             facts = facts,
-            legacySubroutineNormalized = legacySubroutineNormalized,
+            legacySubroutineNormalized = legacySubroutineNormalized || legacySubroutineProvenance != null,
+            legacySubroutineProvenance = legacySubroutineProvenance,
         )
         val switchRecognition = switchRecognizer.recognize(
             facts = facts,
@@ -123,6 +126,7 @@ class StructuredControlFlowAnalyzer {
                             reason = reason,
                             protectedStartInstructionIndex = key.protectedStartInstructionIndex,
                             protectedEndInstructionIndexExclusive = key.protectedEndInstructionIndexExclusive,
+                            detail = exceptionRecognition.legacyRejectionDetails[key],
                         ),
                     )
                 }
