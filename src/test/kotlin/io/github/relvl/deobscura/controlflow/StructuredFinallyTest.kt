@@ -677,6 +677,195 @@ class StructuredFinallyTest {
     }
 
 
+    // Pseudocode: try { BODY; return } catch (Exception e) { CATCH; return } finally { CLEANUP }
+    @Test
+    fun `recognizes modern try catch finally with terminal linear cleanup copies`() {
+        val tryBlock = BasicBlockId(0)
+        val tryFinallyReturn = BasicBlockId(1)
+        val catchEntry = BasicBlockId(2)
+        val catchFinallyReturn = BasicBlockId(3)
+        val handlerEntry = BasicBlockId(4)
+        val edges = listOf(
+            edge(tryBlock, tryFinallyReturn, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(tryBlock, catchEntry, "java/lang/Exception"),
+            exceptionEdge(tryBlock, handlerEntry, null),
+            edge(catchEntry, catchFinallyReturn, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(catchEntry, handlerEntry, null),
+        )
+        val instructions = listOf(
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 1),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 1),
+            RawThrowInstruction(JvmOpcode("athrow")),
+        )
+        val blocks = listOf(
+            BasicBlock(tryBlock, 0, 1, emptyList(), emptyList()),
+            BasicBlock(tryFinallyReturn, 1, 3, emptyList(), emptyList()),
+            BasicBlock(catchEntry, 3, 4, emptyList(), emptyList()),
+            BasicBlock(catchFinallyReturn, 4, 6, emptyList(), emptyList()),
+            BasicBlock(handlerEntry, 6, 10, emptyList(), emptyList()),
+        )
+        val labels = List(11) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                instructions,
+                labels,
+                listOf(
+                    exceptionHandler(0, 1, 3, "java/lang/Exception"),
+                    exceptionHandler(0, 1, 6, null),
+                    exceptionHandler(3, 4, 6, null),
+                ),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            tryBlock,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(blocks.mapTo(linkedSetOf()) { it.id }, edges, tryBlock),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(2, null),
+                    ExpressionStatement.Return(5, null),
+                    ExpressionStatement.Throw(9, ValueId(0)),
+                ),
+            ),
+        )
+
+        val region = assertIs<StructuredRegion.TryCatchFinally>(result.regions.single())
+        assertEquals(setOf(tryBlock), region.tryBlocks)
+        assertEquals(setOf(catchEntry), region.catches.single().blocks)
+        assertEquals(handlerEntry, region.handlerEntry)
+        assertEquals(setOf(tryFinallyReturn, catchFinallyReturn), region.normalCopyBlocks)
+        assertEquals(listOf(1..1, 4..4), region.normalCopyInstructionIndices.sortedBy { it.first })
+        assertEquals(null, region.continuation)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    // Pseudocode: try { BODY } catch (Exception e) { CATCH } finally { if (flag) A; CLEANUP }
+    @Test
+    fun `recognizes branching modern try catch finally with cleanup before rethrow in same block`() {
+        val tryBlock = BasicBlockId(0)
+        val tryFinally = BasicBlockId(1)
+        val tryFinallyBranch = BasicBlockId(2)
+        val tryFinallyTail = BasicBlockId(3)
+        val catchEntry = BasicBlockId(4)
+        val catchFinally = BasicBlockId(5)
+        val catchFinallyBranch = BasicBlockId(6)
+        val catchFinallyTail = BasicBlockId(7)
+        val handlerEntry = BasicBlockId(8)
+        val handlerFinally = BasicBlockId(9)
+        val handlerFinallyBranch = BasicBlockId(10)
+        val rethrow = BasicBlockId(11)
+        val continuation = BasicBlockId(12)
+        val edges = listOf(
+            edge(tryBlock, tryFinally, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(tryBlock, catchEntry, "java/lang/Exception"),
+            exceptionEdge(tryBlock, handlerEntry, null),
+            edge(tryFinally, tryFinallyTail, ControlFlowEdgeKind.CONDITIONAL),
+            edge(tryFinally, tryFinallyBranch, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(tryFinallyBranch, tryFinallyTail, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(tryFinallyTail, continuation, ControlFlowEdgeKind.JUMP),
+            edge(catchEntry, catchFinally, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(catchEntry, handlerEntry, null),
+            edge(catchFinally, catchFinallyTail, ControlFlowEdgeKind.CONDITIONAL),
+            edge(catchFinally, catchFinallyBranch, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(catchFinallyBranch, catchFinallyTail, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(catchFinallyTail, continuation, ControlFlowEdgeKind.JUMP),
+            edge(handlerEntry, handlerFinally, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(handlerFinally, rethrow, ControlFlowEdgeKind.CONDITIONAL),
+            edge(handlerFinally, handlerFinallyBranch, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(handlerFinallyBranch, rethrow, ControlFlowEdgeKind.FALLTHROUGH),
+        )
+        val instructions = listOf(
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("iload"), LocalOperation.LOAD, JvmComputationalType.INT, 2),
+            RawBranchInstruction(JvmOpcode("ifeq"), RawLabelId(4)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(17)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("iload"), LocalOperation.LOAD, JvmComputationalType.INT, 2),
+            RawBranchInstruction(JvmOpcode("ifeq"), RawLabelId(10)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(17)),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 1),
+            RawLocalInstruction(JvmOpcode("iload"), LocalOperation.LOAD, JvmComputationalType.INT, 2),
+            RawBranchInstruction(JvmOpcode("ifeq"), RawLabelId(16)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 1),
+            RawThrowInstruction(JvmOpcode("athrow")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+        )
+        val blocks = listOf(
+            BasicBlock(tryBlock, 0, 1, emptyList(), emptyList()),
+            BasicBlock(tryFinally, 1, 3, emptyList(), emptyList()),
+            BasicBlock(tryFinallyBranch, 3, 4, emptyList(), emptyList()),
+            BasicBlock(tryFinallyTail, 4, 6, emptyList(), emptyList()),
+            BasicBlock(catchEntry, 6, 7, emptyList(), emptyList()),
+            BasicBlock(catchFinally, 7, 9, emptyList(), emptyList()),
+            BasicBlock(catchFinallyBranch, 9, 10, emptyList(), emptyList()),
+            BasicBlock(catchFinallyTail, 10, 12, emptyList(), emptyList()),
+            BasicBlock(handlerEntry, 12, 13, emptyList(), emptyList()),
+            BasicBlock(handlerFinally, 13, 15, emptyList(), emptyList()),
+            BasicBlock(handlerFinallyBranch, 15, 16, emptyList(), emptyList()),
+            BasicBlock(rethrow, 16, 19, emptyList(), emptyList()),
+            BasicBlock(continuation, 19, 20, emptyList(), emptyList()),
+        )
+        val labels = List(21) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                instructions,
+                labels,
+                listOf(
+                    exceptionHandler(0, 1, 6, "java/lang/Exception"),
+                    exceptionHandler(0, 1, 12, null),
+                    exceptionHandler(6, 7, 12, null),
+                ),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            tryBlock,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(blocks.mapTo(linkedSetOf()) { it.id }, edges, tryBlock),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Throw(18, ValueId(0)),
+                    ExpressionStatement.Return(19, null),
+                ),
+            ),
+        )
+
+        val region = assertIs<StructuredRegion.TryCatchFinally>(result.regions.single())
+        assertEquals(setOf(tryBlock), region.tryBlocks)
+        assertEquals(setOf(catchEntry), region.catches.single().blocks)
+        assertEquals(handlerEntry, region.handlerEntry)
+        assertEquals(setOf(handlerEntry, handlerFinally, handlerFinallyBranch, rethrow), region.handlerBlocks)
+        assertEquals(listOf(13..16), region.finallyBodyInstructionRanges)
+        assertEquals(continuation, region.continuation)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
     // Pseudocode: try { BODY } catch (Exception e) { CATCH } finally { CLEANUP }
     @Test
     fun `recognizes modern try catch finally with linear cleanup handler`() {

@@ -54,7 +54,7 @@ internal fun buildFinallyFamilyTopology(
     catchAllHandlerInstructionIndex: Int,
     exceptionTopology: ExceptionTopology,
     excludedBlocks: Set<BasicBlockId>,
-    continuation: BasicBlockId,
+    continuation: BasicBlockId?,
     facts: ControlFlowFacts,
 ): FinallyFamilyTopologyBuild {
     val groups = exceptionTopology.catchAllPeersByHandlerInstructionIndex[catchAllHandlerInstructionIndex].orEmpty()
@@ -78,7 +78,7 @@ internal fun buildFinallyFamilyTopology(
 
     val protectedBlocks = groups.flatMapTo(linkedSetOf()) { candidate ->
         extendExceptionProtectedScopeWithTerminalTransfers(candidate.protectedBlocks, facts)
-    } - excludedBlocks - continuation
+    } - excludedBlocks - setOfNotNull(continuation)
 
     val protectedRanges = groups.flatMap { it.group.segments }
         .map { StructuredProtectedRange(it.range.start, it.range.endExclusive) }

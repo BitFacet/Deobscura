@@ -24,6 +24,7 @@ internal object FinallyBodyMatcher {
         handlerEntryInstructionOffset: Int,
         normalEntry: BasicBlockId,
         facts: ControlFlowFacts,
+        handlerExitInstructionPrefixLength: Int = 0,
         allowSplitNormalCopy: Boolean = false,
         allowEquivalentTerminalReturnTargets: Boolean = false,
     ): FinallyBodyMatch? {
@@ -38,10 +39,12 @@ internal object FinallyBodyMatcher {
             mapping[handlerBlock] = normalBlock
 
             val left = graph.instructions(graph.block(handlerBlock)).let { instructions ->
-                if (handlerBlock == handlerEntry && handlerEntryInstructionOffset != 0) {
-                    instructions.drop(handlerEntryInstructionOffset)
-                } else {
-                    instructions
+                when {
+                    handlerBlock == handlerExit && handlerExitInstructionPrefixLength != 0 ->
+                        instructions.take(handlerExitInstructionPrefixLength)
+                    handlerBlock == handlerEntry && handlerEntryInstructionOffset != 0 ->
+                        instructions.drop(handlerEntryInstructionOffset)
+                    else -> instructions
                 }
             }
             val right = graph.instructions(graph.block(normalBlock))
@@ -56,6 +59,18 @@ internal object FinallyBodyMatcher {
 
             val leftEdges = facts.outgoing[handlerBlock].orEmpty()
             val rightEdges = facts.outgoing[normalBlock].orEmpty()
+            if (handlerBlock == handlerExit && handlerExitInstructionPrefixLength != 0) {
+                if (trailingReturn && rightEdges.isEmpty()) {
+                    if (terminalExitBlock != null && terminalExitBlock != normalBlock) return false
+                    terminalExitBlock = normalBlock
+                    return true
+                }
+                if (rightEdges.size != 1) return false
+                val target = rightEdges.single().to
+                if (continuation != null && continuation != target) return false
+                continuation = target
+                return true
+            }
             val terminalExit = trailingReturn &&
                 rightEdges.isEmpty() &&
                 leftEdges.size == 1 &&
@@ -78,7 +93,9 @@ internal object FinallyBodyMatcher {
                     return false
                 val rightTarget = candidates.single().to
                 if (leftEdge.to == handlerExit) {
-                    if (allowEquivalentTerminalReturnTargets && isStandaloneReturnBlock(graph, rightTarget, facts)) {
+                    if (handlerExitInstructionPrefixLength != 0) {
+                        if (!match(handlerExit, rightTarget)) return false
+                    } else if (allowEquivalentTerminalReturnTargets && isStandaloneReturnBlock(graph, rightTarget, facts)) {
                         if (continuation != null) return false
                         terminalContinuationTargets += rightTarget
                     } else {

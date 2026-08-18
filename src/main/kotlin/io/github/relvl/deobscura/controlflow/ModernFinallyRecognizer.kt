@@ -82,6 +82,7 @@ internal object ModernFinallyRecognizer {
         handlerEntry: BasicBlockId,
         protectedBlocks: Set<BasicBlockId>,
         facts: ControlFlowFacts,
+        allowTerminalNormalCopies: Boolean = false,
     ): ModernFinallyShape? {
         val handlerBlock = graph.block(handlerEntry)
         val handlerInstructions = graph.instructions(handlerBlock)
@@ -96,7 +97,7 @@ internal object ModernFinallyRecognizer {
         val body = handlerInstructions.subList(1, handlerInstructions.size - 2)
         if (body.isEmpty() || body.any(::isControlTransfer)) return null
 
-        val matches = normalBoundaryTargets(protectedBlocks, setOf(handlerEntry), facts).mapNotNull { target ->
+        val boundaryMatches = normalBoundaryTargets(protectedBlocks, setOf(handlerEntry), facts).mapNotNull { target ->
             val block = graph.block(target)
             val instructions = graph.instructions(block)
             if (instructions.size < body.size || instructions.subList(0, body.size) != body) return@mapNotNull null
@@ -107,9 +108,21 @@ internal object ModernFinallyRecognizer {
                 instructionRanges = listOf(block.startInstructionIndex..<block.startInstructionIndex + body.size),
             )
         }
+        val terminalMatches = if (allowTerminalNormalCopies) {
+            terminalProtectedReturnCopies(graph, protectedBlocks, body, facts).map { (block, range) ->
+                FinallyBodyMatch(
+                    blocks = setOf(block),
+                    continuation = null,
+                    instructionRanges = listOf(range),
+                )
+            }
+        } else {
+            emptyList()
+        }
+        val matches = boundaryMatches + terminalMatches
         if (matches.isEmpty()) return null
 
-        val continuationCandidates = matches.mapNotNullTo(linkedSetOf()) { it.continuation }
+        val continuationCandidates = boundaryMatches.mapNotNullTo(linkedSetOf()) { it.continuation }
         if (continuationCandidates.size > 1) return null
 
         val handlerBodyStart = handlerBlock.startInstructionIndex + 1
@@ -334,9 +347,11 @@ internal object ModernFinallyRecognizer {
             bodyEntry = handlerEntry
         }
         val reachable = collectAcyclicNormalRegion(bodyEntry, facts) ?: return reject("handler-body-cyclic")
-        val rethrowBlocks = reachable.filter { block -> isCanonicalRethrowBlock(graph, block, store.slot) }
-        if (rethrowBlocks.size != 1) return reject("rethrow-count=${rethrowBlocks.size}")
-        val rethrow = rethrowBlocks.single()
+        val rethrowCandidates = reachable.mapNotNull { block ->
+            canonicalRethrowPrefixSize(graph, block, store.slot)?.let { prefixSize -> block to prefixSize }
+        }
+        if (rethrowCandidates.size != 1) return reject("rethrow-count=${rethrowCandidates.size}")
+        val (rethrow, rethrowPrefixSize) = rethrowCandidates.single()
 
         val bodyBlocks = collectUntil(bodyEntry, rethrow, facts)
         if (bodyBlocks.isEmpty() || rethrow in bodyBlocks) return reject("empty-or-overlapping-body")
@@ -370,6 +385,7 @@ internal object ModernFinallyRecognizer {
                 handlerEntryInstructionOffset = handlerEntryInstructionOffset,
                 normalEntry = target,
                 facts = facts,
+                handlerExitInstructionPrefixLength = rethrowPrefixSize,
                 allowEquivalentTerminalReturnTargets = allowTerminalAndGuardElidedNormalCopies,
             )?.let { target to it }
         }
@@ -381,6 +397,7 @@ internal object ModernFinallyRecognizer {
                 bodyBlocks = bodyBlocks,
                 handlerExit = rethrow,
                 handlerEntryInstructionOffset = handlerEntryInstructionOffset,
+                handlerExitInstructionPrefixLength = rethrowPrefixSize,
                 normalEntries = unmatchedTargets,
                 facts = facts,
             )
@@ -405,10 +422,16 @@ internal object ModernFinallyRecognizer {
             .let { blocks ->
                 val list = blocks.toList()
                 val first = list.first().startInstructionIndex + handlerEntryInstructionOffset
-                val last = list.last().endInstructionIndexExclusive - 1
-                val instructionCount = list.sumOf { it.endInstructionIndexExclusive - it.startInstructionIndex } - handlerEntryInstructionOffset
-                if ((first..last).count() != instructionCount) return reject("non-contiguous-handler-body")
-                first..last
+                val rethrowBlock = graph.block(rethrow)
+                val lastExclusive = if (rethrowPrefixSize != 0) {
+                    rethrowBlock.startInstructionIndex + rethrowPrefixSize
+                } else {
+                    list.last().endInstructionIndexExclusive
+                }
+                val instructionCount = list.sumOf { it.endInstructionIndexExclusive - it.startInstructionIndex } -
+                    handlerEntryInstructionOffset + rethrowPrefixSize
+                if (lastExclusive - first != instructionCount) return reject("non-contiguous-handler-body")
+                first until lastExclusive
             }
 
         return ModernFinallyShape(
@@ -436,6 +459,7 @@ internal object ModernFinallyRecognizer {
         bodyBlocks: Set<BasicBlockId>,
         handlerExit: BasicBlockId,
         handlerEntryInstructionOffset: Int,
+        handlerExitInstructionPrefixLength: Int,
         normalEntries: Set<BasicBlockId>,
         facts: ControlFlowFacts,
     ): List<FinallyBodyMatch> {
@@ -462,6 +486,7 @@ internal object ModernFinallyRecognizer {
                 handlerEntryInstructionOffset = 0,
                 normalEntry = normalEntry,
                 facts = facts,
+                handlerExitInstructionPrefixLength = handlerExitInstructionPrefixLength,
             )
         }
     }

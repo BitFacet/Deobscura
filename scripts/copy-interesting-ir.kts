@@ -5,9 +5,35 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 val interestingIr = listOf(
-    "class/Pcb3P7vsWq.ir",
-    "class/aolGYdXBmn.ir",
-    "com/wurmonline/client/BSVgLrw59Z.ir",
+    "org/apache/commons/io/input/ReadAheadInputStream.ir",
+    "org/fit/cssbox/layout/ContentImage.ir",
+    "org/cyberneko/html/SecuritySupport.ir",
+
+    "class/GXB3BZNuK.ir",
+    "class/Lf7dbzysqZ.ir",
+    "org/lwjgl/system/APIUtil.ir",
+
+    "org/apache/http/impl/client/DecompressingHttpClient.ir",
+    "org/apache/commons/io/input/Tailer.ir",
+
+    "org/cyberneko/html/ObjectFactory.ir",
+    "org/apache/http/conn/util/PublicSuffixMatcherLoader.ir",
+    "org/apache/http/impl/execchain/ConnectionHolder.ir",
+
+    "org/apache/http/impl/conn/ManagedClientConnectionImpl.ir",
+    "org/apache/http/impl/conn/SingleClientConnManager.ir",
+
+    "org/apache/commons/io/FileUtils.ir",
+
+    "org/apache/xerces/impl/XMLDocumentScannerImpl\$DTDDispatcher.ir",
+    "org/apache/xerces/parsers/SecureProcessingConfiguration.ir",
+    "org/apache/xerces/xinclude/XIncludeHandler.ir",
+
+    "org/apache/xml/serialize/DOMSerializerImpl.ir",
+
+    "org/apache/html/dom/ObjectFactory.ir",
+    "org/apache/xerces/dom/ObjectFactory.ir",
+    "org/apache/xerces/impl/dv/ObjectFactory.ir",
 )
 
 fun findProjectRoot(start: Path): Path {

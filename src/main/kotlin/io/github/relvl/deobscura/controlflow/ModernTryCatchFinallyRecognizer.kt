@@ -48,6 +48,7 @@ internal class ModernTryCatchFinallyRecognizer(
             handlerEntry = handlerEntry,
             protectedBlocks = familyProtectedBlocks,
             facts = facts,
+            allowTerminalNormalCopies = true,
         ) ?: ModernFinallyRecognizer.analyzeBranchingFinallyShape(
             graph = graph,
             handlerEntry = handlerEntry,
@@ -57,7 +58,7 @@ internal class ModernTryCatchFinallyRecognizer(
             allowTerminalAndGuardElidedNormalCopies = true,
             excludeExceptionalCleanupFromNormalBoundaries = true,
         ) ?: return reject("finally-shape:${finallyShapeTrace.lastOrNull() ?: "unknown"}")
-        val continuation = finallyShape.continuation ?: return reject("finally-continuation")
+        val continuation = finallyShape.continuation
 
         val finallyCopyBlocks = finallyShape.normalCopies.flatMapTo(linkedSetOf()) { it.blocks }
         val familyBuild = buildFinallyFamilyTopology(
@@ -79,7 +80,7 @@ internal class ModernTryCatchFinallyRecognizer(
         val sourceScope = family.typedTopology.scopes.singleOrNull() ?: return reject("typed-scope-count=${family.typedTopology.scopes.size}")
         val sourceTryBlocks = family.mixedGroups.flatMapTo(linkedSetOf()) { candidate ->
             extendExceptionProtectedScopeWithTerminalTransfers(candidate.protectedBlocks, facts)
-        } - finallyShape.handlerBlocks
+        } - finallyShape.handlerBlocks - finallyCopyBlocks
         val typedEntries = sourceScope.handlersByEntry.keys
         val typedScope = typedCatchRecognizer.analyze(
             scope = sourceScope.copy(
