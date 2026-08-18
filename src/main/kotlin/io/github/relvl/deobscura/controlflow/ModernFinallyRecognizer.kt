@@ -20,6 +20,7 @@ internal object ModernFinallyRecognizer {
     ): StructuredRegion.TryFinally? =
         recognizeLinearCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts)
             ?: recognizeSplitLinearCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts)
+            ?: recognizeStackPreservedCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts)
             ?: recognizeBranchingCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts)
 
     /**
@@ -159,6 +160,67 @@ internal object ModernFinallyRecognizer {
         )
     }
 
+
+    /**
+     * Handles catch-all cleanup that keeps the implicit handler exception on the operand stack:
+     * `BODY; athrow`. The same BODY must occur verbatim on a normal exit, which proves that the
+     * instructions before `athrow` are cleanup rather than an ordinary catch body.
+     */
+    private fun recognizeStackPreservedCanonicalFinally(
+        graph: ControlFlowGraph,
+        topology: ExceptionGroupTopology,
+        header: BasicBlockId,
+        protectedBlocks: Set<BasicBlockId>,
+        groupedHandlers: Map<BasicBlockId?, List<RawExceptionHandler>>,
+        facts: ControlFlowFacts,
+    ): StructuredRegion.TryFinally? {
+        val group = topology.group
+        if (group.handlers.size != 1 || group.handlers.single().catchType != null) return null
+        if (groupedHandlers.size != 1) return null
+        if (hasExternalProtectedEntry(header, protectedBlocks, facts)) return null
+
+        val handlerEntry = groupedHandlers.keys.single() ?: return null
+        val handlerBlock = graph.block(handlerEntry)
+        val handlerInstructions = graph.instructions(handlerBlock)
+        if (handlerInstructions.size < 2 || handlerInstructions.last() !is RawThrowInstruction) return null
+
+        val body = handlerInstructions.dropLast(1)
+        if (body.isEmpty() || body.any(::isControlTransfer)) return null
+        if (facts.outgoing[handlerEntry].orEmpty().isNotEmpty()) return null
+
+        val boundaryMatches = normalBoundaryTargets(protectedBlocks, setOf(handlerEntry), facts).mapNotNull { target ->
+            val block = graph.block(target)
+            val instructions = graph.instructions(block)
+            if (instructions.size < body.size || instructions.subList(0, body.size) != body) return@mapNotNull null
+            target to (block.startInstructionIndex..<block.startInstructionIndex + body.size)
+        }
+        val terminalMatches = terminalProtectedReturnCopies(graph, protectedBlocks, body, facts)
+        val matches = boundaryMatches + terminalMatches
+        if (matches.isEmpty()) return null
+
+        val continuationCandidates = boundaryMatches.mapNotNullTo(linkedSetOf()) { (target, _) ->
+            facts.outgoing[target].orEmpty().map { it.to }.distinct().singleOrNull()
+        }
+        if (continuationCandidates.size > 1) return null
+
+        val bodyStart = handlerBlock.startInstructionIndex
+        return StructuredRegion.TryFinally(
+            header = header,
+            tryBlocks = protectedBlocks,
+            handlerEntry = handlerEntry,
+            handlerBlocks = setOf(handlerEntry),
+            finallyBodyInstructionRanges = listOf(bodyStart..(bodyStart + body.size - 1)),
+            normalCopyInstructionIndices = matches.map { it.second },
+            normalCopyBlocks = matches.mapTo(linkedSetOf()) { it.first },
+            continuation = continuationCandidates.singleOrNull(),
+            protectedStartInstructionIndex = group.envelope.start,
+            protectedEndInstructionIndexExclusive = group.envelope.endExclusive,
+            protectedRanges = group.segments.map { segment ->
+                StructuredProtectedRange(segment.range.start, segment.range.endExclusive)
+            },
+        )
+    }
+
     /**
      * Second safe finally slice: a canonical catch-all whose body is a small acyclic CFG ending
      * at `aload ex; athrow`, with an isomorphic copy on a normal exit. Branch targets may differ,
@@ -251,6 +313,26 @@ internal object ModernFinallyRecognizer {
             protectedEndInstructionIndexExclusive = group.envelope.endExclusive,
             protectedRanges = group.segments.map { segment -> StructuredProtectedRange(segment.range.start, segment.range.endExclusive) },
         )
+    }
+
+    /**
+     * Finds normal finally copies emitted as a suffix of a protected block immediately before a
+     * return. Such copies have no CFG boundary target: the physical exception range includes the
+     * cleanup and the block terminates locally.
+     */
+    private fun terminalProtectedReturnCopies(
+        graph: ControlFlowGraph,
+        protectedBlocks: Set<BasicBlockId>,
+        body: List<RawInstruction>,
+        facts: ControlFlowFacts,
+    ): List<Pair<BasicBlockId, IntRange>> = protectedBlocks.mapNotNull { blockId ->
+        if (facts.outgoing[blockId].orEmpty().any { it.to !in protectedBlocks }) return@mapNotNull null
+        val block = graph.block(blockId)
+        val instructions = graph.instructions(block)
+        if (instructions.size <= body.size || instructions.last() !is RawReturnInstruction) return@mapNotNull null
+        val bodyStart = instructions.size - body.size - 1
+        if (instructions.subList(bodyStart, instructions.lastIndex) != body) return@mapNotNull null
+        blockId to (block.startInstructionIndex + bodyStart..<block.endInstructionIndexExclusive - 1)
     }
 
     private fun isControlTransfer(instruction: RawInstruction): Boolean =

@@ -2960,6 +2960,172 @@ class StructuredControlFlowAnalyzerTest {
         BasicBlock(BasicBlockId(index), index, index + 1, emptyList(), emptyList())
     }
 
+
+    @Test
+    fun `recognizes synchronized cleanup with exception kept on operand stack`() {
+        val enterBlock = BasicBlockId(0)
+        val bodyBlock = BasicBlockId(1)
+        val returnBlock = BasicBlockId(2)
+        val handlerBlock = BasicBlockId(3)
+        val edges = listOf(
+            edge(enterBlock, bodyBlock, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(bodyBlock, returnBlock, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(bodyBlock, handlerBlock, null),
+        )
+        val instructions = listOf(
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorenter")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawThrowInstruction(JvmOpcode("athrow")),
+        )
+        val blocks = listOf(
+            BasicBlock(enterBlock, 0, 2, emptyList(), emptyList()),
+            BasicBlock(bodyBlock, 2, 5, emptyList(), emptyList()),
+            BasicBlock(returnBlock, 5, 6, emptyList(), emptyList()),
+            BasicBlock(handlerBlock, 6, 9, emptyList(), emptyList()),
+        )
+        val labels = List(10) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null, null, null, instructions, labels,
+                listOf(exceptionHandler(2, 5, 6, null)),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            enterBlock,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(blocks.mapTo(linkedSetOf()) { it.id }, edges, enterBlock),
+            ExpressionAnalysis(emptyMap(), listOf(ExpressionStatement.Throw(8, ValueId(0)))),
+        )
+
+        val region = assertIs<StructuredRegion.Synchronized>(result.regions.single())
+        assertEquals(setOf(bodyBlock), region.bodyBlocks)
+        assertEquals(handlerBlock, region.handlerEntry)
+        assertEquals(setOf(handlerBlock), region.handlerBlocks)
+        assertEquals(2, region.monitorSlot)
+        assertEquals(1, region.monitorEnterInstructionIndex)
+        assertEquals(listOf(4), region.normalMonitorExitInstructionIndices)
+        assertEquals(7, region.handlerMonitorExitInstructionIndex)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    @Test
+    fun `recognizes finally with exception kept on operand stack`() {
+        val tryBlock = BasicBlockId(0)
+        val normalCopy = BasicBlockId(1)
+        val handlerBlock = BasicBlockId(2)
+        val edges = listOf(
+            edge(tryBlock, normalCopy, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(tryBlock, handlerBlock, null),
+        )
+        val instructions = listOf(
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawThrowInstruction(JvmOpcode("athrow")),
+        )
+        val blocks = listOf(
+            BasicBlock(tryBlock, 0, 1, emptyList(), emptyList()),
+            BasicBlock(normalCopy, 1, 3, emptyList(), emptyList()),
+            BasicBlock(handlerBlock, 3, 5, emptyList(), emptyList()),
+        )
+        val labels = List(6) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null, null, null, instructions, labels,
+                listOf(exceptionHandler(0, 1, 3, null)),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            tryBlock,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(blocks.mapTo(linkedSetOf()) { it.id }, edges, tryBlock),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(2, null),
+                    ExpressionStatement.Throw(4, ValueId(0)),
+                ),
+            ),
+        )
+
+        val region = assertIs<StructuredRegion.TryFinally>(result.regions.single())
+        assertEquals(setOf(tryBlock), region.tryBlocks)
+        assertEquals(handlerBlock, region.handlerEntry)
+        assertEquals(setOf(handlerBlock), region.handlerBlocks)
+        assertEquals(listOf(3..3), region.finallyBodyInstructionRanges)
+        assertEquals(listOf(1..1), region.normalCopyInstructionIndices)
+        assertEquals(setOf(normalCopy), region.normalCopyBlocks)
+        assertEquals(null, region.continuation)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    @Test
+    fun `recognizes stack preserved finally copied before protected terminal return`() {
+        val tryBlock = BasicBlockId(0)
+        val handlerBlock = BasicBlockId(1)
+        val edges = listOf(
+            exceptionEdge(tryBlock, handlerBlock, null),
+        )
+        val instructions = listOf(
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawThrowInstruction(JvmOpcode("athrow")),
+        )
+        val blocks = listOf(
+            BasicBlock(tryBlock, 0, 4, emptyList(), emptyList()),
+            BasicBlock(handlerBlock, 4, 7, emptyList(), emptyList()),
+        )
+        val labels = List(8) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null, null, null, instructions, labels,
+                listOf(exceptionHandler(0, 4, 4, null)),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            tryBlock,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(blocks.mapTo(linkedSetOf()) { it.id }, edges, tryBlock),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(3, null),
+                    ExpressionStatement.Throw(6, ValueId(0)),
+                ),
+            ),
+        )
+
+        val region = assertIs<StructuredRegion.TryFinally>(result.regions.single())
+        assertEquals(setOf(tryBlock), region.tryBlocks)
+        assertEquals(handlerBlock, region.handlerEntry)
+        assertEquals(setOf(handlerBlock), region.handlerBlocks)
+        assertEquals(listOf(4..5), region.finallyBodyInstructionRanges)
+        assertEquals(listOf(1..2), region.normalCopyInstructionIndices)
+        assertEquals(setOf(tryBlock), region.normalCopyBlocks)
+        assertEquals(null, region.continuation)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
     private fun graph(blocks: List<BasicBlock>, edges: List<ControlFlowEdge>) = ControlFlowGraph(
         RawCode(null, null, null, List(blocks.size) { RawNopInstruction(JvmOpcode("nop")) }, emptyList(), emptyList(), emptyList()),
         blocks,

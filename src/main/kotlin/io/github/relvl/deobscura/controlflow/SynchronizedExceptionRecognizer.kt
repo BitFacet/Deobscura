@@ -36,19 +36,11 @@ internal object SynchronizedExceptionRecognizer {
 
         val handlerEntry = groupedHandlers.keys.single() ?: return null
         val handlerStart = graph.block(handlerEntry).startInstructionIndex
-        val exceptionStore = instructions.getOrNull(handlerStart) as? RawLocalInstruction ?: return null
-        val handlerMonitorLoad = instructions.getOrNull(handlerStart + 1) as? RawLocalInstruction ?: return null
-        val handlerMonitorExit = instructions.getOrNull(handlerStart + 2) as? RawMonitorInstruction ?: return null
-        val exceptionReload = instructions.getOrNull(handlerStart + 3) as? RawLocalInstruction ?: return null
-        if (instructions.getOrNull(handlerStart + 4) !is RawThrowInstruction) return null
-        if (exceptionStore.operation != LocalOperation.STORE || exceptionStore.type != JvmComputationalType.REFERENCE) return null
-        if (handlerMonitorLoad.operation != LocalOperation.LOAD || handlerMonitorLoad.slot != monitorSlot) return null
-        if (handlerMonitorExit.opcode.mnemonic != "monitorexit") return null
-        if (exceptionReload.operation != LocalOperation.LOAD || exceptionReload.slot != exceptionStore.slot) return null
+        val handlerShape = recognizeHandlerShape(instructions, handlerStart, monitorSlot) ?: return null
 
         val normalExitIndices = mutableListOf<Int>()
         for (index in start until group.envelope.endExclusive) {
-            if (index == handlerStart + 2) continue
+            if (index == handlerShape.monitorExitInstructionIndex) continue
             val exit = instructions[index] as? RawMonitorInstruction ?: continue
             if (exit.opcode.mnemonic != "monitorexit") return null
             val load = instructions.getOrNull(index - 1) as? RawLocalInstruction ?: return null
@@ -57,7 +49,7 @@ internal object SynchronizedExceptionRecognizer {
         }
         if (normalExitIndices.isEmpty()) return null
 
-        val handlerInstructionIndices = handlerStart..(handlerStart + 4)
+        val handlerInstructionIndices = handlerStart..handlerShape.throwInstructionIndex
         val handlerBlocks = handlerInstructionIndices.mapNotNullTo(linkedSetOf()) { index ->
             facts.instructionToBlock.getOrNull(index)
         }
@@ -80,7 +72,7 @@ internal object SynchronizedExceptionRecognizer {
                     candidate.group.handlers.size == 1 &&
                     candidate.group.handlers.single().catchType == null &&
                     candidate.group.envelope.start == handlerStart &&
-                    candidate.group.envelope.endExclusive == handlerStart + 3 &&
+                    candidate.group.envelope.endExclusive == handlerShape.monitorExitInstructionIndex + 1 &&
                     candidate.handlerEntries == setOf(handlerEntry)
         }
         if (cleanupCompanions.size > 1) return null
@@ -99,7 +91,7 @@ internal object SynchronizedExceptionRecognizer {
             monitorSlot = monitorSlot,
             monitorEnterInstructionIndex = monitorEnterInstructionIndex,
             normalMonitorExitInstructionIndices = normalExitIndices,
-            handlerMonitorExitInstructionIndex = handlerStart + 2,
+            handlerMonitorExitInstructionIndex = handlerShape.monitorExitInstructionIndex,
             protectedStartInstructionIndex = group.envelope.start,
             protectedEndInstructionIndexExclusive = group.envelope.endExclusive,
             protectedRanges = group.segments.map { segment ->
@@ -113,6 +105,35 @@ internal object SynchronizedExceptionRecognizer {
                 ExceptionRegionKey(companion.group.envelope.start, companion.group.envelope.endExclusive)
             },
         )
+    }
+
+
+    private fun recognizeHandlerShape(
+        instructions: List<RawInstruction>,
+        handlerStart: Int,
+        monitorSlot: Int,
+    ): MonitorCleanupHandlerShape? {
+        val first = instructions.getOrNull(handlerStart) as? RawLocalInstruction ?: return null
+
+        // Canonical javac form stores the caught Throwable, releases the monitor, then reloads it.
+        if (first.operation == LocalOperation.STORE && first.type == JvmComputationalType.REFERENCE) {
+            val monitorLoad = instructions.getOrNull(handlerStart + 1) as? RawLocalInstruction ?: return null
+            val monitorExit = instructions.getOrNull(handlerStart + 2) as? RawMonitorInstruction ?: return null
+            val exceptionReload = instructions.getOrNull(handlerStart + 3) as? RawLocalInstruction ?: return null
+            if (instructions.getOrNull(handlerStart + 4) !is RawThrowInstruction) return null
+            if (monitorLoad.operation != LocalOperation.LOAD || monitorLoad.slot != monitorSlot) return null
+            if (monitorExit.opcode.mnemonic != "monitorexit") return null
+            if (exceptionReload.operation != LocalOperation.LOAD || exceptionReload.slot != first.slot) return null
+            return MonitorCleanupHandlerShape(handlerStart + 2, handlerStart + 4)
+        }
+
+        // Some compilers leave the implicit handler Throwable below the cleanup operands on the
+        // stack, so no astore/aload pair is needed around monitorexit.
+        if (first.operation != LocalOperation.LOAD || first.slot != monitorSlot) return null
+        val monitorExit = instructions.getOrNull(handlerStart + 1) as? RawMonitorInstruction ?: return null
+        if (monitorExit.opcode.mnemonic != "monitorexit") return null
+        if (instructions.getOrNull(handlerStart + 2) !is RawThrowInstruction) return null
+        return MonitorCleanupHandlerShape(handlerStart + 1, handlerStart + 2)
     }
 
     private fun monitorSlotBeforeEnter(
@@ -168,4 +189,9 @@ internal object SynchronizedExceptionRecognizer {
 internal data class SynchronizedRecognition(
     val region: StructuredRegion.Synchronized,
     val consumedGroupKeys: Set<ExceptionRegionKey>,
+)
+
+private data class MonitorCleanupHandlerShape(
+    val monitorExitInstructionIndex: Int,
+    val throwInstructionIndex: Int,
 )

@@ -5,15 +5,10 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 val interestingIr = listOf(
-    // 651: catch-all-only, exception-store-only, boundaries=0, peers=1
-    "org/antlr/v4/runtime/atn/LexerATNSimulator.ir",
-    "org/antlr/v4/runtime/atn/ParserATNSimulator.ir",
-
-    // 363/355: catch-all-only, exception-store-only, peers=2
+    "com/jcraft/jorbis/Floor0.ir",
+    "com/bulletphysics/collision/broadphase/AxisSweep3Internal.ir",
+    "com/wurmonline/client/WurmClientBase.ir",
     "org/apache/commons/io/input/ReadAheadInputStream.ir",
-
-    // более сложная peers=3-4 форма — полезна для сравнения
-    "org/apache/commons/io/input/Tailer.ir",
 )
 
 fun findProjectRoot(start: Path): Path {
