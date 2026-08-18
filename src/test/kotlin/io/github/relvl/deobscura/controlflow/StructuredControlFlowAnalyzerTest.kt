@@ -1327,6 +1327,174 @@ class StructuredControlFlowAnalyzerTest {
     }
 
     @Test
+    fun `coalesced physical ranges retain one typed scope with sibling catches`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val continuation = BasicBlockId(3)
+        val ioCatch = BasicBlockId(4)
+        val runtimeCatch = BasicBlockId(5)
+        val edges = listOf(
+            edge(b0, b2, ControlFlowEdgeKind.CONDITIONAL),
+            edge(b0, b1, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b0, ioCatch, "java/io/IOException"),
+            exceptionEdge(b0, runtimeCatch, "java/lang/RuntimeException"),
+            edge(b2, continuation, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b2, ioCatch, "java/io/IOException"),
+            exceptionEdge(b2, runtimeCatch, "java/lang/RuntimeException"),
+            edge(ioCatch, continuation, ControlFlowEdgeKind.JUMP),
+        )
+        val graph = exceptionGraph(
+            blockCount = 6,
+            edges = edges,
+            handlers = listOf(
+                exceptionHandler(0, 1, 4, "java/io/IOException"),
+                exceptionHandler(0, 1, 5, "java/lang/RuntimeException"),
+                exceptionHandler(2, 3, 4, "java/io/IOException"),
+                exceptionHandler(2, 3, 5, "java/lang/RuntimeException"),
+            ),
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(b0, b1, b2, continuation, ioCatch, runtimeCatch), edges, b0),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(1, null),
+                    ExpressionStatement.Return(5, null),
+                ),
+            ),
+        )
+
+        val region = assertIs<StructuredRegion.TryCatch>(result.regions.single())
+        assertEquals(setOf(b0, b1, b2), region.tryBlocks)
+        assertEquals(continuation, region.continuation)
+        assertEquals(2, region.catches.size)
+        assertEquals(listOf("java/io/IOException"), region.catches.single { it.entry == ioCatch }.catchTypes)
+        assertEquals(listOf("java/lang/RuntimeException"), region.catches.single { it.entry == runtimeCatch }.catchTypes)
+        assertEquals(
+            listOf(
+                StructuredProtectedRange(0, 1),
+                StructuredProtectedRange(2, 3),
+            ),
+            region.protectedRanges,
+        )
+        assertEquals(1, result.exceptionRegionCount)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    @Test
+    fun `builds exception scope nesting and reports crossing scopes`() {
+        val outer = setOf(BasicBlockId(0), BasicBlockId(1), BasicBlockId(2), BasicBlockId(3))
+        val inner = setOf(BasicBlockId(1), BasicBlockId(2))
+        val leaf = setOf(BasicBlockId(2))
+        val sibling = setOf(BasicBlockId(4))
+
+        val laminar = buildExceptionScopeNesting(listOf(outer, inner, leaf, sibling)) { it }
+
+        assertTrue(laminar.isLaminar)
+        assertEquals(outer, laminar.parentByScope[inner])
+        assertEquals(inner, laminar.parentByScope[leaf])
+        assertEquals(listOf(inner), laminar.childrenByScope[outer])
+        assertEquals(listOf(leaf), laminar.childrenByScope[inner])
+        assertNull(laminar.parentByScope[sibling])
+
+        val crossingLeft = setOf(BasicBlockId(10), BasicBlockId(11))
+        val crossingRight = setOf(BasicBlockId(11), BasicBlockId(12))
+        val crossing = buildExceptionScopeNesting(listOf(crossingLeft, crossingRight)) { it }
+
+        assertFalse(crossing.isLaminar)
+        assertEquals(listOf(crossingLeft to crossingRight), crossing.crossingPairs)
+    }
+
+    @Test
+    fun `reconstructs nested typed catch scopes through a shared continuation`() {
+        val outerTry = BasicBlockId(0)
+        val outerCatch = BasicBlockId(1)
+        val nestedCatch = BasicBlockId(2)
+        val continuation = BasicBlockId(3)
+        val edges = listOf(
+            edge(outerTry, continuation, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(outerTry, outerCatch, "java/io/IOException"),
+            edge(outerCatch, continuation, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(outerCatch, nestedCatch, "java/lang/RuntimeException"),
+            edge(nestedCatch, continuation, ControlFlowEdgeKind.JUMP),
+        )
+        val graph = exceptionGraph(
+            blockCount = 4,
+            edges = edges,
+            handlers = listOf(
+                exceptionHandler(0, 1, 1, "java/io/IOException"),
+                exceptionHandler(1, 2, 2, "java/lang/RuntimeException"),
+            ),
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(outerTry, outerCatch, nestedCatch, continuation), edges, outerTry),
+            ExpressionAnalysis(emptyMap(), listOf(ExpressionStatement.Return(3, null))),
+        )
+
+        val outer = result.regions.filterIsInstance<StructuredRegion.TryCatch>()
+            .single { it.header == outerTry }
+        assertEquals(setOf(outerTry), outer.tryBlocks)
+        assertEquals(setOf(outerCatch, nestedCatch), outer.catches.single().blocks)
+        assertEquals(continuation, outer.continuation)
+
+        val nested = result.regions.filterIsInstance<StructuredRegion.TryCatch>()
+            .single { it.header == outerCatch }
+        assertEquals(setOf(outerCatch), nested.tryBlocks)
+        assertEquals(setOf(nestedCatch), nested.catches.single().blocks)
+        assertEquals(continuation, nested.continuation)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    @Test
+    fun `closes catch ownership over recursively nested exception regions`() {
+        val outerTry = BasicBlockId(0)
+        val outerCatch = BasicBlockId(1)
+        val nestedCatch = BasicBlockId(2)
+        val deepCatch = BasicBlockId(3)
+        val continuation = BasicBlockId(4)
+        val edges = listOf(
+            edge(outerTry, continuation, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(outerTry, outerCatch, "java/io/IOException"),
+            edge(outerCatch, continuation, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(outerCatch, nestedCatch, "java/lang/RuntimeException"),
+            edge(nestedCatch, continuation, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(nestedCatch, deepCatch, "java/lang/IllegalStateException"),
+            edge(deepCatch, continuation, ControlFlowEdgeKind.JUMP),
+        )
+        val graph = exceptionGraph(
+            blockCount = 5,
+            edges = edges,
+            handlers = listOf(
+                exceptionHandler(0, 1, 1, "java/io/IOException"),
+                exceptionHandler(1, 2, 2, "java/lang/RuntimeException"),
+                exceptionHandler(2, 3, 3, "java/lang/IllegalStateException"),
+            ),
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(outerTry, outerCatch, nestedCatch, deepCatch, continuation), edges, outerTry),
+            ExpressionAnalysis(emptyMap(), listOf(ExpressionStatement.Return(4, null))),
+        )
+
+        val regions = result.regions.filterIsInstance<StructuredRegion.TryCatch>()
+        val outer = regions.single { it.header == outerTry }
+        assertEquals(setOf(outerCatch, nestedCatch, deepCatch), outer.catches.single().blocks)
+        assertEquals(continuation, outer.continuation)
+
+        val nested = regions.single { it.header == outerCatch }
+        assertEquals(setOf(nestedCatch, deepCatch), nested.catches.single().blocks)
+        assertEquals(continuation, nested.continuation)
+
+        val deep = regions.single { it.header == nestedCatch }
+        assertEquals(setOf(deepCatch), deep.catches.single().blocks)
+        assertEquals(continuation, deep.continuation)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    @Test
     fun `treats nested catch body as owned by enclosing catch`() {
         val b0 = BasicBlockId(0)
         val b1 = BasicBlockId(1)
@@ -1359,6 +1527,193 @@ class StructuredControlFlowAnalyzerTest {
         val outer = result.regions.filterIsInstance<StructuredRegion.TryCatch>()
             .single { it.header == b0 }
         assertEquals(setOf(b2, b3, b4, b5), outer.catches.single().blocks)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    @Test
+    fun `handler peer entry allowance is local to one typed catch scope`() {
+        val catchEntry = BasicBlockId(10)
+        val siblingHandler = BasicBlockId(11)
+        val unrelatedHandler = BasicBlockId(12)
+        val catchInterior = BasicBlockId(13)
+
+        assertTrue(
+            isHandlerPeerEntryTransfer(
+                entry = catchEntry,
+                target = catchEntry,
+                source = siblingHandler,
+                scopeHandlerEntries = setOf(catchEntry, siblingHandler),
+            ),
+        )
+        assertFalse(
+            isHandlerPeerEntryTransfer(
+                entry = catchEntry,
+                target = catchEntry,
+                source = unrelatedHandler,
+                scopeHandlerEntries = setOf(catchEntry, siblingHandler),
+            ),
+        )
+        assertFalse(
+            isHandlerPeerEntryTransfer(
+                entry = catchEntry,
+                target = catchInterior,
+                source = siblingHandler,
+                scopeHandlerEntries = setOf(catchEntry, siblingHandler),
+            ),
+        )
+    }
+
+    @Test
+    fun `rejects unrelated external entry into ordinary catch body`() {
+        val entry = BasicBlockId(0)
+        val tryBlock = BasicBlockId(1)
+        val continuation = BasicBlockId(2)
+        val catchEntry = BasicBlockId(3)
+        val catchBody = BasicBlockId(4)
+        val external = BasicBlockId(5)
+        val edges = listOf(
+            edge(entry, tryBlock, ControlFlowEdgeKind.CONDITIONAL),
+            edge(entry, external, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(tryBlock, continuation, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(tryBlock, catchEntry, "java/io/IOException"),
+            edge(catchEntry, catchBody, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(catchBody, continuation, ControlFlowEdgeKind.JUMP),
+            edge(external, catchBody, ControlFlowEdgeKind.JUMP),
+        )
+        val graph = exceptionGraph(
+            blockCount = 6,
+            edges = edges,
+            handlers = listOf(exceptionHandler(1, 2, 3, "java/io/IOException")),
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(entry, tryBlock, continuation, catchEntry, catchBody, external), edges, entry),
+            ExpressionAnalysis(emptyMap(), listOf(ExpressionStatement.Return(1, null))),
+        )
+
+        assertTrue(result.regions.none { it is StructuredRegion.TryCatch && it.header == tryBlock })
+        val diagnostic = result.unstructured.single { it.kind == UnstructuredControlFlowKind.EXCEPTION }
+        assertEquals(UnstructuredControlFlowReason.EXCEPTION_HANDLER_HAS_EXTERNAL_ENTRY, diagnostic.reason)
+    }
+
+    @Test
+    fun `recognizes legacy finally family with recursive exception ownership`() {
+        val anchor = BasicBlockId(0)
+        val nestedTry = BasicBlockId(1)
+        val callFinally = BasicBlockId(2)
+        val normalFinally = BasicBlockId(3)
+        val typedCatch = BasicBlockId(4)
+        val catchAll = BasicBlockId(5)
+        val exceptionalFinally = BasicBlockId(6)
+        val rethrow = BasicBlockId(7)
+        val protectedBridge = BasicBlockId(8)
+        val continuation = BasicBlockId(9)
+        val copyCatch = BasicBlockId(10)
+        val nestedCopyCatch = BasicBlockId(11)
+        val edges = listOf(
+            edge(anchor, nestedTry, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(anchor, catchAll, null),
+            edge(nestedTry, callFinally, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(nestedTry, typedCatch, "java/lang/Exception"),
+            exceptionEdge(nestedTry, catchAll, null),
+            edge(typedCatch, callFinally, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(typedCatch, catchAll, null),
+            edge(callFinally, normalFinally, ControlFlowEdgeKind.JUMP),
+            edge(normalFinally, protectedBridge, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(normalFinally, copyCatch, "java/lang/Exception"),
+            edge(copyCatch, protectedBridge, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(copyCatch, nestedCopyCatch, "java/lang/RuntimeException"),
+            edge(nestedCopyCatch, protectedBridge, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(protectedBridge, catchAll, null),
+            edge(protectedBridge, continuation, ControlFlowEdgeKind.JUMP),
+            edge(catchAll, exceptionalFinally, ControlFlowEdgeKind.JUMP),
+            edge(exceptionalFinally, rethrow, ControlFlowEdgeKind.FALLTHROUGH),
+        )
+        val instructions = listOf(
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawConstantInstruction(JvmOpcode("aconst_null"), JvmComputationalType.REFERENCE, ConstantDescs.NULL),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(4)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(13)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 2),
+            RawConstantInstruction(JvmOpcode("aconst_null"), JvmComputationalType.REFERENCE, ConstantDescs.NULL),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(10)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawThrowInstruction(JvmOpcode("athrow")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(14)),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(13)),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(13)),
+        )
+        val blocks = listOf(
+            BasicBlock(anchor, 0, 1, emptyList(), emptyList()),
+            BasicBlock(nestedTry, 1, 2, emptyList(), emptyList()),
+            BasicBlock(callFinally, 2, 4, emptyList(), emptyList()),
+            BasicBlock(normalFinally, 4, 6, emptyList(), emptyList()),
+            BasicBlock(typedCatch, 6, 7, emptyList(), emptyList()),
+            BasicBlock(catchAll, 7, 10, emptyList(), emptyList()),
+            BasicBlock(exceptionalFinally, 10, 11, emptyList(), emptyList()),
+            BasicBlock(rethrow, 11, 13, emptyList(), emptyList()),
+            BasicBlock(protectedBridge, 13, 14, emptyList(), emptyList()),
+            BasicBlock(continuation, 14, 15, emptyList(), emptyList()),
+            BasicBlock(copyCatch, 15, 16, emptyList(), emptyList()),
+            BasicBlock(nestedCopyCatch, 16, 17, emptyList(), emptyList()),
+        )
+        val labels = List(18) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                instructions,
+                labels,
+                listOf(
+                    exceptionHandler(0, 1, 7, null),
+                    exceptionHandler(1, 2, 6, "java/lang/Exception"),
+                    exceptionHandler(1, 2, 7, null),
+                    exceptionHandler(6, 7, 7, null),
+                    exceptionHandler(13, 14, 7, null),
+                    exceptionHandler(4, 6, 15, "java/lang/Exception"),
+                    exceptionHandler(15, 16, 16, "java/lang/RuntimeException"),
+                ),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            anchor,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(blocks.mapTo(linkedSetOf()) { it.id }, edges, anchor),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Throw(12, ValueId(0)),
+                    ExpressionStatement.Return(14, null),
+                ),
+            ),
+            legacySubroutineNormalized = true,
+        )
+
+        val outer = result.regions.filterIsInstance<StructuredRegion.TryFinally>().single()
+        assertEquals(anchor, outer.header)
+        assertEquals(setOf(anchor, nestedTry, typedCatch, protectedBridge), outer.tryBlocks)
+        assertEquals(setOf(normalFinally), outer.normalCopyBlocks)
+        assertEquals(continuation, outer.continuation)
+        val nested = result.regions.filterIsInstance<StructuredRegion.TryCatch>().single { it.header == nestedTry }
+        assertEquals(nestedTry, nested.header)
+        assertEquals(setOf(nestedTry), nested.tryBlocks)
+        assertEquals(setOf(typedCatch), nested.catches.single().blocks)
+        assertEquals(callFinally, nested.continuation)
+        val copyCleanup = result.regions.filterIsInstance<StructuredRegion.TryCatch>().single { it.header == normalFinally }
+        assertEquals(setOf(copyCatch, nestedCopyCatch), copyCleanup.catches.single().blocks)
+        assertEquals(protectedBridge, copyCleanup.continuation)
+        val nestedCopyCleanup = result.regions.filterIsInstance<StructuredRegion.TryCatch>().single { it.header == copyCatch }
+        assertEquals(setOf(nestedCopyCatch), nestedCopyCleanup.catches.single().blocks)
+        assertEquals(protectedBridge, nestedCopyCleanup.continuation)
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 

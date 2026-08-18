@@ -9,6 +9,13 @@ import io.github.relvl.deobscura.normalize.LegacySubroutineProvenance
 import io.github.relvl.deobscura.normalize.LegacySyntheticInstructionKind
 import java.util.*
 
+internal fun isHandlerPeerEntryTransfer(
+    entry: BasicBlockId,
+    target: BasicBlockId,
+    source: BasicBlockId,
+    scopeHandlerEntries: Set<BasicBlockId>,
+): Boolean = target == entry && source in scopeHandlerEntries
+
 /**
  * Reconstructs conservative source-level `try/catch` regions directly from exception-table ranges.
  *
@@ -31,27 +38,9 @@ internal class StructuredExceptionRecognizer {
     ): ExceptionRecognition {
         if (graph.code.exceptionHandlers.isEmpty()) return ExceptionRecognition(emptyList(), emptyMap(), 0)
 
-        val labelPositions = graph.code.labels.associate { it.id to it.instructionIndex }
-        val segments = graph.code.exceptionHandlers
-            .groupBy { handler ->
-                ProtectedRange(
-                    start = labelPosition(labelPositions, handler.tryStart),
-                    endExclusive = labelPosition(labelPositions, handler.tryEnd),
-                )
-            }
-            .entries
-            .map { (range, handlers) -> ExceptionTableSegment(range, handlers) }
-            .sortedWith(compareBy<ExceptionTableSegment> { it.range.start }.thenBy { it.range.endExclusive })
-        val groups = coalesceSegments(segments, labelPositions, facts)
-        val groupTopologies = groups.map { group ->
-            ExceptionGroupTopology(
-                group = group,
-                protectedBlocks = protectedBlocks(group.envelope, graph, facts),
-                handlerEntries = group.handlers.mapNotNullTo(linkedSetOf()) { handler ->
-                    facts.instructionToBlock.getOrNull(labelPosition(labelPositions, handler.handler))
-                },
-            )
-        }
+        val exceptionTopology = ExceptionTopologyBuilder.build(graph, facts)
+        val labelPositions = exceptionTopology.labelPositions
+        val groupTopologies = exceptionTopology.groups
 
         val regions = mutableListOf<StructuredRegion>()
         val rejections = linkedMapOf<ExceptionRegionKey, UnstructuredControlFlowReason>()
@@ -64,7 +53,7 @@ internal class StructuredExceptionRecognizer {
             val handlers = group.handlers
             val key = ExceptionRegionKey(range.start, range.endExclusive)
             if (key in consumedGroups) return@forEach
-            val protectedBlocks = extendWithTerminalTransfers(topology.protectedBlocks, facts)
+            val protectedBlocks = extendExceptionProtectedScopeWithTerminalTransfers(topology.protectedBlocks, facts)
             if (protectedBlocks.isEmpty()) {
                 rejections[key] = UnstructuredControlFlowReason.EXCEPTION_EMPTY_PROTECTED_REGION
                 return@forEach
@@ -77,21 +66,19 @@ internal class StructuredExceptionRecognizer {
             }
 
             val groupedHandlers = handlers.groupBy { handler ->
-                facts.instructionToBlock.getOrNull(labelPosition(labelPositions, handler.handler))
+                facts.instructionToBlock.getOrNull(exceptionLabelPosition(labelPositions, handler.handler))
             }
             if (groupedHandlers.keys.any { it == null }) {
                 rejections[key] = UnstructuredControlFlowReason.EXCEPTION_INVALID_HANDLER_ENTRY
                 return@forEach
             }
-            val handlerEntries = groupedHandlers.keys.filterNotNull().toSet()
             if (handlers.any { it.catchType == null }) {
                 val legacyTryCatchFinallyTrace = mutableListOf<String>()
                 val legacyTryCatchFinallyRecognition = if (legacySubroutineNormalized) recognizeLegacySubroutineTryCatchFinally(
                     graph = graph,
                     topology = topology,
                     header = header,
-                    allGroups = groupTopologies,
-                    labelPositions = labelPositions,
+                    exceptionTopology = exceptionTopology,
                     facts = facts,
                     provenance = legacySubroutineProvenance,
                     rejectionTrace = legacyTryCatchFinallyTrace,
@@ -154,203 +141,82 @@ internal class StructuredExceptionRecognizer {
                 }
                 return@forEach
             }
-            if (hasExternalProtectedEntry(header, protectedBlocks, facts)) {
-                rejections[key] = UnstructuredControlFlowReason.EXCEPTION_PROTECTED_REGION_HAS_EXTERNAL_ENTRY
+            val typedTopology = buildTypedCatchScopeTopologies(
+                groups = listOf(topology),
+                labelPositions = labelPositions,
+                facts = facts,
+            )
+            if (typedTopology.failure != null || typedTopology.topology?.scopes?.size != 1) {
+                rejections[key] = when (typedTopology.failure) {
+                    TypedCatchTopologyFailure.INVALID_HANDLER_ENTRY ->
+                        UnstructuredControlFlowReason.EXCEPTION_INVALID_HANDLER_ENTRY
+                    TypedCatchTopologyFailure.EMPTY_PROTECTED_SCOPE ->
+                        UnstructuredControlFlowReason.EXCEPTION_EMPTY_PROTECTED_REGION
+                    TypedCatchTopologyFailure.INVALID_PROTECTED_HEADER ->
+                        UnstructuredControlFlowReason.EXCEPTION_INVALID_PROTECTED_ENTRY
+                    TypedCatchTopologyFailure.CROSSING_SCOPES, null ->
+                        UnstructuredControlFlowReason.EXCEPTION_OVERLAPPING_HANDLER_REGIONS
+                }
                 return@forEach
             }
-
-            val continuation = selectContinuation(protectedBlocks, handlerEntries, facts)
-                ?: run {
-                    val externalTargets = normalBoundaryTargets(protectedBlocks, handlerEntries, facts)
-                    if (externalTargets.isNotEmpty()) {
-                        rejections[key] = UnstructuredControlFlowReason.EXCEPTION_NO_COMMON_CONTINUATION
-                        return@forEach
-                    }
-                    null
-                }
-
-            val collectedCatches = mutableListOf<CollectedCatch>()
-            for ((entryOrNull, entries) in groupedHandlers.entries.sortedBy { it.key?.value ?: Int.MAX_VALUE }) {
-                val entry = requireNotNull(entryOrNull)
-                val collected = collectHandlerBlocks(
-                    entry = entry,
-                    protectedBlocks = protectedBlocks,
-                    handlerEntries = handlerEntries,
-                    continuation = continuation,
-                    facts = facts,
-                    currentGroup = topology,
-                    allGroups = groupTopologies,
-                )
-                if (collected.blocks.isEmpty()) {
-                    rejections[key] = UnstructuredControlFlowReason.EXCEPTION_EMPTY_HANDLER_REGION
-                    break
-                }
-                collectedCatches += CollectedCatch(entry, entries, collected)
-            }
-            if (key in rejections) return@forEach
-
-            val inferredContinuations = collectedCatches.mapNotNullTo(linkedSetOf()) { it.collection.inferredContinuation }
-            val regionContinuation = when {
-                continuation != null && inferredContinuations.all { it == continuation } -> continuation
-                continuation != null -> {
-                    rejections[key] = UnstructuredControlFlowReason.EXCEPTION_UNSUPPORTED_HANDLER_EXIT
-                    return@forEach
-                }
-
-                inferredContinuations.size == 1 -> inferredContinuations.single()
-                inferredContinuations.isEmpty() -> inferLoopBackContinuation(
-                    header = header,
-                    catches = collectedCatches,
-                    facts = facts,
-                )
-
-                else -> {
-                    rejections[key] = UnstructuredControlFlowReason.EXCEPTION_NO_COMMON_CONTINUATION
-                    return@forEach
-                }
-            }
-
-            val catches = mutableListOf<StructuredCatch>()
-            val occupiedHandlerBlocks = linkedSetOf<BasicBlockId>()
-            for (collected in collectedCatches) {
-                val entry = collected.entry
-                val blocks = collected.collection.blocks
-                if (blocks.any { it in occupiedHandlerBlocks }) {
-                    rejections[key] = UnstructuredControlFlowReason.EXCEPTION_OVERLAPPING_HANDLER_REGIONS
-                    break
-                }
-                if (hasExternalHandlerEntry(entry, blocks, handlerEntries, facts)) {
-                    rejections[key] = UnstructuredControlFlowReason.EXCEPTION_HANDLER_HAS_EXTERNAL_ENTRY
-                    break
-                }
-                if (!handlerExitsAreSupported(blocks, regionContinuation, facts)) {
-                    rejections[key] = UnstructuredControlFlowReason.EXCEPTION_UNSUPPORTED_HANDLER_EXIT
-                    break
-                }
-                occupiedHandlerBlocks += blocks
-                catches += StructuredCatch(
-                    catchTypes = collected.entries.mapNotNull { it.catchType }.distinct(),
-                    entry = entry,
-                    blocks = blocks,
-                )
-            }
-            if (key in rejections) return@forEach
-
-            regions += StructuredRegion.TryCatch(
-                header = header,
-                tryBlocks = protectedBlocks,
-                catches = catches,
-                continuation = regionContinuation,
-                protectedStartInstructionIndex = range.start,
-                protectedEndInstructionIndexExclusive = range.endExclusive,
-                protectedRanges = group.segments.map { segment ->
-                    StructuredProtectedRange(segment.range.start, segment.range.endExclusive)
+            val typedScope = analyzeTypedCatchScope(
+                scope = requireNotNull(typedTopology.topology).scopes.single(),
+                facts = facts,
+                rejectNormalBoundaryWithoutContinuation = true,
+                allowLoopBackContinuation = true,
+                collectCatch = { entry, entries, continuation ->
+                    collectHandlerBlocks(
+                        entry = entry,
+                        protectedBlocks = protectedBlocks,
+                        handlerEntries = entries,
+                        continuation = continuation,
+                        facts = facts,
+                        currentGroup = topology,
+                        allGroups = groupTopologies,
+                    )
+                },
+                hasExternalCatchEntry = { entry, blocks, entries ->
+                    hasExternalHandlerEntry(entry, blocks, entries, facts)
+                },
+                supportsCatchExit = { blocks, continuation ->
+                    handlerExitsAreSupported(blocks, continuation, facts)
                 },
             )
-        }
-
-        return ExceptionRecognition(regions, rejections, groups.size, legacyRejectionDetails)
-    }
-
-    private fun protectedBlocks(
-        range: ProtectedRange,
-        graph: ControlFlowGraph,
-        facts: ControlFlowFacts,
-    ): Set<BasicBlockId> = graph.blocks.asSequence()
-        .filter { block ->
-            block.id in facts.blocks &&
-                    block.startInstructionIndex < range.endExclusive &&
-                    block.endInstructionIndexExclusive > range.start
-        }
-        .mapTo(linkedSetOf()) { it.id }
-
-    private fun extendWithTerminalTransfers(
-        protectedBlocks: Set<BasicBlockId>,
-        facts: ControlFlowFacts,
-    ): Set<BasicBlockId> {
-        val result = protectedBlocks.toMutableSet()
-        var changed: Boolean
-        do {
-            changed = false
-            val candidates = result.asSequence()
-                .flatMap { block -> facts.outgoing[block].orEmpty().asSequence() }
-                .map { it.to }
-                .filter { it in facts.explicitTerminalBlocks && it !in result }
-                .distinct()
-                .toList()
-            for (candidate in candidates) {
-                val incoming = facts.incoming[candidate].orEmpty()
-                if (incoming.isNotEmpty() && incoming.all { it.from in result }) {
-                    result += candidate
-                    changed = true
-                }
+            if (typedScope.failure != null) {
+                rejections[key] = typedScope.failure.toUnstructuredReason()
+                return@forEach
             }
-        } while (changed)
-        return result
-    }
-
-    private fun coalesceSegments(
-        segments: List<ExceptionTableSegment>,
-        labelPositions: Map<RawLabelId, Int>,
-        facts: ControlFlowFacts,
-    ): List<ExceptionTableGroup> {
-        if (segments.isEmpty()) return emptyList()
-
-        val result = mutableListOf<ExceptionTableGroup>()
-        var current = ExceptionTableGroup(listOf(segments.first()))
-        for (next in segments.drop(1)) {
-            if (canCoalesce(current, next, labelPositions, facts)) {
-                current = ExceptionTableGroup(current.segments + next)
-            } else {
-                result += current
-                current = ExceptionTableGroup(listOf(next))
-            }
+            val proof = requireNotNull(typedScope.proof)
+            regions += proof.toRegion()
         }
-        result += current
-        return result
+
+        return ExceptionRecognition(regions, rejections, groupTopologies.size, legacyRejectionDetails)
     }
 
-    private fun canCoalesce(
-        current: ExceptionTableGroup,
-        next: ExceptionTableSegment,
-        labelPositions: Map<RawLabelId, Int>,
+
+    private fun hasExternalEntry(
+        blocks: Set<BasicBlockId>,
         facts: ControlFlowFacts,
-    ): Boolean {
-        if (handlerSignature(current.handlers, labelPositions) != handlerSignature(next.handlers, labelPositions)) return false
-        val currentEnd = current.envelope.endExclusive
-        if (next.range.start < currentEnd) return false
-        if (next.range.start == currentEnd) return true
-
-        val gapBlocks = (currentEnd until next.range.start)
-            .map { instructionIndex -> facts.instructionToBlock.getOrNull(instructionIndex) ?: return false }
-            .toSet()
-        return gapBlocks.isNotEmpty() && gapBlocks.all { it in facts.explicitTerminalBlocks }
+        allowExternalEntry: (target: BasicBlockId, source: BasicBlockId) -> Boolean,
+    ): Boolean = blocks.any { block ->
+        facts.incoming[block].orEmpty().any { edge ->
+            edge.from !in blocks && !allowExternalEntry(block, edge.from)
+        }
     }
-
-    private fun handlerSignature(
-        handlers: List<RawExceptionHandler>,
-        labelPositions: Map<RawLabelId, Int>,
-    ): List<HandlerSignature> = handlers
-        .map { handler -> HandlerSignature(labelPosition(labelPositions, handler.handler), handler.catchType) }
-        .sortedWith(compareBy<HandlerSignature> { it.handlerInstructionIndex }.thenBy { it.catchType ?: "" })
 
     private fun hasExternalProtectedEntry(
         header: BasicBlockId,
         protectedBlocks: Set<BasicBlockId>,
         facts: ControlFlowFacts,
-    ): Boolean = protectedBlocks.any { block ->
-        facts.incoming[block].orEmpty().any { edge -> edge.from !in protectedBlocks && block != header }
-    }
+    ): Boolean = hasExternalEntry(protectedBlocks, facts) { target, _ -> target == header }
 
     private fun hasExternalHandlerEntry(
         entry: BasicBlockId,
         blocks: Set<BasicBlockId>,
         handlerEntries: Set<BasicBlockId>,
         facts: ControlFlowFacts,
-    ): Boolean = blocks.any { block ->
-        facts.incoming[block].orEmpty().any { edge ->
-            edge.from !in blocks && !(block == entry && edge.from in handlerEntries)
-        }
+    ): Boolean = hasExternalEntry(blocks, facts) { target, source ->
+        isHandlerPeerEntryTransfer(entry, target, source, handlerEntries)
     }
 
     private fun selectContinuation(
@@ -400,6 +266,260 @@ internal class StructuredExceptionRecognizer {
         .filter { target -> target !in protectedBlocks && target !in handlerEntries }
         .toCollection(linkedSetOf())
 
+    private data class TypedCatchScopeProof(
+        val header: BasicBlockId,
+        val protectedBlocks: Set<BasicBlockId>,
+        val catches: List<StructuredCatch>,
+        val continuation: BasicBlockId?,
+        val protectedRanges: List<StructuredProtectedRange>,
+    ) {
+        fun toRegion(): StructuredRegion.TryCatch = StructuredRegion.TryCatch(
+            header = header,
+            tryBlocks = protectedBlocks,
+            catches = catches,
+            continuation = continuation,
+            protectedStartInstructionIndex = protectedRanges.first().startInstructionIndex,
+            protectedEndInstructionIndexExclusive = protectedRanges.last().endInstructionIndexExclusive,
+            protectedRanges = protectedRanges,
+        )
+    }
+
+    private enum class TypedCatchScopeFailure {
+        PROTECTED_EXTERNAL_ENTRY,
+        NO_COMMON_CONTINUATION,
+        CATCH_BODY_SHAPE,
+        EMPTY_HANDLER_REGION,
+        OVERLAPPING_HANDLER_REGIONS,
+        HANDLER_EXTERNAL_ENTRY,
+        UNSUPPORTED_HANDLER_EXIT,
+        ;
+
+        fun toUnstructuredReason(): UnstructuredControlFlowReason = when (this) {
+            PROTECTED_EXTERNAL_ENTRY -> UnstructuredControlFlowReason.EXCEPTION_PROTECTED_REGION_HAS_EXTERNAL_ENTRY
+            NO_COMMON_CONTINUATION -> UnstructuredControlFlowReason.EXCEPTION_NO_COMMON_CONTINUATION
+            CATCH_BODY_SHAPE -> UnstructuredControlFlowReason.EXCEPTION_UNSUPPORTED_HANDLER_EXIT
+            EMPTY_HANDLER_REGION -> UnstructuredControlFlowReason.EXCEPTION_EMPTY_HANDLER_REGION
+            OVERLAPPING_HANDLER_REGIONS -> UnstructuredControlFlowReason.EXCEPTION_OVERLAPPING_HANDLER_REGIONS
+            HANDLER_EXTERNAL_ENTRY -> UnstructuredControlFlowReason.EXCEPTION_HANDLER_HAS_EXTERNAL_ENTRY
+            UNSUPPORTED_HANDLER_EXIT -> UnstructuredControlFlowReason.EXCEPTION_UNSUPPORTED_HANDLER_EXIT
+        }
+    }
+
+    private data class TypedCatchScopeAnalysis(
+        val proof: TypedCatchScopeProof? = null,
+        val failure: TypedCatchScopeFailure? = null,
+    )
+
+    /**
+     * Proves one source-level typed try/catch scope independently from any enclosing finally.
+     * Callers provide the low-level catch-body collector and ownership checks appropriate for their
+     * CFG representation, while continuation reconciliation, overlap checks, and source-region
+     * construction stay shared between ordinary and JSR/RET-normalized exception paths.
+     */
+
+    private data class StructuredCatchValidation(
+        val catches: List<StructuredCatch>? = null,
+        val failure: TypedCatchScopeFailure? = null,
+    )
+
+    /**
+     * Validates and materializes sibling source catches after their CFG bodies have already been
+     * collected. This proof is independent from how the bodies were discovered and is therefore
+     * shared by ordinary typed scopes and legacy try/catch/finally composition.
+     */
+    private fun validateCollectedCatches(
+        collectedCatches: List<CollectedCatch>,
+        handlerEntries: Set<BasicBlockId>,
+        continuation: BasicBlockId?,
+        hasExternalCatchEntry: (BasicBlockId, Set<BasicBlockId>, Set<BasicBlockId>) -> Boolean,
+        supportsCatchExit: (Set<BasicBlockId>, BasicBlockId?) -> Boolean,
+    ): StructuredCatchValidation {
+        val catches = mutableListOf<StructuredCatch>()
+        val occupiedHandlerBlocks = linkedSetOf<BasicBlockId>()
+        for (collected in collectedCatches) {
+            val entry = collected.entry
+            val blocks = collected.collection.blocks
+            if (blocks.any { it in occupiedHandlerBlocks }) {
+                return StructuredCatchValidation(failure = TypedCatchScopeFailure.OVERLAPPING_HANDLER_REGIONS)
+            }
+            if (hasExternalCatchEntry(entry, blocks, handlerEntries)) {
+                return StructuredCatchValidation(failure = TypedCatchScopeFailure.HANDLER_EXTERNAL_ENTRY)
+            }
+            if (!supportsCatchExit(blocks, continuation)) {
+                return StructuredCatchValidation(failure = TypedCatchScopeFailure.UNSUPPORTED_HANDLER_EXIT)
+            }
+            occupiedHandlerBlocks += blocks
+            catches += StructuredCatch(
+                catchTypes = collected.entries.mapNotNull { it.catchType }.distinct(),
+                entry = entry,
+                blocks = blocks,
+            )
+        }
+        return StructuredCatchValidation(catches = catches)
+    }
+
+    private fun analyzeTypedCatchScope(
+        scope: TypedCatchScopeTopology,
+        facts: ControlFlowFacts,
+        rejectNormalBoundaryWithoutContinuation: Boolean,
+        allowLoopBackContinuation: Boolean,
+        collectCatch: (BasicBlockId, Set<BasicBlockId>, BasicBlockId?) -> HandlerCollection?,
+        hasExternalCatchEntry: (BasicBlockId, Set<BasicBlockId>, Set<BasicBlockId>) -> Boolean,
+        supportsCatchExit: (Set<BasicBlockId>, BasicBlockId?) -> Boolean,
+        requiredContinuation: BasicBlockId? = null,
+    ): TypedCatchScopeAnalysis {
+        val header = scope.header
+        val protectedBlocks = scope.protectedBlocks
+        val handlersByEntry = scope.handlersByEntry
+        val protectedRanges = scope.protectedRanges
+        if (header !in protectedBlocks || hasExternalProtectedEntry(header, protectedBlocks, facts)) {
+            return TypedCatchScopeAnalysis(failure = TypedCatchScopeFailure.PROTECTED_EXTERNAL_ENTRY)
+        }
+
+        val handlerEntries = handlersByEntry.keys
+        val selectedContinuation = requiredContinuation ?: selectContinuation(protectedBlocks, handlerEntries, facts)
+        if (selectedContinuation == null && rejectNormalBoundaryWithoutContinuation &&
+            normalBoundaryTargets(protectedBlocks, handlerEntries, facts).isNotEmpty()
+        ) {
+            return TypedCatchScopeAnalysis(failure = TypedCatchScopeFailure.NO_COMMON_CONTINUATION)
+        }
+
+        val collectedCatches = mutableListOf<CollectedCatch>()
+        for ((entry, entries) in handlersByEntry.entries.sortedBy { it.key.value }) {
+            val collected = collectCatch(entry, handlerEntries, selectedContinuation)
+                ?: return TypedCatchScopeAnalysis(failure = TypedCatchScopeFailure.CATCH_BODY_SHAPE)
+            if (collected.blocks.isEmpty()) {
+                return TypedCatchScopeAnalysis(failure = TypedCatchScopeFailure.EMPTY_HANDLER_REGION)
+            }
+            collectedCatches += CollectedCatch(entry, entries, collected)
+        }
+
+        val inferredContinuations = collectedCatches.mapNotNullTo(linkedSetOf()) { it.collection.inferredContinuation }
+        val regionContinuation = when {
+            selectedContinuation != null && inferredContinuations.all { it == selectedContinuation } -> selectedContinuation
+            selectedContinuation != null -> {
+                return TypedCatchScopeAnalysis(failure = TypedCatchScopeFailure.UNSUPPORTED_HANDLER_EXIT)
+            }
+
+            inferredContinuations.size == 1 -> inferredContinuations.single()
+            inferredContinuations.isEmpty() && allowLoopBackContinuation -> inferLoopBackContinuation(
+                header = header,
+                catches = collectedCatches,
+                facts = facts,
+            )
+
+            inferredContinuations.isEmpty() -> null
+            else -> return TypedCatchScopeAnalysis(failure = TypedCatchScopeFailure.NO_COMMON_CONTINUATION)
+        }
+
+        val validatedCatches = validateCollectedCatches(
+            collectedCatches = collectedCatches,
+            handlerEntries = handlerEntries,
+            continuation = regionContinuation,
+            hasExternalCatchEntry = hasExternalCatchEntry,
+            supportsCatchExit = supportsCatchExit,
+        )
+        if (validatedCatches.failure != null) {
+            return TypedCatchScopeAnalysis(failure = validatedCatches.failure)
+        }
+
+        return TypedCatchScopeAnalysis(
+            proof = TypedCatchScopeProof(
+                header = header,
+                protectedBlocks = protectedBlocks,
+                catches = requireNotNull(validatedCatches.catches),
+                continuation = regionContinuation,
+                protectedRanges = protectedRanges,
+            ),
+        )
+    }
+
+    /**
+     * Collects the normal-flow closure of one catch body.  The traversal itself is independent of
+     * whether the CFG came directly from bytecode or from JSR/RET normalization; callers describe
+     * representation-specific boundaries explicitly instead of maintaining separate walkers.
+     *
+     * [stopBlocks] are valid region boundaries which are not owned by the catch.  [rejectTargets]
+     * are stronger boundaries: reaching one from the catch proves that this particular source-shape
+     * interpretation is invalid.  [nestedGroups] optionally expands exception regions whose entire
+     * protected scope is already owned by the catch, giving ordinary typed catches recursive
+     * exception ownership without baking that policy into the graph walk itself.
+     */
+    private fun collectCatchBodyRegion(
+        entry: BasicBlockId,
+        protectedBlocks: Set<BasicBlockId>,
+        handlerEntries: Set<BasicBlockId>,
+        continuation: BasicBlockId?,
+        stopBlocks: Set<BasicBlockId>,
+        rejectTargets: Set<BasicBlockId>,
+        facts: ControlFlowFacts,
+        nestedGroups: List<ExceptionGroupTopology> = emptyList(),
+        currentGroup: ExceptionGroupTopology? = null,
+    ): HandlerCollection? {
+        val result = linkedSetOf<BasicBlockId>()
+        val queue = ArrayDeque<BasicBlockId>()
+
+        fun drainQueue(): Boolean {
+            while (queue.isNotEmpty()) {
+                val block = queue.removeFirst()
+                if (block == continuation || block in protectedBlocks || block in stopBlocks ||
+                    (block != entry && block in handlerEntries)
+                ) {
+                    continue
+                }
+                if (!result.add(block)) continue
+                if (block in facts.explicitTerminalBlocks) continue
+                for (edge in facts.outgoing[block].orEmpty()) {
+                    if (edge.to in stopBlocks) continue
+                    if (edge.to in rejectTargets) return false
+                    queue.addLast(edge.to)
+                }
+            }
+            return true
+        }
+
+        queue.add(entry)
+        if (!drainQueue()) return null
+
+        // A source catch may itself contain nested exception regions. Exceptional CFG edges are
+        // absent from ControlFlowFacts, so recursively-owned handlers have to be added explicitly.
+        // Use the same containment fixed-point as other structural ownership closures; this call
+        // supplies ordinary-catch policy only (skip the current group and do not absorb sibling
+        // handlers of the surrounding catch).
+        if (nestedGroups.isNotEmpty()) {
+            val closed = closeOverContainedExceptionRegions(
+                owned = result,
+                groups = nestedGroups,
+                excludeGroup = { nested -> nested === currentGroup },
+                revisitContainedGroups = false,
+                handlerEntriesFor = { nested ->
+                    nested.handlerEntries.filterTo(linkedSetOf()) { it !in handlerEntries }
+                },
+                absorb = { _, nestedEntries, _ ->
+                    val before = result.size
+                    nestedEntries.forEach(queue::addLast)
+                    if (!drainQueue()) {
+                        ExceptionOwnershipExpansion.REJECTED
+                    } else if (result.size != before) {
+                        ExceptionOwnershipExpansion.CHANGED
+                    } else {
+                        ExceptionOwnershipExpansion.UNCHANGED
+                    }
+                },
+            )
+            if (!closed) return null
+        }
+
+        if (continuation != null) return HandlerCollection(result, null)
+
+        val inferredContinuation = inferSharedHandlerContinuation(entry, result, facts)
+            ?: return HandlerCollection(result, null)
+        val trimmed = result.filterTo(linkedSetOf()) { block ->
+            inferredContinuation !in facts.dominators[block].orEmpty()
+        }
+        return HandlerCollection(trimmed, inferredContinuation)
+    }
+
     private fun collectHandlerBlocks(
         entry: BasicBlockId,
         protectedBlocks: Set<BasicBlockId>,
@@ -408,54 +528,19 @@ internal class StructuredExceptionRecognizer {
         facts: ControlFlowFacts,
         currentGroup: ExceptionGroupTopology,
         allGroups: List<ExceptionGroupTopology>,
-    ): HandlerCollection {
-        val result = linkedSetOf<BasicBlockId>()
-        val queue = ArrayDeque<BasicBlockId>()
-
-        fun drainQueue() {
-            while (queue.isNotEmpty()) {
-                val block = queue.removeFirst()
-                if (block == continuation || block in protectedBlocks || (block != entry && block in handlerEntries)) continue
-                if (!result.add(block)) continue
-                if (block in facts.explicitTerminalBlocks) continue
-                facts.outgoing[block].orEmpty().forEach { edge -> queue.addLast(edge.to) }
-            }
-        }
-
-        queue.add(entry)
-        drainQueue()
-
-        // A source catch may itself contain a nested try/catch. Exceptional CFG edges are deliberately
-        // absent from ControlFlowFacts, so the nested catch body is not reached by the normal walk
-        // above. If the nested protected range is wholly owned by this handler body, its handler is
-        // owned by the same source catch as well. Add such handlers and repeat to support deeper nesting.
-        val absorbedGroups = mutableSetOf<ExceptionTableGroup>()
-        var changed: Boolean
-        do {
-            changed = false
-            for (nested in allGroups) {
-                if (nested === currentGroup || nested.group in absorbedGroups) continue
-                if (nested.protectedBlocks.isEmpty() || !result.containsAll(nested.protectedBlocks)) continue
-                val nestedEntries = nested.handlerEntries.filter { it !in handlerEntries }
-                if (nestedEntries.isEmpty()) continue
-                absorbedGroups += nested.group
-                val before = result.size
-                nestedEntries.forEach(queue::addLast)
-                drainQueue()
-                if (result.size != before) changed = true
-            }
-        } while (changed)
-
-        if (continuation != null) return HandlerCollection(result, null)
-
-        val inferredContinuation = inferSharedHandlerContinuation(entry, result, facts)
-        if (inferredContinuation == null) return HandlerCollection(result, null)
-
-        val trimmed = result.filterTo(linkedSetOf()) { block ->
-            inferredContinuation !in facts.dominators[block].orEmpty()
-        }
-        return HandlerCollection(trimmed, inferredContinuation)
-    }
+    ): HandlerCollection = requireNotNull(
+        collectCatchBodyRegion(
+            entry = entry,
+            protectedBlocks = protectedBlocks,
+            handlerEntries = handlerEntries,
+            continuation = continuation,
+            stopBlocks = emptySet(),
+            rejectTargets = emptySet(),
+            facts = facts,
+            nestedGroups = allGroups,
+            currentGroup = currentGroup,
+        ),
+    )
 
     private fun inferSharedHandlerContinuation(
         entry: BasicBlockId,
@@ -803,19 +888,20 @@ internal class StructuredExceptionRecognizer {
         graph: ControlFlowGraph,
         topology: ExceptionGroupTopology,
         header: BasicBlockId,
-        allGroups: List<ExceptionGroupTopology>,
-        labelPositions: Map<RawLabelId, Int>,
+        exceptionTopology: ExceptionTopology,
         facts: ControlFlowFacts,
         provenance: LegacySubroutineProvenance?,
         rejectionTrace: MutableList<String>? = null,
     ): LegacyTryCatchFinallyRecognition? {
+        val allGroups = exceptionTopology.groups
+        val labelPositions = exceptionTopology.labelPositions
         val group = topology.group
         val catchAllHandlers = group.handlers.filter { it.catchType == null }
         val typedHandlers = group.handlers.filter { it.catchType != null }
-        if (catchAllHandlers.size != 1 || typedHandlers.isEmpty()) return rejectLegacy(rejectionTrace, "handler-set")
+        if (catchAllHandlers.size != 1) return rejectLegacy(rejectionTrace, "handler-set")
 
         val catchAll = catchAllHandlers.single()
-        val handlerInstructionIndex = labelPosition(labelPositions, catchAll.handler)
+        val handlerInstructionIndex = exceptionLabelPosition(labelPositions, catchAll.handler)
         val finallyShape = analyzeLegacyFinallyShape(
             graph = graph,
             handlerInstructionIndex = handlerInstructionIndex,
@@ -828,28 +914,42 @@ internal class StructuredExceptionRecognizer {
         val matches = finallyShape.normalCopies
         val continuation = finallyShape.continuation
 
-        val catchAllRelated = allGroups.filter { candidate ->
-            candidate.group.handlers.any { handler ->
-                handler.catchType == null && labelPosition(labelPositions, handler.handler) == handlerInstructionIndex
+        val finallyCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks }
+        val familyBuild = buildLegacyFinallyFamilyTopology(
+            anchor = topology,
+            catchAllHandlerInstructionIndex = handlerInstructionIndex,
+            exceptionTopology = exceptionTopology,
+            excludedBlocks = finallyHandlerBlocks + finallyCopyBlocks,
+            continuation = continuation,
+            facts = facts,
+        )
+        if (familyBuild.failure != null) {
+            val reason = when (familyBuild.failure) {
+                LegacyFinallyFamilyTopologyFailure.EMPTY_CATCH_ALL_FAMILY -> "empty-catch-all-family"
+                LegacyFinallyFamilyTopologyFailure.NOT_FAMILY_ANCHOR -> "not-first-catch-all-peer"
             }
+            return rejectLegacy(rejectionTrace, reason)
         }
-        // Legacy JSR/RET normalization may split one source try/catch/finally into several
-        // physical ranges while preserving the exact same typed-catch + catch-all handler set.
-        // Treat those peer ranges as one source try. If the typed handler signature changes,
-        // however, we are looking at nested/overlapping exception structure and keep it
-        // block-based for a more explicit recognizer.
-        val mixedSignature = handlerSignature(group.handlers, labelPositions)
-        val mixedRelated = catchAllRelated
-            .filter { candidate -> candidate.group.handlers.any { it.catchType != null } }
-            .sortedBy { candidate -> candidate.group.envelope.start }
-        if (mixedRelated.isEmpty()) return rejectLegacy(rejectionTrace, "no-mixed-peers")
-        if (mixedRelated.first() !== topology) return rejectLegacy(rejectionTrace, "not-first-mixed-peer")
-        if (mixedRelated.any { candidate -> handlerSignature(candidate.group.handlers, labelPositions) != mixedSignature }) {
+        if (familyBuild.typedFailure != null) {
+            val reason = when (familyBuild.typedFailure) {
+                TypedCatchTopologyFailure.INVALID_HANDLER_ENTRY -> "typed-handler-entry"
+                TypedCatchTopologyFailure.EMPTY_PROTECTED_SCOPE -> "empty-nested-try"
+                TypedCatchTopologyFailure.INVALID_PROTECTED_HEADER -> "nested-try-header"
+                TypedCatchTopologyFailure.CROSSING_SCOPES -> "crossing-mixed-handler-scopes"
+            }
+            return rejectLegacy(rejectionTrace, reason)
+        }
+        val family = requireNotNull(familyBuild.topology)
+        if (family.mixedGroups.isEmpty()) return rejectLegacy(rejectionTrace, "no-mixed-peers")
+
+        val mixedSignatures = family.mixedGroups
+            .map { candidate -> exceptionHandlerSignature(candidate.group.handlers, labelPositions) }
+            .distinct()
+        if (typedHandlers.isEmpty() || mixedSignatures.size > 1) {
             return recognizeLegacyNestedTryCatchFinally(
                 graph = graph,
-                topology = topology,
-                catchAllFamily = catchAllRelated,
-                mixedRelated = mixedRelated,
+                family = family,
+                allGroups = allGroups,
                 finallyShape = finallyShape,
                 labelPositions = labelPositions,
                 facts = facts,
@@ -857,48 +957,57 @@ internal class StructuredExceptionRecognizer {
                 rejectionTrace = rejectionTrace,
             )
         }
-        val catchAllFamily = catchAllRelated
+        if (typedHandlers.isEmpty()) return rejectLegacy(rejectionTrace, "handler-set")
 
-        val sourceTryBlocks = mixedRelated.flatMapTo(linkedSetOf()) { candidate ->
-            extendWithTerminalTransfers(candidate.protectedBlocks, facts)
+        // Identical mixed signatures represent one source typed-catch scope under the outer finally.
+        // Reuse the same typed-scope proof as ordinary and nested catches instead of rebuilding the
+        // handler topology and validation locally in the direct try/catch/finally path.
+        val sourceScope = family.typedTopology.scopes.singleOrNull()
+            ?: return rejectLegacy(rejectionTrace, "typed-scope-count=${family.typedTopology.scopes.size}")
+        val sourceTryBlocks = family.mixedGroups.flatMapTo(linkedSetOf()) { candidate ->
+            extendExceptionProtectedScopeWithTerminalTransfers(candidate.protectedBlocks, facts)
         } - finallyHandlerBlocks
-        if (header !in sourceTryBlocks) return rejectLegacy(rejectionTrace, "header-not-in-source-try")
-        if (hasExternalProtectedEntry(header, sourceTryBlocks, facts)) return rejectLegacy(rejectionTrace, "source-try-external-entry")
-
-        val typedByEntry = typedHandlers.groupBy { handler ->
-            facts.instructionToBlock.getOrNull(labelPosition(labelPositions, handler.handler))
-        }
-        if (typedByEntry.keys.any { it == null }) return rejectLegacy(rejectionTrace, "typed-handler-entry")
-        val typedEntries = typedByEntry.keys.filterNotNull().toSet()
-        val catches = mutableListOf<StructuredCatch>()
-        val occupiedCatchBlocks = linkedSetOf<BasicBlockId>()
-        for ((entryOrNull, entries) in typedByEntry.entries.sortedBy { it.key?.value ?: Int.MAX_VALUE }) {
-            val entry = requireNotNull(entryOrNull)
-            val blocks = collectLegacyCatchBody(
-                entry = entry,
+        val typedEntries = sourceScope.handlersByEntry.keys
+        val typedScope = analyzeTypedCatchScope(
+            scope = sourceScope.copy(
+                header = header,
                 protectedBlocks = sourceTryBlocks,
-                otherHandlerEntries = typedEntries + handlerEntry,
-                finallyCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks },
-                graph = graph,
-                facts = facts,
-            ) ?: return rejectLegacy(rejectionTrace, "catch-body-shape")
-            if (blocks.isEmpty()) return rejectLegacy(rejectionTrace, "empty-catch-body")
-            if (blocks.any { it in occupiedCatchBlocks }) return rejectLegacy(rejectionTrace, "overlapping-catch-bodies")
-            if (hasExternalHandlerEntry(entry, blocks, typedEntries, facts)) return rejectLegacy(rejectionTrace, "catch-external-entry")
-            occupiedCatchBlocks += blocks
-            catches += StructuredCatch(
-                catchTypes = entries.mapNotNull { it.catchType }.distinct(),
-                entry = entry,
-                blocks = blocks,
-            )
+            ),
+            facts = facts,
+            rejectNormalBoundaryWithoutContinuation = false,
+            allowLoopBackContinuation = false,
+            collectCatch = { entry, _, scopeContinuation ->
+                collectLegacyCatchBody(
+                    entry = entry,
+                    protectedBlocks = sourceTryBlocks,
+                    otherHandlerEntries = typedEntries + handlerEntry,
+                    finallyCopyBlocks = finallyCopyBlocks,
+                    continuation = scopeContinuation,
+                    facts = facts,
+                )?.let { blocks -> HandlerCollection(blocks, null) }
+            },
+            hasExternalCatchEntry = { entry, blocks, entries ->
+                hasExternalHandlerEntry(entry, blocks, entries, facts)
+            },
+            supportsCatchExit = { _, _ -> true },
+            requiredContinuation = continuation,
+        )
+        if (typedScope.failure != null) {
+            val reason = when (typedScope.failure) {
+                TypedCatchScopeFailure.PROTECTED_EXTERNAL_ENTRY -> "source-try-external-entry"
+                TypedCatchScopeFailure.CATCH_BODY_SHAPE -> "catch-body-shape"
+                TypedCatchScopeFailure.EMPTY_HANDLER_REGION -> "empty-catch-body"
+                TypedCatchScopeFailure.OVERLAPPING_HANDLER_REGIONS -> "overlapping-catch-bodies"
+                TypedCatchScopeFailure.HANDLER_EXTERNAL_ENTRY -> "catch-external-entry"
+                TypedCatchScopeFailure.NO_COMMON_CONTINUATION,
+                TypedCatchScopeFailure.UNSUPPORTED_HANDLER_EXIT -> "catch-body-shape"
+            }
+            return rejectLegacy(rejectionTrace, reason)
         }
+        val catches = requireNotNull(typedScope.proof).catches
 
         val handlerRanges = finallyShape.bodyInstructionRanges
-        val protectedRanges = catchAllFamily
-            .flatMap { candidate -> candidate.group.segments }
-            .sortedWith(compareBy<ExceptionTableSegment> { it.range.start }.thenBy { it.range.endExclusive })
-            .map { segment -> StructuredProtectedRange(segment.range.start, segment.range.endExclusive) }
-            .distinct()
+        val protectedRanges = family.protectedRanges
         val firstRange = protectedRanges.first()
         val lastRange = protectedRanges.last()
         val region = StructuredRegion.TryCatchFinally(
@@ -917,7 +1026,7 @@ internal class StructuredExceptionRecognizer {
         )
         return LegacyTryCatchFinallyRecognition(
             region = region,
-            consumedGroupKeys = catchAllFamily.mapTo(linkedSetOf()) { candidate ->
+            consumedGroupKeys = family.groups.mapTo(linkedSetOf()) { candidate ->
                 ExceptionRegionKey(candidate.group.envelope.start, candidate.group.envelope.endExclusive)
             },
         )
@@ -926,150 +1035,104 @@ internal class StructuredExceptionRecognizer {
 
     private fun recognizeLegacyNestedTryCatchFinally(
         graph: ControlFlowGraph,
-        topology: ExceptionGroupTopology,
-        catchAllFamily: List<ExceptionGroupTopology>,
-        mixedRelated: List<ExceptionGroupTopology>,
+        family: LegacyFinallyFamilyTopology,
+        allGroups: List<ExceptionGroupTopology>,
         finallyShape: LegacyFinallyShape,
         labelPositions: Map<RawLabelId, Int>,
         facts: ControlFlowFacts,
         provenance: LegacySubroutineProvenance?,
         rejectionTrace: MutableList<String>?,
     ): LegacyTryCatchFinallyRecognition? {
-        // A legacy JSR finally can surround several nested try/catch regions. In that shape every
-        // fragment carries the same outer catch-all handler, while typed handlers vary according
-        // to the nested scope that is active. Never flatten those handlers into sibling catches.
-        if (mixedRelated.first() !== topology) return rejectLegacy(rejectionTrace, "not-first-mixed-peer")
-
+        // Typed catches are reconstructed independently from the outer catch-all family.  The
+        // exception table may split the outer finally around each nested catch, but those physical
+        // fragments are not separate source try/finally constructs.
         val handlerEntry = finallyShape.handlerEntry
         val finallyHandlerBlocks = finallyShape.handlerBlocks
-        val handlerRanges = finallyShape.bodyInstructionRanges
         val matches = finallyShape.normalCopies
         val continuation = finallyShape.continuation
         val finallyCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks }
-        val typedHandlerEntries = mixedRelated.flatMap { it.group.handlers }
-            .filter { it.catchType != null }
-            .mapNotNullTo(linkedSetOf()) { handler ->
-                facts.instructionToBlock.getOrNull(labelPosition(labelPositions, handler.handler))
-            }
+        val typedHandlerEntries = family.typedTopology.scopes
+            .flatMapTo(linkedSetOf()) { it.handlersByEntry.keys }
         if (typedHandlerEntries.isEmpty()) return rejectLegacy(rejectionTrace, "mixed-handler-signature")
 
-        val groupsByEntry = linkedMapOf<BasicBlockId, MutableList<ExceptionGroupTopology>>()
-        val handlersByEntry = linkedMapOf<BasicBlockId, MutableList<RawExceptionHandler>>()
-        for (candidate in mixedRelated) {
-            for (handler in candidate.group.handlers) {
-                if (handler.catchType == null) continue
-                val entry = facts.instructionToBlock.getOrNull(labelPosition(labelPositions, handler.handler))
-                    ?: return rejectLegacy(rejectionTrace, "typed-handler-entry")
-                groupsByEntry.getOrPut(entry) { mutableListOf() } += candidate
-                handlersByEntry.getOrPut(entry) { mutableListOf() } += handler
-            }
-        }
-
-        val entriesByScope = groupsByEntry.entries.groupBy { (_, groups) ->
-            groups.map { candidate -> ExceptionRegionKey(candidate.group.envelope.start, candidate.group.envelope.endExclusive) }
-                .distinct()
-                .sortedWith(compareBy<ExceptionRegionKey> { it.protectedStartInstructionIndex }.thenBy { it.protectedEndInstructionIndexExclusive })
-        }
-        val scopeBlocks = linkedMapOf<List<ExceptionRegionKey>, Set<BasicBlockId>>()
-        for ((scope, entries) in entriesByScope) {
-            val groups = entries.flatMap { it.value }.distinct()
-            scopeBlocks[scope] = groups.flatMapTo(linkedSetOf()) { candidate ->
-                extendWithTerminalTransfers(candidate.protectedBlocks, facts)
-            } - finallyHandlerBlocks - finallyCopyBlocks
-        }
-
-        val scopes = scopeBlocks.keys.toList()
-        for (i in scopes.indices) {
-            val left = scopeBlocks.getValue(scopes[i])
-            if (left.isEmpty()) return rejectLegacy(rejectionTrace, "empty-nested-try")
-            for (j in i + 1 until scopes.size) {
-                val right = scopeBlocks.getValue(scopes[j])
-                val overlap = left intersect right
-                if (overlap.isNotEmpty() && !left.containsAll(right) && !right.containsAll(left)) {
-                    return rejectLegacy(rejectionTrace, "crossing-mixed-handler-scopes")
-                }
-            }
-        }
-
         val nestedRegions = mutableListOf<StructuredRegion>()
-        for ((scope, entries) in entriesByScope.entries.sortedBy { it.key.first().protectedStartInstructionIndex }) {
-            val protectedBlocks = scopeBlocks.getValue(scope)
-            val scopeGroups = entries.flatMap { it.value }.distinct().sortedBy { it.group.envelope.start }
-            val scopeStart = scopeGroups.first().group.envelope.start
-            val scopeHeader = facts.instructionToBlock.getOrNull(scopeStart)
-                ?: return rejectLegacy(rejectionTrace, "nested-try-header")
-            if (scopeHeader !in protectedBlocks || hasExternalProtectedEntry(scopeHeader, protectedBlocks, facts)) {
-                return rejectLegacy(rejectionTrace, "nested-try-external-entry")
-            }
-
-            val catches = mutableListOf<StructuredCatch>()
-            val occupied = linkedSetOf<BasicBlockId>()
-            for ((entry, _) in entries.sortedBy { it.key.value }) {
-                val blocks = collectLegacyCatchBody(
-                    entry = entry,
-                    protectedBlocks = protectedBlocks,
-                    otherHandlerEntries = typedHandlerEntries + handlerEntry,
-                    finallyCopyBlocks = finallyCopyBlocks,
-                    graph = graph,
-                    facts = facts,
-                ) ?: return rejectLegacy(rejectionTrace, "nested-catch-body-shape")
-                if (blocks.isEmpty() || blocks.any { it in occupied }) return rejectLegacy(rejectionTrace, "nested-catch-overlap")
-                if (hasExternalLegacyHandlerEntry(entry, blocks, typedHandlerEntries, facts, graph, provenance)) {
-                    return rejectLegacy(rejectionTrace, "nested-catch-external-entry")
-                }
-                occupied += blocks
-                catches += StructuredCatch(
-                    catchTypes = handlersByEntry.getValue(entry).mapNotNull { it.catchType }.distinct(),
-                    entry = entry,
-                    blocks = blocks,
-                )
-            }
-
-            val protectedRanges = scopeGroups.flatMap { it.group.segments }
-                .map { StructuredProtectedRange(it.range.start, it.range.endExclusive) }
-                .distinct()
-                .sortedWith(compareBy<StructuredProtectedRange> { it.startInstructionIndex }.thenBy { it.endInstructionIndexExclusive })
-            nestedRegions += StructuredRegion.TryCatch(
-                header = scopeHeader,
-                tryBlocks = protectedBlocks,
-                catches = catches,
-                continuation = selectContinuation(protectedBlocks, entries.mapTo(linkedSetOf()) { it.key }, facts),
-                protectedStartInstructionIndex = protectedRanges.first().startInstructionIndex,
-                protectedEndInstructionIndexExclusive = protectedRanges.last().endInstructionIndexExclusive,
-                protectedRanges = protectedRanges,
+        for (scope in family.typedTopology.depthFirstScopes()) {
+            val typedScope = analyzeTypedCatchScope(
+                scope = scope,
+                facts = facts,
+                rejectNormalBoundaryWithoutContinuation = false,
+                allowLoopBackContinuation = false,
+                collectCatch = { entry, _, nestedContinuation ->
+                    collectLegacyCatchBody(
+                        entry = entry,
+                        protectedBlocks = scope.protectedBlocks,
+                        otherHandlerEntries = typedHandlerEntries + handlerEntry,
+                        finallyCopyBlocks = finallyCopyBlocks,
+                        continuation = nestedContinuation,
+                        facts = facts,
+                    )?.let { blocks -> HandlerCollection(blocks, null) }
+                },
+                hasExternalCatchEntry = { entry, blocks, scopeHandlerEntries ->
+                    // Only handlers belonging to this typed scope are legitimate peer entries.
+                    // The global handler set remains a traversal boundary above, but trusting a
+                    // handler from another nested/sibling scope here would hide a real external
+                    // entry into this catch body.
+                    hasExternalLegacyHandlerEntry(entry, blocks, scopeHandlerEntries, facts, graph, provenance)
+                },
+                supportsCatchExit = { _, _ -> true },
             )
+            if (typedScope.failure != null) {
+                val reason = when (typedScope.failure) {
+                    TypedCatchScopeFailure.PROTECTED_EXTERNAL_ENTRY -> "nested-try-external-entry"
+                    TypedCatchScopeFailure.CATCH_BODY_SHAPE -> "nested-catch-body-shape"
+                    TypedCatchScopeFailure.EMPTY_HANDLER_REGION,
+                    TypedCatchScopeFailure.OVERLAPPING_HANDLER_REGIONS -> "nested-catch-overlap"
+                    TypedCatchScopeFailure.HANDLER_EXTERNAL_ENTRY -> "nested-catch-external-entry"
+                    TypedCatchScopeFailure.NO_COMMON_CONTINUATION -> "nested-catch-no-common-continuation"
+                    TypedCatchScopeFailure.UNSUPPORTED_HANDLER_EXIT -> "nested-catch-unsupported-exit"
+                }
+                return rejectLegacy(rejectionTrace, reason)
+            }
+            nestedRegions += requireNotNull(typedScope.proof).toRegion()
         }
 
-        val outerTryBlocks = catchAllFamily.flatMapTo(linkedSetOf()) { candidate ->
-            extendWithTerminalTransfers(candidate.protectedBlocks, facts)
-        } - finallyHandlerBlocks - finallyCopyBlocks
-        val outerStart = catchAllFamily.minOf { it.group.envelope.start }
-        val outerHeader = facts.instructionToBlock.getOrNull(outerStart)
+        val outerHeader = facts.instructionToBlock.getOrNull(family.protectedRanges.first().startInstructionIndex)
             ?: return rejectLegacy(rejectionTrace, "outer-finally-header")
-        if (outerHeader !in outerTryBlocks || hasExternalProtectedEntry(outerHeader, outerTryBlocks, facts)) {
+        val finallyCopyOwnership = collectExceptionRegionClosure(
+            seedBlocks = finallyCopyBlocks,
+            allGroups = allGroups,
+            excludedHandlerEntries = setOf(handlerEntry),
+            continuation = continuation,
+            labelPositions = labelPositions,
+            facts = facts,
+        )
+        if (outerHeader !in family.protectedBlocks || hasExternalEntryOutsideOwnership(
+                header = outerHeader,
+                blocks = family.protectedBlocks,
+                externalOwnership = finallyCopyOwnership,
+                facts = facts,
+            )
+        ) {
             return rejectLegacy(rejectionTrace, "outer-finally-external-entry")
         }
-        val outerRanges = catchAllFamily.flatMap { it.group.segments }
-            .map { StructuredProtectedRange(it.range.start, it.range.endExclusive) }
-            .distinct()
-            .sortedWith(compareBy<StructuredProtectedRange> { it.startInstructionIndex }.thenBy { it.endInstructionIndexExclusive })
+
         val outerFinally = StructuredRegion.TryFinally(
             header = outerHeader,
-            tryBlocks = outerTryBlocks,
+            tryBlocks = family.protectedBlocks,
             handlerEntry = handlerEntry,
             handlerBlocks = finallyHandlerBlocks,
-            finallyBodyInstructionRanges = handlerRanges,
+            finallyBodyInstructionRanges = finallyShape.bodyInstructionRanges,
             normalCopyInstructionIndices = matches.flatMap { it.instructionRanges },
             normalCopyBlocks = finallyCopyBlocks,
             continuation = continuation,
-            protectedStartInstructionIndex = outerRanges.first().startInstructionIndex,
-            protectedEndInstructionIndexExclusive = outerRanges.last().endInstructionIndexExclusive,
-            protectedRanges = outerRanges,
+            protectedStartInstructionIndex = family.protectedRanges.first().startInstructionIndex,
+            protectedEndInstructionIndexExclusive = family.protectedRanges.last().endInstructionIndexExclusive,
+            protectedRanges = family.protectedRanges,
         )
         return LegacyTryCatchFinallyRecognition(
             region = outerFinally,
             additionalRegions = nestedRegions,
-            consumedGroupKeys = catchAllFamily.mapTo(linkedSetOf()) { candidate ->
+            consumedGroupKeys = family.groups.mapTo(linkedSetOf()) { candidate ->
                 ExceptionRegionKey(candidate.group.envelope.start, candidate.group.envelope.endExclusive)
             },
         )
@@ -1080,33 +1143,23 @@ internal class StructuredExceptionRecognizer {
         protectedBlocks: Set<BasicBlockId>,
         otherHandlerEntries: Set<BasicBlockId>,
         finallyCopyBlocks: Set<BasicBlockId>,
-        graph: ControlFlowGraph,
+        continuation: BasicBlockId? = null,
         facts: ControlFlowFacts,
     ): Set<BasicBlockId>? {
-        val result = linkedSetOf<BasicBlockId>()
-        val pending = ArrayDeque<BasicBlockId>()
-        pending += entry
-        while (pending.isNotEmpty()) {
-            val block = pending.removeFirst()
-            if (block in protectedBlocks || block in finallyCopyBlocks || (block != entry && block in otherHandlerEntries)) continue
-            if (!result.add(block)) continue
-            if (block in facts.explicitTerminalBlocks) continue
-
-            val outgoing = facts.outgoing[block].orEmpty()
-            for (edge in outgoing) {
-                if (edge.to in finallyCopyBlocks) continue
-                if (edge.to in protectedBlocks || edge.to in otherHandlerEntries) return null
-                pending += edge.to
-            }
-        }
-        if (result.isEmpty()) return null
-        // Do not let the catch walk escape into arbitrary post-try flow. A non-terminal boundary is
-        // valid here only when it enters a proven cloned finally body.
-        val hasUnsupportedBoundary = result.any { block ->
-            if (block in facts.explicitTerminalBlocks) return@any false
-            facts.outgoing[block].orEmpty().any { edge -> edge.to !in result && edge.to !in finallyCopyBlocks }
-        }
-        return result.takeUnless { hasUnsupportedBoundary }
+        // Legacy-normalized catches use the same region walker as ordinary catches, but preserve the
+        // stricter source-shape proof established by the old recognizer: a finally copy is a valid
+        // stop boundary, while walking back into the protected try or a sibling handler rejects the
+        // candidate rather than silently absorbing that flow.
+        val collection = collectCatchBodyRegion(
+            entry = entry,
+            protectedBlocks = protectedBlocks,
+            handlerEntries = otherHandlerEntries,
+            continuation = continuation,
+            stopBlocks = finallyCopyBlocks,
+            rejectTargets = protectedBlocks + otherHandlerEntries,
+            facts = facts,
+        ) ?: return null
+        return collection.blocks.takeUnless { it.isEmpty() }
     }
 
     private data class LegacyTryCatchFinallyRecognition(
@@ -1139,7 +1192,7 @@ internal class StructuredExceptionRecognizer {
         val group = topology.group
         if (group.handlers.size != 1 || group.handlers.single().catchType != null) return rejectLegacy(rejectionTrace, "handler-set")
 
-        val signature = handlerSignature(group.handlers, labelPositions)
+        val signature = exceptionHandlerSignature(group.handlers, labelPositions)
         val handlerInstructionIndex = signature.single().handlerInstructionIndex
         val finallyShape = analyzeLegacyFinallyShape(
             graph = graph,
@@ -1153,11 +1206,11 @@ internal class StructuredExceptionRecognizer {
         val matches = finallyShape.normalCopies
 
         val family = allGroups.filter { candidate ->
-            handlerSignature(candidate.group.handlers, labelPositions) == signature
+            exceptionHandlerSignature(candidate.group.handlers, labelPositions) == signature
         }
         if (family.isEmpty()) return rejectLegacy(rejectionTrace, "empty-handler-family")
         val protectedBlocks = family.flatMapTo(linkedSetOf()) { candidate ->
-            extendWithTerminalTransfers(candidate.protectedBlocks, facts)
+            extendExceptionProtectedScopeWithTerminalTransfers(candidate.protectedBlocks, facts)
         } - handlerBlocks
         if (header !in protectedBlocks) return rejectLegacy(rejectionTrace, "header-not-in-protected-blocks")
 
@@ -1254,6 +1307,118 @@ internal class StructuredExceptionRecognizer {
         return contexts.size == 1 && contexts.single().frames.isNotEmpty()
     }
 
+
+    private enum class ExceptionOwnershipExpansion {
+        UNCHANGED,
+        CHANGED,
+        REJECTED,
+    }
+
+    /**
+     * Closes an already-owned CFG region over exception constructs whose protected blocks are
+     * wholly contained by that region. The containment/fixed-point mechanism is shared by ordinary
+     * catch bodies and finally-copy ownership; callers provide the policy for collecting handlers.
+     *
+     * Some policies consume a contained group only once (ordinary catch traversal), while others
+     * deliberately revisit it after ownership grows because the owned set itself is a stop boundary
+     * for handler collection (legacy finally copies).
+     */
+    private fun closeOverContainedExceptionRegions(
+        owned: MutableSet<BasicBlockId>,
+        groups: List<ExceptionGroupTopology>,
+        excludeGroup: (ExceptionGroupTopology) -> Boolean,
+        revisitContainedGroups: Boolean,
+        handlerEntriesFor: (ExceptionGroupTopology) -> Set<BasicBlockId>,
+        absorb: (
+            ExceptionGroupTopology,
+            Set<BasicBlockId>,
+            Set<BasicBlockId>,
+        ) -> ExceptionOwnershipExpansion,
+    ): Boolean {
+        val consumedGroups = mutableSetOf<ExceptionTableGroup>()
+        var changed: Boolean
+        do {
+            changed = false
+            val containedGroups = groups.filter { candidate ->
+                !excludeGroup(candidate) &&
+                        candidate.protectedBlocks.isNotEmpty() &&
+                        candidate.protectedBlocks.all { it in owned }
+            }
+            val entriesByGroup = containedGroups.associateWith(handlerEntriesFor)
+            val containedHandlerEntries = entriesByGroup.values.flatMapTo(linkedSetOf()) { it }
+
+            for (candidate in containedGroups) {
+                if (!revisitContainedGroups && candidate.group in consumedGroups) continue
+                val entries = entriesByGroup.getValue(candidate)
+                if (entries.isEmpty()) {
+                    if (!revisitContainedGroups) consumedGroups += candidate.group
+                    continue
+                }
+                if (!revisitContainedGroups) consumedGroups += candidate.group
+                when (absorb(candidate, entries, containedHandlerEntries)) {
+                    ExceptionOwnershipExpansion.UNCHANGED -> Unit
+                    ExceptionOwnershipExpansion.CHANGED -> changed = true
+                    ExceptionOwnershipExpansion.REJECTED -> return false
+                }
+            }
+        } while (changed)
+        return true
+    }
+
+    /**
+     * Computes structural ownership around an already-proven region. Exception handlers whose
+     * protected blocks are wholly owned by the region are part of that region too. The caller proves
+     * the seed blocks; this function only supplies the legacy handler-collection policy to the
+     * generic exception-containment closure above.
+     */
+    private fun collectExceptionRegionClosure(
+        seedBlocks: Set<BasicBlockId>,
+        allGroups: List<ExceptionGroupTopology>,
+        excludedHandlerEntries: Set<BasicBlockId>,
+        continuation: BasicBlockId?,
+        labelPositions: Map<RawLabelId, Int>,
+        facts: ControlFlowFacts,
+    ): Set<BasicBlockId> {
+        val owned = linkedSetOf<BasicBlockId>().apply { addAll(seedBlocks) }
+        closeOverContainedExceptionRegions(
+            owned = owned,
+            groups = allGroups,
+            excludeGroup = { false },
+            revisitContainedGroups = true,
+            handlerEntriesFor = { candidate ->
+                candidate.group.handlers.mapNotNullTo(linkedSetOf()) { handler ->
+                    facts.instructionToBlock.getOrNull(exceptionLabelPosition(labelPositions, handler.handler))
+                } - excludedHandlerEntries
+            },
+            absorb = { candidate, entries, containedHandlerEntries ->
+                var changed = false
+                for (entry in entries) {
+                    if (entry in owned) continue
+                    val blocks = collectLegacyCatchBody(
+                        entry = entry,
+                        protectedBlocks = candidate.protectedBlocks,
+                        otherHandlerEntries = containedHandlerEntries + excludedHandlerEntries,
+                        finallyCopyBlocks = owned,
+                        continuation = continuation,
+                        facts = facts,
+                    ) ?: continue
+                    if (owned.addAll(blocks)) changed = true
+                }
+                if (changed) ExceptionOwnershipExpansion.CHANGED else ExceptionOwnershipExpansion.UNCHANGED
+            },
+        )
+        return owned
+    }
+
+    private fun hasExternalEntryOutsideOwnership(
+        header: BasicBlockId,
+        blocks: Set<BasicBlockId>,
+        externalOwnership: Set<BasicBlockId>,
+        facts: ControlFlowFacts,
+    ): Boolean = hasExternalEntry(blocks, facts) { target, source ->
+        target == header || source in externalOwnership
+    }
+
     private fun hasExternalLegacyHandlerEntry(
         entry: BasicBlockId,
         blocks: Set<BasicBlockId>,
@@ -1261,12 +1426,11 @@ internal class StructuredExceptionRecognizer {
         facts: ControlFlowFacts,
         graph: ControlFlowGraph,
         provenance: LegacySubroutineProvenance?,
-    ): Boolean = blocks.any { block ->
-        facts.incoming[block].orEmpty().any { edge ->
-            if (edge.from in blocks || block == entry && edge.from in handlerEntries) return@any false
-            if (provenance == null) return@any true
-            !isNormalizerOwnedTransfer(edge.from, block, graph, provenance)
+    ): Boolean = hasExternalEntry(blocks, facts) { target, source ->
+        if (isHandlerPeerEntryTransfer(entry, target, source, handlerEntries)) {
+            return@hasExternalEntry true
         }
+        provenance != null && isNormalizerOwnedTransfer(source, target, graph, provenance)
     }
 
     private fun isNormalizerOwnedTransfer(
@@ -1662,32 +1826,6 @@ internal class StructuredExceptionRecognizer {
                 instruction is RawReturnInstruction ||
                 instruction is RawThrowInstruction
 
-    private fun labelPosition(positions: Map<RawLabelId, Int>, label: RawLabelId): Int =
-        requireNotNull(positions[label]) { "Unknown exception-table label ${label.value}." }
-
-    private data class ProtectedRange(val start: Int, val endExclusive: Int)
-
-    private data class ExceptionTableSegment(
-        val range: ProtectedRange,
-        val handlers: List<RawExceptionHandler>,
-    )
-
-    private data class ExceptionTableGroup(
-        val segments: List<ExceptionTableSegment>,
-    ) {
-        val envelope: ProtectedRange = ProtectedRange(
-            segments.first().range.start,
-            segments.last().range.endExclusive,
-        )
-        val handlers: List<RawExceptionHandler> = segments.first().handlers
-    }
-
-    private data class ExceptionGroupTopology(
-        val group: ExceptionTableGroup,
-        val protectedBlocks: Set<BasicBlockId>,
-        val handlerEntries: Set<BasicBlockId>,
-    )
-
     private data class HandlerCollection(
         val blocks: Set<BasicBlockId>,
         val inferredContinuation: BasicBlockId?,
@@ -1699,10 +1837,6 @@ internal class StructuredExceptionRecognizer {
         val collection: HandlerCollection,
     )
 
-    private data class HandlerSignature(
-        val handlerInstructionIndex: Int,
-        val catchType: String?,
-    )
 }
 
 internal data class ExceptionRegionKey(
