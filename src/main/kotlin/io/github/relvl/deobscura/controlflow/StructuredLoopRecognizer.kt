@@ -8,10 +8,7 @@ import java.util.*
 
 /** Recognizes natural loops and derives loop-relative transfer context for nested regions. */
 internal class StructuredLoopRecognizer {
-    fun recognize(
-        facts: ControlFlowFacts,
-        branches: Map<BasicBlockId, ExpressionStatement.Branch>,
-    ): LoopRecognition {
+    fun recognize(facts: ControlFlowFacts, branches: Map<BasicBlockId, ExpressionStatement.Branch>): LoopRecognition {
         val regions = mutableListOf<StructuredRegion.While>()
         val rejections = linkedMapOf<BasicBlockId, UnstructuredControlFlowReason>()
         val backEdges = facts.normalEdges.filter { edge -> edge.to in facts.dominators[edge.from].orEmpty() }
@@ -90,21 +87,15 @@ internal class StructuredLoopRecognizer {
         return LoopRecognition(regions, rejections)
     }
 
-    fun contexts(
-        regions: List<StructuredRegion.While>,
-        facts: ControlFlowFacts,
-        expression: ExpressionAnalysis,
-    ): Map<BasicBlockId, LoopFlowContext> = regions.associate { loop ->
-        loop.header to LoopFlowContext(
-            loop = loop,
-            continueTargets = transparentLoopContinueTargets(loop, facts, expression),
-        )
-    }
+    fun contexts(regions: List<StructuredRegion.While>, facts: ControlFlowFacts, expression: ExpressionAnalysis): Map<BasicBlockId, LoopFlowContext> =
+        regions.associate { loop ->
+            loop.header to LoopFlowContext(
+                loop = loop,
+                continueTargets = transparentLoopContinueTargets(loop, facts, expression),
+            )
+        }
 
-    fun naturalContexts(
-        facts: ControlFlowFacts,
-        expression: ExpressionAnalysis,
-    ): List<NaturalLoopFlowContext> {
+    fun naturalContexts(facts: ControlFlowFacts, expression: ExpressionAnalysis): List<NaturalLoopFlowContext> {
         val backEdges = facts.normalEdges.filter { edge -> edge.to in facts.dominators[edge.from].orEmpty() }
         return backEdges.groupBy { it.to }.mapNotNull { (header, latchEdges) ->
             val loopBlocks = naturalLoopBlocks(header, latchEdges.map { it.from }, facts) ?: return@mapNotNull null
@@ -133,11 +124,7 @@ internal class StructuredLoopRecognizer {
         }
     }
 
-    private fun naturalLoopBlocks(
-        header: BasicBlockId,
-        latches: Collection<BasicBlockId>,
-        facts: ControlFlowFacts,
-    ): Set<BasicBlockId>? {
+    private fun naturalLoopBlocks(header: BasicBlockId, latches: Collection<BasicBlockId>, facts: ControlFlowFacts): Set<BasicBlockId>? {
         val loopBlocks = linkedSetOf(header)
         val queue = ArrayDeque<BasicBlockId>()
         latches.distinct().forEach {
@@ -152,23 +139,15 @@ internal class StructuredLoopRecognizer {
         return loopBlocks.takeIf { blocks -> blocks.all { header in facts.dominators[it].orEmpty() } }
     }
 
-    private fun transparentLoopContinueTargets(
-        loop: StructuredRegion.While,
-        facts: ControlFlowFacts,
-        expression: ExpressionAnalysis,
-    ): Set<BasicBlockId> = transparentLoopContinueTargets(
-        header = loop.header,
-        bodyBlocks = loop.bodyBlocks,
-        facts = facts,
-        expression = expression,
-    )
+    private fun transparentLoopContinueTargets(loop: StructuredRegion.While, facts: ControlFlowFacts, expression: ExpressionAnalysis): Set<BasicBlockId> =
+        transparentLoopContinueTargets(
+            header = loop.header,
+            bodyBlocks = loop.bodyBlocks,
+            facts = facts,
+            expression = expression,
+        )
 
-    private fun transparentLoopContinueTargets(
-        header: BasicBlockId,
-        bodyBlocks: Set<BasicBlockId>,
-        facts: ControlFlowFacts,
-        expression: ExpressionAnalysis,
-    ): Set<BasicBlockId> {
+    private fun transparentLoopContinueTargets(header: BasicBlockId, bodyBlocks: Set<BasicBlockId>, facts: ControlFlowFacts, expression: ExpressionAnalysis): Set<BasicBlockId> {
         val valuesByBlock = expression.values.values.asSequence()
             .filter { it.instructionIndices.isNotEmpty() }
             .groupBy { facts.instructionToBlock.getOrNull(it.instructionIndices.last()) }

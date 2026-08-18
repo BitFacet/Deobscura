@@ -6,13 +6,8 @@ import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import java.util.*
 
 /** Recognizes switch ownership/continuations; transfer semantics are delegated separately. */
-internal class StructuredSwitchRecognizer(
-    private val transferClassifier: RegionTransferClassifier = RegionTransferClassifier(),
-) {
-    fun recognize(
-        facts: ControlFlowFacts,
-        loopContexts: List<NaturalLoopFlowContext>,
-    ): SwitchRecognition {
+internal class StructuredSwitchRecognizer(private val transferClassifier: RegionTransferClassifier = RegionTransferClassifier()) {
+    fun recognize(facts: ControlFlowFacts, loopContexts: List<NaturalLoopFlowContext>): SwitchRecognition {
         val regions = mutableListOf<StructuredRegion.Switch>()
         val rejections = linkedMapOf<BasicBlockId, UnstructuredControlFlowReason>()
 
@@ -173,25 +168,16 @@ internal class StructuredSwitchRecognizer(
         return cases.all { exitsSwitch(it.entry, linkedSetOf()) }
     }
 
-    private fun switchContinuation(
-        header: BasicBlockId,
-        entries: Set<BasicBlockId>,
-        facts: ControlFlowFacts,
-        containingLoop: NaturalLoopFlowContext?,
-    ): BasicBlockId? {
-        fun isValidContinuation(candidate: BasicBlockId): Boolean =
-            (containingLoop == null || candidate in containingLoop.blocks) &&
-                    !reachesOtherCaseEntryBeforeHeader(candidate, header, entries, facts.outgoing)
+    private fun switchContinuation(header: BasicBlockId, entries: Set<BasicBlockId>, facts: ControlFlowFacts, containingLoop: NaturalLoopFlowContext?): BasicBlockId? {
+        fun isValidContinuation(candidate: BasicBlockId): Boolean = (containingLoop == null || candidate in containingLoop.blocks) &&
+                !reachesOtherCaseEntryBeforeHeader(candidate, header, entries, facts.outgoing)
 
-        immediatePostDominator(header, facts.postDominators)?.let { candidate ->
-            if (isValidContinuation(candidate)) return candidate
-        }
+        immediatePostDominator(header, facts.postDominators)?.let { candidate -> if (isValidContinuation(candidate)) return candidate }
 
         val reachableFromHeader = reachableFrom(header, facts.outgoing)
         val externallySharedEntries = entries.filter { candidate ->
-            isValidContinuation(candidate) && facts.incoming[candidate].orEmpty().any { edge ->
-                edge.from != header && edge.from !in reachableFromHeader
-            }
+            isValidContinuation(candidate)
+                    && facts.incoming[candidate].orEmpty().any { edge -> edge.from != header && edge.from !in reachableFromHeader }
         }
         if (externallySharedEntries.size == 1) return externallySharedEntries.single()
 
@@ -291,11 +277,7 @@ internal class StructuredSwitchRecognizer(
         return result
     }
 
-    private fun reachableBeforeHeader(
-        start: BasicBlockId,
-        header: BasicBlockId,
-        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
-    ): Set<BasicBlockId> {
+    private fun reachableBeforeHeader(start: BasicBlockId, header: BasicBlockId, outgoing: Map<BasicBlockId, List<ControlFlowEdge>>): Set<BasicBlockId> {
         val result = linkedSetOf<BasicBlockId>()
         val queue = ArrayDeque<BasicBlockId>()
         queue.add(start)
@@ -307,10 +289,7 @@ internal class StructuredSwitchRecognizer(
         return result
     }
 
-    private fun reachableFrom(
-        start: BasicBlockId,
-        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
-    ): Set<BasicBlockId> {
+    private fun reachableFrom(start: BasicBlockId, outgoing: Map<BasicBlockId, List<ControlFlowEdge>>): Set<BasicBlockId> {
         val result = linkedSetOf<BasicBlockId>()
         val queue = ArrayDeque<BasicBlockId>()
         queue.add(start)

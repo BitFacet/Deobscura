@@ -36,7 +36,6 @@ data class StructuredControlFlowAnalysis(
     /** Headers intentionally left in block/goto form, with the first proven rejection reason. */
     val unstructured: List<UnstructuredControlFlowDiagnostic> = emptyList(),
 ) {
-    val regionHeaders: Set<BasicBlockId> = regions.mapTo(linkedSetOf()) { it.header }
     val unstructuredConditionalCount: Int
         get() = unstructured.count { it.kind == UnstructuredControlFlowKind.CONDITIONAL }
     val unstructuredExceptionRegionCount: Int

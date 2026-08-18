@@ -233,7 +233,7 @@ internal class StructuredConditionalRecognizer {
         target: BasicBlockId,
         loop: StructuredRegion.While,
         outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
-        transferTargets: Set<BasicBlockId>,
+        transferTargets: Set<BasicBlockId>
     ): Boolean {
         if (start == target) return true
         val seen = hashSetOf<BasicBlockId>()
@@ -320,8 +320,7 @@ internal class StructuredConditionalRecognizer {
                 allowedBlocks = loop.bodyBlocks,
                 outgoing = outgoing,
             )
-            val conditionalTransfers = conditionalArm is ArmCollection.Success &&
-                    singleEntryArm(conditionalArm.blocks, header, predecessors, ignoredPredecessors)
+            val conditionalTransfers = conditionalArm is ArmCollection.Success && singleEntryArm(conditionalArm.blocks, header, predecessors, ignoredPredecessors)
 
             val fallthroughArm = collectTransferArm(
                 start = fallthroughTarget,
@@ -331,8 +330,7 @@ internal class StructuredConditionalRecognizer {
                 allowedBlocks = loop.bodyBlocks,
                 outgoing = outgoing,
             )
-            val fallthroughTransfers = fallthroughArm is ArmCollection.Success &&
-                    singleEntryArm(fallthroughArm.blocks, header, predecessors, ignoredPredecessors)
+            val fallthroughTransfers = fallthroughArm is ArmCollection.Success && singleEntryArm(fallthroughArm.blocks, header, predecessors, ignoredPredecessors)
 
             var effectiveConditionalTransfers = conditionalTransfers
             var effectiveFallthroughTransfers = fallthroughTransfers
@@ -342,9 +340,9 @@ internal class StructuredConditionalRecognizer {
                 when (
                     selectLoopContinuation(
                         conditionalTarget = conditionalTarget,
-                        conditionalArm = (conditionalArm as ArmCollection.Success).blocks,
+                        conditionalArm = conditionalArm.blocks,
                         fallthroughTarget = fallthroughTarget,
-                        fallthroughArm = (fallthroughArm as ArmCollection.Success).blocks,
+                        fallthroughArm = fallthroughArm.blocks,
                         context = context,
                     )
                 ) {
@@ -422,9 +420,10 @@ internal class StructuredConditionalRecognizer {
         val conditionalIsNaturalTail = conditionalTarget != context.loop.header && conditionalTarget in context.continueTargets
         val fallthroughIsNaturalTail = fallthroughTarget != context.loop.header && fallthroughTarget in context.continueTargets
         if (conditionalIsNaturalTail != fallthroughIsNaturalTail) {
-            return if (conditionalIsNaturalTail) LoopContinuation.CONDITIONAL else LoopContinuation.FALLTHROUGH
+            return if (conditionalIsNaturalTail) LoopContinuation.CONDITIONAL
+            else LoopContinuation.FALLTHROUGH
         }
-        if (conditionalIsNaturalTail && fallthroughIsNaturalTail) return LoopContinuation.AMBIGUOUS
+        if (conditionalIsNaturalTail) return LoopContinuation.AMBIGUOUS
 
         val conditionalEndsBeforeFallthrough = armIsForwardPrefix(conditionalTarget, conditionalArm, fallthroughTarget)
         val fallthroughEndsBeforeConditional = armIsForwardPrefix(fallthroughTarget, fallthroughArm, conditionalTarget)
@@ -435,11 +434,7 @@ internal class StructuredConditionalRecognizer {
         }
     }
 
-    private fun armIsForwardPrefix(
-        entry: BasicBlockId,
-        blocks: Set<BasicBlockId>,
-        continuation: BasicBlockId,
-    ): Boolean {
+    private fun armIsForwardPrefix(entry: BasicBlockId, blocks: Set<BasicBlockId>, continuation: BasicBlockId): Boolean {
         if (blocks.isEmpty() || entry !in blocks) return false
         if (entry.value >= continuation.value) return false
         return blocks.all { it.value >= entry.value && it.value < continuation.value }
@@ -592,10 +587,8 @@ internal class StructuredConditionalRecognizer {
                 if (successor != join) queue.addLast(successor)
             }
         }
-        if (result.any { block ->
-                outgoing[block].orEmpty().distinctTargets().any { it.to !in result && it.to != join }
-            }
-        ) return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_HAS_OTHER_EXIT)
+        if (result.any { block -> outgoing[block].orEmpty().distinctTargets().any { it.to !in result && it.to != join } })
+            return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_HAS_OTHER_EXIT)
         return ArmCollection.Success(result)
     }
 
@@ -603,10 +596,8 @@ internal class StructuredConditionalRecognizer {
         arm: Set<BasicBlockId>,
         header: BasicBlockId,
         predecessors: Map<BasicBlockId, List<BasicBlockId>>,
-        ignoredPredecessors: Set<BasicBlockId> = emptySet(),
-    ): Boolean = arm.all { block ->
-        predecessors[block].orEmpty().all { it == header || it in arm || it in ignoredPredecessors }
-    }
+        ignoredPredecessors: Set<BasicBlockId> = emptySet()
+    ): Boolean = arm.all { block -> predecessors[block].orEmpty().all { it == header || it in arm || it in ignoredPredecessors } }
 
 
     private fun StructuredCondition.negated(): StructuredCondition = when (this) {

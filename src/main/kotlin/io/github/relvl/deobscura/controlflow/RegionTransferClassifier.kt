@@ -18,25 +18,14 @@ internal class RegionTransferClassifier {
     ): List<StructuredRegionTransfer>? {
         if (caseBlocks.isEmpty()) {
             return when {
-                entry == continuation -> listOf(
-                    StructuredRegionTransfer(header, continuation, StructuredRegionTransferKind.NORMAL_SWITCH_COMPLETION),
-                )
-
-                loopContext?.exit == entry -> listOf(
-                    StructuredRegionTransfer(header, entry, StructuredRegionTransferKind.BREAK_LOOP),
-                )
-
-                entry in loopContext?.continueTargets.orEmpty() -> listOf(
-                    StructuredRegionTransfer(header, entry, StructuredRegionTransferKind.CONTINUE_LOOP),
-                )
-
+                entry == continuation -> listOf(StructuredRegionTransfer(header, continuation, StructuredRegionTransferKind.NORMAL_SWITCH_COMPLETION))
+                loopContext?.exit == entry -> listOf(StructuredRegionTransfer(header, entry, StructuredRegionTransferKind.BREAK_LOOP))
+                entry in loopContext?.continueTargets.orEmpty() -> listOf(StructuredRegionTransfer(header, entry, StructuredRegionTransferKind.CONTINUE_LOOP))
                 else -> emptyList()
             }
         }
 
-        val boundaryEdges = caseBlocks.sortedBy { it.value }.flatMap { block ->
-            outgoing[block].orEmpty().distinctTargets().filter { edge -> edge.to !in caseBlocks }
-        }
+        val boundaryEdges = caseBlocks.sortedBy { it.value }.flatMap { block -> outgoing[block].orEmpty().distinctTargets().filter { edge -> edge.to !in caseBlocks } }
         val transfers = mutableListOf<StructuredRegionTransfer>()
         caseBlocks.sortedBy { it.value }.forEach { block ->
             if (block in explicitTerminalBlocks) {
@@ -52,9 +41,7 @@ internal class RegionTransferClassifier {
                 caseEntries = caseEntries,
                 explicitTerminalBlocks = explicitTerminalBlocks,
                 loopContext = loopContext,
-                hasAlternativePath = outgoing[edge.from].orEmpty().distinctTargets().any { other ->
-                    other.to != edge.to && (other.to in caseBlocks || other.to in caseEntries)
-                },
+                hasAlternativePath = outgoing[edge.from].orEmpty().distinctTargets().any { other -> other.to != edge.to && (other.to in caseBlocks || other.to in caseEntries) },
             ) ?: return null
             transfers += transfer
         }
@@ -79,10 +66,7 @@ internal class RegionTransferClassifier {
         val target = edge.to
         if (target == header) return null
         if (target == continuation) {
-            val kind = if (
-                edge.kind == ControlFlowEdgeKind.JUMP ||
-                (edge.kind == ControlFlowEdgeKind.CONDITIONAL && hasAlternativePath)
-            ) {
+            val kind = if (edge.kind == ControlFlowEdgeKind.JUMP || (edge.kind == ControlFlowEdgeKind.CONDITIONAL && hasAlternativePath)) {
                 StructuredRegionTransferKind.BREAK_SWITCH
             } else {
                 StructuredRegionTransferKind.NORMAL_SWITCH_COMPLETION

@@ -21,7 +21,7 @@ class StructuredControlFlowAnalyzer {
         flow: SsaControlFlowGraph,
         expression: ExpressionAnalysis,
         legacySubroutineNormalized: Boolean = false,
-        legacySubroutineProvenance: LegacySubroutineProvenance? = null,
+        legacySubroutineProvenance: LegacySubroutineProvenance? = null
     ): StructuredControlFlowAnalysis {
         val facts = ControlFlowFacts.build(graph, flow, expression)
             ?: return StructuredControlFlowAnalysis(emptyList(), 0, 0)
@@ -110,7 +110,7 @@ class StructuredControlFlowAnalyzer {
                     UnstructuredControlFlowDiagnostic(
                         header,
                         UnstructuredControlFlowKind.SWITCH,
-                        switchRecognition.rejections[header] ?: UnstructuredControlFlowReason.UNSUPPORTED_SHAPE,
+                        switchRecognition.rejections[header] ?: UnstructuredControlFlowReason.UNSUPPORTED_SHAPE
                     ),
                 )
             }
@@ -362,12 +362,11 @@ class StructuredControlFlowAnalyzer {
         block: BasicBlockId,
         valuesByBlock: Map<BasicBlockId?, List<ExpressionValue>>,
         statementsByBlock: Map<BasicBlockId?, List<ExpressionStatement>>,
-        expression: ExpressionAnalysis,
+        expression: ExpressionAnalysis
     ): Boolean {
         if (valuesByBlock[block].orEmpty().any { it.id !in expression.materialization.inlineValues }) return false
         val statements = statementsByBlock[block].orEmpty()
-        return statements.size == 1 && statements.single() is ExpressionStatement.Branch &&
-                (statements.single() as ExpressionStatement.Branch).condition != null
+        return statements.size == 1 && statements.single() is ExpressionStatement.Branch && (statements.single() as ExpressionStatement.Branch).condition != null
     }
 
     private fun StructuredCondition.negated(): StructuredCondition = when (this) {

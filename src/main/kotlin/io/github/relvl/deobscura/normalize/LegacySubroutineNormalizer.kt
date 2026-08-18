@@ -423,7 +423,9 @@ data class LegacySubroutineNormalizationResult(
 data class LegacySubroutineProvenance(
     val instructionOrigins: List<LegacyInstructionOrigin>,
 ) {
-    init { require(instructionOrigins.isNotEmpty()) }
+    init {
+        require(instructionOrigins.isNotEmpty())
+    }
 
     fun originAt(instructionIndex: Int): LegacyInstructionOrigin? = instructionOrigins.getOrNull(instructionIndex)
 }

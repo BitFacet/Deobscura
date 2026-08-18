@@ -19,8 +19,6 @@ internal data class ExceptionTopology(
     val catchAllPeersByHandlerInstructionIndex: Map<Int, List<ExceptionGroupTopology>>,
 )
 
-
-
 /**
  * Exception-table topology belonging to one proven legacy finally handler. The duplicated cleanup
  * body itself is proved separately; this descriptor only groups the physical catch-all family,
@@ -81,13 +79,11 @@ internal fun buildLegacyFinallyFamilyTopology(
     val protectedBlocks = groups.flatMapTo(linkedSetOf()) { candidate ->
         extendExceptionProtectedScopeWithTerminalTransfers(candidate.protectedBlocks, facts)
     } - excludedBlocks - continuation
+
     val protectedRanges = groups.flatMap { it.group.segments }
         .map { StructuredProtectedRange(it.range.start, it.range.endExclusive) }
         .distinct()
-        .sortedWith(
-            compareBy<StructuredProtectedRange> { it.startInstructionIndex }
-                .thenBy { it.endInstructionIndexExclusive },
-        )
+        .sortedWith(compareBy<StructuredProtectedRange> { it.startInstructionIndex }.thenBy { it.endInstructionIndexExclusive })
 
     return LegacyFinallyFamilyTopologyBuild(
         topology = LegacyFinallyFamilyTopology(
@@ -100,37 +96,37 @@ internal fun buildLegacyFinallyFamilyTopology(
     )
 }
 
-internal data class ProtectedRange(val start: Int, val endExclusive: Int)
+/** Half-open instruction interval used while grouping raw exception-table entries. */
+internal data class ProtectedRange(
+    val start: Int,
+    val endExclusive: Int
+)
 
 internal data class ExceptionTableSegment(
     val range: ProtectedRange,
     val handlers: List<RawExceptionHandler>,
 )
 
+/** Adjacent physical segments that share one handler signature and act as one protected group. */
 internal data class ExceptionTableGroup(
     val segments: List<ExceptionTableSegment>,
-) {
-    val envelope: ProtectedRange = ProtectedRange(
-        segments.first().range.start,
-        segments.last().range.endExclusive,
-    )
+    val envelope: ProtectedRange = ProtectedRange(segments.first().range.start, segments.last().range.endExclusive),
     val handlers: List<RawExceptionHandler> = segments.first().handlers
-}
+)
 
+/** Physical group projected onto CFG ownership and concrete handler entries. */
 internal data class ExceptionGroupTopology(
     val group: ExceptionTableGroup,
     val protectedBlocks: Set<BasicBlockId>,
     val handlerEntries: Set<BasicBlockId>,
 )
 
-
 internal data class ExceptionScopeNesting<T>(
     val parentByScope: Map<T, T>,
     val childrenByScope: Map<T, List<T>>,
     val crossingPairs: List<Pair<T, T>>,
 ) {
-    val isLaminar: Boolean
-        get() = crossingPairs.isEmpty()
+    val isLaminar: Boolean get() = crossingPairs.isEmpty()
 }
 
 /**
@@ -138,10 +134,7 @@ internal data class ExceptionScopeNesting<T>(
  * sets. Equal scopes remain peers; strict containment produces one direct parent, and partial
  * overlap is reported explicitly instead of being forced into a tree.
  */
-internal fun <T> buildExceptionScopeNesting(
-    scopes: List<T>,
-    blocksOf: (T) -> Set<BasicBlockId>,
-): ExceptionScopeNesting<T> {
+internal fun <T> buildExceptionScopeNesting(scopes: List<T>, blocksOf: (T) -> Set<BasicBlockId>): ExceptionScopeNesting<T> {
     if (scopes.isEmpty()) {
         return ExceptionScopeNesting(emptyMap(), emptyMap(), emptyList())
     }
@@ -171,10 +164,7 @@ internal fun <T> buildExceptionScopeNesting(
                 val candidateBlocks = blocks.getValue(candidate)
                 candidateBlocks.size > scopeBlocks.size && candidateBlocks.containsAll(scopeBlocks)
             }
-            .minWithOrNull(
-                compareBy<T> { candidate -> blocks.getValue(candidate).size }
-                    .thenBy { candidate -> scopes.indexOf(candidate) },
-            )
+            .minWithOrNull(compareBy<T> { candidate -> blocks.getValue(candidate).size }.thenBy { candidate -> scopes.indexOf(candidate) })
         if (parent != null) parentByScope[scope] = parent
     }
 
@@ -250,7 +240,7 @@ internal fun buildTypedCatchScopeTopologies(
     groups: List<ExceptionGroupTopology>,
     labelPositions: Map<RawLabelId, Int>,
     facts: ControlFlowFacts,
-    excludedBlocks: Set<BasicBlockId> = emptySet(),
+    excludedBlocks: Set<BasicBlockId> = emptySet()
 ): TypedCatchTopologyBuild {
     if (groups.isEmpty()) return TypedCatchTopologyBuild(
         topology = TypedCatchScopeTopologyForest(
@@ -304,16 +294,11 @@ internal fun buildTypedCatchScopeTopologies(
         val protectedRanges = scopeGroups.flatMap { it.group.segments }
             .map { StructuredProtectedRange(it.range.start, it.range.endExclusive) }
             .distinct()
-            .sortedWith(
-                compareBy<StructuredProtectedRange> { it.startInstructionIndex }
-                    .thenBy { it.endInstructionIndexExclusive },
-            )
+            .sortedWith(compareBy<StructuredProtectedRange> { it.startInstructionIndex }.thenBy { it.endInstructionIndexExclusive })
         scopes += TypedCatchScopeTopology(
             header = header,
             protectedBlocks = protectedBlocks,
-            handlersByEntry = entries.associate { (entry, _) ->
-                entry to handlersByEntry.getValue(entry).distinct()
-            },
+            handlersByEntry = entries.associate { (entry, _) -> entry to handlersByEntry.getValue(entry).distinct() },
             protectedRanges = protectedRanges,
         )
     }
@@ -332,10 +317,7 @@ internal fun buildTypedCatchScopeTopologies(
  * Includes source-terminal transfer blocks immediately following a physical protected range when
  * every normal predecessor of such a block is already owned by the protected scope.
  */
-internal fun extendExceptionProtectedScopeWithTerminalTransfers(
-    protectedBlocks: Set<BasicBlockId>,
-    facts: ControlFlowFacts,
-): Set<BasicBlockId> {
+internal fun extendExceptionProtectedScopeWithTerminalTransfers(protectedBlocks: Set<BasicBlockId>, facts: ControlFlowFacts): Set<BasicBlockId> {
     val result = protectedBlocks.toMutableSet()
     var changed: Boolean
     do {
@@ -365,23 +347,15 @@ internal data class ExceptionHandlerSignature(
 internal fun exceptionLabelPosition(positions: Map<RawLabelId, Int>, label: RawLabelId): Int =
     requireNotNull(positions[label]) { "Unknown exception-table label ${label.value}." }
 
-internal fun exceptionHandlerSignature(
-    handlers: List<RawExceptionHandler>,
-    labelPositions: Map<RawLabelId, Int>,
-): List<ExceptionHandlerSignature> = handlers
-    .map { handler ->
-        ExceptionHandlerSignature(exceptionLabelPosition(labelPositions, handler.handler), handler.catchType)
-    }
-    .sortedWith(
-        compareBy<ExceptionHandlerSignature> { it.handlerInstructionIndex }
-            .thenBy { it.catchType ?: "" },
-    )
+internal fun exceptionHandlerSignature(handlers: List<RawExceptionHandler>, labelPositions: Map<RawLabelId, Int>): List<ExceptionHandlerSignature> =
+    handlers
+        .map { handler -> ExceptionHandlerSignature(exceptionLabelPosition(labelPositions, handler.handler), handler.catchType) }
+        .sortedWith(compareBy<ExceptionHandlerSignature> { it.handlerInstructionIndex }.thenBy { it.catchType ?: "" })
 
+/** Builds the physical exception topology once so source recognizers do not reinterpret raw tables. */
 internal object ExceptionTopologyBuilder {
-    fun build(
-        graph: ControlFlowGraph,
-        facts: ControlFlowFacts,
-    ): ExceptionTopology {
+    /** Groups raw table ranges, projects them to blocks, and indexes shared catch-all handlers. */
+    fun build(graph: ControlFlowGraph, facts: ControlFlowFacts): ExceptionTopology {
         val labelPositions = graph.code.labels.associate { it.id to it.instructionIndex }
         val segments = graph.code.exceptionHandlers
             .groupBy { handler ->
@@ -409,23 +383,12 @@ internal object ExceptionTopologyBuilder {
         )
     }
 
-    private fun protectedBlocks(
-        range: ProtectedRange,
-        graph: ControlFlowGraph,
-        facts: ControlFlowFacts,
-    ): Set<BasicBlockId> = graph.blocks.asSequence()
-        .filter { block ->
-            block.id in facts.blocks &&
-                block.startInstructionIndex < range.endExclusive &&
-                block.endInstructionIndexExclusive > range.start
-        }
-        .mapTo(linkedSetOf()) { it.id }
+    private fun protectedBlocks(range: ProtectedRange, graph: ControlFlowGraph, facts: ControlFlowFacts): Set<BasicBlockId> =
+        graph.blocks.asSequence()
+            .filter { block -> block.id in facts.blocks && block.startInstructionIndex < range.endExclusive && block.endInstructionIndexExclusive > range.start }
+            .mapTo(linkedSetOf()) { it.id }
 
-    private fun coalesceSegments(
-        segments: List<ExceptionTableSegment>,
-        labelPositions: Map<RawLabelId, Int>,
-        facts: ControlFlowFacts,
-    ): List<ExceptionTableGroup> {
+    private fun coalesceSegments(segments: List<ExceptionTableSegment>, labelPositions: Map<RawLabelId, Int>, facts: ControlFlowFacts): List<ExceptionTableGroup> {
         if (segments.isEmpty()) return emptyList()
 
         val result = mutableListOf<ExceptionTableGroup>()
@@ -442,15 +405,8 @@ internal object ExceptionTopologyBuilder {
         return result
     }
 
-    private fun canCoalesce(
-        current: ExceptionTableGroup,
-        next: ExceptionTableSegment,
-        labelPositions: Map<RawLabelId, Int>,
-        facts: ControlFlowFacts,
-    ): Boolean {
-        if (exceptionHandlerSignature(current.handlers, labelPositions) !=
-            exceptionHandlerSignature(next.handlers, labelPositions)
-        ) {
+    private fun canCoalesce(current: ExceptionTableGroup, next: ExceptionTableSegment, labelPositions: Map<RawLabelId, Int>, facts: ControlFlowFacts): Boolean {
+        if (exceptionHandlerSignature(current.handlers, labelPositions) != exceptionHandlerSignature(next.handlers, labelPositions)) {
             return false
         }
         val currentEnd = current.envelope.endExclusive
@@ -463,19 +419,14 @@ internal object ExceptionTopologyBuilder {
         return gapBlocks.isNotEmpty() && gapBlocks.all { it in facts.explicitTerminalBlocks }
     }
 
-    private fun buildCatchAllPeerIndex(
-        groups: List<ExceptionGroupTopology>,
-        labelPositions: Map<RawLabelId, Int>,
-    ): Map<Int, List<ExceptionGroupTopology>> {
+    private fun buildCatchAllPeerIndex(groups: List<ExceptionGroupTopology>, labelPositions: Map<RawLabelId, Int>): Map<Int, List<ExceptionGroupTopology>> {
         val peers = linkedMapOf<Int, MutableList<ExceptionGroupTopology>>()
         for (topology in groups) {
             topology.group.handlers.asSequence()
                 .filter { it.catchType == null }
                 .map { exceptionLabelPosition(labelPositions, it.handler) }
                 .distinct()
-                .forEach { handlerInstructionIndex ->
-                    peers.getOrPut(handlerInstructionIndex) { mutableListOf() } += topology
-                }
+                .forEach { handlerInstructionIndex -> peers.getOrPut(handlerInstructionIndex) { mutableListOf() } += topology }
         }
         return peers.mapValues { (_, candidates) -> candidates.sortedBy { it.group.envelope.start } }
     }
