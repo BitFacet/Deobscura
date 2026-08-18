@@ -80,8 +80,8 @@ class SsaControlFlowCanonicalizer {
             .mapTo(mutableSetOf()) { it.endInstructionIndexExclusive - 1 }
         val removed = analysis.operations.filter { operation ->
             operation.instructionIndex in activeTerminalIndexes &&
-                    operation.instruction is RawBranchInstruction &&
-                    operation.instruction.opcode.mnemonic in DIRECT_GOTOS
+                operation.instruction is RawBranchInstruction &&
+                operation.instruction.opcode.mnemonic in DIRECT_GOTOS
         }.toSet()
         if (removed.isEmpty()) return GotoRemoval(analysis, 0)
 

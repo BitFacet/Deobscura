@@ -16,18 +16,25 @@ internal class ModernTryCatchFinallyRecognizer(
         header: BasicBlockId,
         exceptionTopology: ExceptionTopology,
         facts: ControlFlowFacts,
+        rejectionTrace: MutableList<String>? = null,
     ): ModernTryCatchFinallyRecognition? {
+        fun reject(reason: String): ModernTryCatchFinallyRecognition? {
+            rejectionTrace?.add(reason)
+            return null
+        }
+
         val group = topology.group
         val catchAllHandlers = group.handlers.filter { it.catchType == null }
         val typedHandlers = group.handlers.filter { it.catchType != null }
-        if (catchAllHandlers.size != 1 || typedHandlers.isEmpty()) return null
+        if (catchAllHandlers.size != 1 || typedHandlers.isEmpty()) return reject("handler-set")
 
         val catchAll = catchAllHandlers.single()
         val handlerInstructionIndex = exceptionLabelPosition(exceptionTopology.labelPositions, catchAll.handler)
-        val handlerEntry = facts.instructionToBlock.getOrNull(handlerInstructionIndex) ?: return null
+        val handlerEntry = facts.instructionToBlock.getOrNull(handlerInstructionIndex) ?: return reject("handler-entry")
 
         val peers = exceptionTopology.catchAllPeersByHandlerInstructionIndex[handlerInstructionIndex].orEmpty()
-        if (peers.isEmpty() || peers.first() !== topology) return null
+        if (peers.isEmpty()) return reject("no-catch-all-peers")
+        if (peers.first() !== topology) return reject("not-first-catch-all-peer")
 
         // The physical table splits one source try/catch/finally around typed handlers. Before we
         // know the normal finally copies, use the peer union only as the boundary set for proving
@@ -35,13 +42,22 @@ internal class ModernTryCatchFinallyRecognizer(
         val familyProtectedBlocks = peers.flatMapTo(linkedSetOf()) { candidate ->
             extendExceptionProtectedScopeWithTerminalTransfers(candidate.protectedBlocks, facts)
         }
-        val finallyShape = ModernFinallyRecognizer.analyzeBranchingFinallyShape(
+        val finallyShapeTrace = mutableListOf<String>()
+        val finallyShape = ModernFinallyRecognizer.analyzeLinearFinallyShape(
             graph = graph,
             handlerEntry = handlerEntry,
             protectedBlocks = familyProtectedBlocks,
             facts = facts,
-        ) ?: return null
-        val continuation = finallyShape.continuation ?: return null
+        ) ?: ModernFinallyRecognizer.analyzeBranchingFinallyShape(
+            graph = graph,
+            handlerEntry = handlerEntry,
+            protectedBlocks = familyProtectedBlocks,
+            facts = facts,
+            rejectionTrace = finallyShapeTrace,
+            allowTerminalAndGuardElidedNormalCopies = true,
+            excludeExceptionalCleanupFromNormalBoundaries = true,
+        ) ?: return reject("finally-shape:${finallyShapeTrace.lastOrNull() ?: "unknown"}")
+        val continuation = finallyShape.continuation ?: return reject("finally-continuation")
 
         val finallyCopyBlocks = finallyShape.normalCopies.flatMapTo(linkedSetOf()) { it.blocks }
         val familyBuild = buildFinallyFamilyTopology(
@@ -52,15 +68,15 @@ internal class ModernTryCatchFinallyRecognizer(
             continuation = continuation,
             facts = facts,
         )
-        val family = familyBuild.topology ?: return null
-        if (family.mixedGroups.isEmpty()) return null
+        val family = familyBuild.topology ?: return reject("family:${familyBuild.failure ?: "unknown"}")
+        if (family.mixedGroups.isEmpty()) return reject("no-mixed-groups")
 
         val mixedSignatures = family.mixedGroups
             .map { candidate -> exceptionHandlerSignature(candidate.group.handlers, exceptionTopology.labelPositions) }
             .distinct()
-        if (mixedSignatures.size != 1) return null
+        if (mixedSignatures.size != 1) return reject("mixed-signature-count=${mixedSignatures.size}")
 
-        val sourceScope = family.typedTopology.scopes.singleOrNull() ?: return null
+        val sourceScope = family.typedTopology.scopes.singleOrNull() ?: return reject("typed-scope-count=${family.typedTopology.scopes.size}")
         val sourceTryBlocks = family.mixedGroups.flatMapTo(linkedSetOf()) { candidate ->
             extendExceptionProtectedScopeWithTerminalTransfers(candidate.protectedBlocks, facts)
         } - finallyShape.handlerBlocks
@@ -90,10 +106,10 @@ internal class ModernTryCatchFinallyRecognizer(
             supportsCatchExit = { _, _ -> true },
             requiredContinuation = continuation,
         )
-        val catches = typedScope.proof?.catches ?: return null
+        val catches = typedScope.proof?.catches ?: return reject("typed-catch:${typedScope.failure ?: "unknown"}")
 
         val protectedRanges = family.protectedRanges
-        if (protectedRanges.isEmpty()) return null
+        if (protectedRanges.isEmpty()) return reject("protected-ranges-empty")
         return ModernTryCatchFinallyRecognition(
             region = StructuredRegion.TryCatchFinally(
                 header = header,

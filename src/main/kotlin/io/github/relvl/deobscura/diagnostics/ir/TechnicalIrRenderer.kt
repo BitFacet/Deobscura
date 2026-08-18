@@ -25,13 +25,13 @@ class TechnicalIrRenderer(
         appendLine("  optimizer-iterations: ${stats.iterationCount}")
         appendLine(
             "  ssa-size: " +
-                    "initial=${analysis.initialSsa.values.size} values/${analysis.initialSsa.operations.size} ops/${analysis.initialSsa.phiNodes.size} phi, " +
-                    "final=${analysis.ssa.values.size} values/${analysis.ssa.operations.size} ops/${analysis.ssa.phiNodes.size} phi",
+                "initial=${analysis.initialSsa.values.size} values/${analysis.initialSsa.operations.size} ops/${analysis.initialSsa.phiNodes.size} phi, " +
+                "final=${analysis.ssa.values.size} values/${analysis.ssa.operations.size} ops/${analysis.ssa.phiNodes.size} phi",
         )
         appendLine(
             "  optimization: cfg-pruned-ops=${stats.removedOperationCount}, dead-ops=${stats.deadOperationCount}, " +
-                    "dead-values=${stats.deadValueCount}, passthrough-blocks=${stats.canonicalizedPassthroughBlockCount}, " +
-                    "control-flow-ops=${stats.removedControlFlowOperationCount}",
+                "dead-values=${stats.deadValueCount}, passthrough-blocks=${stats.canonicalizedPassthroughBlockCount}, " +
+                "control-flow-ops=${stats.removedControlFlowOperationCount}",
         )
         appendLine()
 
@@ -78,9 +78,9 @@ class TechnicalIrRenderer(
             phiByBlock[block].orEmpty().forEach { phi ->
                 appendLine(
                     "      v${phi.output.value}:${formatValueType(analysis.ssa.typeOf(phi.output))} = phi ${formatPhiLocation(phi.location)} " +
-                            phi.inputs.joinToString(prefix = "[", postfix = "]") { input ->
-                                input.predecessor?.let { "B${it.value}=v${input.value.value}" } ?: "origin=v${input.value.value}"
-                            },
+                        phi.inputs.joinToString(prefix = "[", postfix = "]") { input ->
+                            input.predecessor?.let { "B${it.value}=v${input.value.value}" } ?: "origin=v${input.value.value}"
+                        },
                 )
             }
             operationsByBlock[block].orEmpty().sortedBy { it.instructionIndex }.forEach { operation ->

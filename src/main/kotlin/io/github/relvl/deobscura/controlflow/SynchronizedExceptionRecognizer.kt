@@ -82,11 +82,11 @@ internal object SynchronizedExceptionRecognizer {
         val monitorEnterBlock = facts.instructionToBlock.getOrNull(monitorEnterInstructionIndex) ?: return null
         val cleanupCompanions = allGroups.filter { candidate ->
             candidate !== topology &&
-                    candidate.group.handlers.size == 1 &&
-                    candidate.group.handlers.single().catchType == null &&
-                    candidate.group.envelope.start == handlerStart &&
-                    candidate.group.envelope.endExclusive == handlerShape.monitorExitInstructionIndex + 1 &&
-                    candidate.handlerEntries == setOf(handlerEntry)
+                candidate.group.handlers.size == 1 &&
+                candidate.group.handlers.single().catchType == null &&
+                candidate.group.envelope.start == handlerStart &&
+                candidate.group.envelope.endExclusive == handlerShape.monitorExitInstructionIndex + 1 &&
+                candidate.handlerEntries == setOf(handlerEntry)
         }
         if (cleanupCompanions.size > 1) return null
         val cleanupRanges = cleanupCompanions.flatMap { companion ->

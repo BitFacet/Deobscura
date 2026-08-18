@@ -69,9 +69,9 @@ internal fun isCanonicalRethrowBlock(graph: ControlFlowGraph, block: BasicBlockI
     if (instructions.size != 2) return false
     val reload = instructions[0] as? RawLocalInstruction ?: return false
     return reload.operation == LocalOperation.LOAD &&
-            reload.type == JvmComputationalType.REFERENCE &&
-            reload.slot == exceptionSlot &&
-            instructions[1] is RawThrowInstruction
+        reload.type == JvmComputationalType.REFERENCE &&
+        reload.slot == exceptionSlot &&
+        instructions[1] is RawThrowInstruction
 }
 
 /**

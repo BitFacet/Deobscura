@@ -108,16 +108,16 @@ class SsaOptimizer(
             conservativelyRetainedPhiCount += pruning.conservativelyRetainedPhiCount
 
             val changed = branches.newlyEliminatedEdgeCount > 0 ||
-                    pruning.removedOperationCount > 0 ||
-                    pruning.removedValueCount > 0 ||
-                    pruning.removedPhiNodeCount > 0 ||
-                    pruning.removedPhiInputCount > 0 ||
-                    simplification.propagatedAliasCount > 0 ||
-                    simplification.removedPhiCount > 0 ||
-                    deadValues.removedValueCount > 0 ||
-                    canonicalizations.any {
-                        it.removedPassthroughBlockCount > 0 || it.removedControlFlowOperationCount > 0
-                    }
+                pruning.removedOperationCount > 0 ||
+                pruning.removedValueCount > 0 ||
+                pruning.removedPhiNodeCount > 0 ||
+                pruning.removedPhiInputCount > 0 ||
+                simplification.propagatedAliasCount > 0 ||
+                simplification.removedPhiCount > 0 ||
+                deadValues.removedValueCount > 0 ||
+                canonicalizations.any {
+                    it.removedPassthroughBlockCount > 0 || it.removedControlFlowOperationCount > 0
+                }
 
             analysis = passthroughCleanup.analysis
             controlFlow = passthroughCleanup.controlFlow

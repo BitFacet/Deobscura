@@ -5,10 +5,9 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 val interestingIr = listOf(
-    "org/apache/xerces/dom/ObjectFactory.ir",
-    "org/apache/html/dom/ObjectFactory.ir",
-    "class/IfNs7Jz1Q.ir",
-    "org/apache/commons/io/input/ReadAheadInputStream.ir",
+    "class/Pcb3P7vsWq.ir",
+    "class/aolGYdXBmn.ir",
+    "com/wurmonline/client/BSVgLrw59Z.ir",
 )
 
 fun findProjectRoot(start: Path): Path {

@@ -300,12 +300,12 @@ class StructuredControlFlowAnalyzer {
                     val nextBranch = branches[other]
                     val nextTargets = nextBranch?.let { branchTargets(other, outgoing) }
                     val canContinue = nextBranch != null &&
-                            nextTargets != null &&
-                            commonTarget in listOf(nextTargets.first, nextTargets.second) &&
-                            other !in occupied &&
-                            other !in excludedHeaders &&
-                            predecessors[other].orEmpty().distinct() == listOf(current) &&
-                            isTransparentConditionHeader(other, valuesByBlock, statementsByBlock, expression)
+                        nextTargets != null &&
+                        commonTarget in listOf(nextTargets.first, nextTargets.second) &&
+                        other !in occupied &&
+                        other !in excludedHeaders &&
+                        predecessors[other].orEmpty().distinct() == listOf(current) &&
+                        isTransparentConditionHeader(other, valuesByBlock, statementsByBlock, expression)
                     if (!canContinue) {
                         finalOther = other
                         break

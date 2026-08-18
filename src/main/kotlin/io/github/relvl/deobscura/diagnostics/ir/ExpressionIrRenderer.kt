@@ -69,7 +69,7 @@ class ExpressionIrRenderer {
             renderNode(node, expression)
         }
         return "v${value.id.value}:$renderedType = $renderedNode" +
-                value.instructionIndices.takeIf { it.size > 1 }?.joinToString(prefix = "  // @", separator = ",@") { it.toString() }.orEmpty()
+            value.instructionIndices.takeIf { it.size > 1 }?.joinToString(prefix = "  // @", separator = ",@") { it.toString() }.orEmpty()
     }
 
     private fun renderBooleanPhi(node: ExpressionNode.Phi, output: ValueId, expression: ExpressionAnalysis): String =
@@ -181,7 +181,7 @@ class ExpressionIrRenderer {
         val effective = if (negate) condition.copy(operator = condition.operator.negated()) else condition
         val left = expression.values[effective.left]
         val isBoolean = effective.left in expression.materialization.booleanValues ||
-                left?.type == JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.BOOLEAN)
+            left?.type == JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.BOOLEAN)
         if (isBoolean && effective.right == BranchOperand.Zero) {
             return when (effective.operator) {
                 ComparisonOperator.EQ -> "!${parenthesizeBoolean(effective.left, expression)}"

@@ -48,7 +48,7 @@ internal fun monitorSlotBeforeEnter(
     val store = instructions.getOrNull(monitorEnterInstructionIndex - 2) as? RawLocalInstruction ?: return null
     return store.slot.takeIf {
         store.operation == LocalOperation.STORE &&
-                store.type == JvmComputationalType.REFERENCE &&
-                store.slot == immediate.slot
+            store.type == JvmComputationalType.REFERENCE &&
+            store.slot == immediate.slot
     }
 }

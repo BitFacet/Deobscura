@@ -129,12 +129,14 @@ internal class StructuredExceptionRecognizer {
                 return@forEach
             }
 
+            val modernTryCatchFinallyTrace = mutableListOf<String>()
             val modernTryCatchFinallyRecognition = modernTryCatchFinallyRecognizer.recognize(
                 graph = graph,
                 topology = topology,
                 header = header,
                 exceptionTopology = exceptionTopology,
                 facts = facts,
+                rejectionTrace = modernTryCatchFinallyTrace,
             )
             if (modernTryCatchFinallyRecognition != null) {
                 regions += modernTryCatchFinallyRecognition.region
@@ -156,13 +158,25 @@ internal class StructuredExceptionRecognizer {
                 regions += finallyRegion
             } else {
                 rejections[key] = UnstructuredControlFlowReason.EXCEPTION_CATCH_ALL_UNSUPPORTED
-                if (legacySubroutineNormalized) {
-                    legacyRejectionDetails[key] = buildString {
+                legacyRejectionDetails[key] = buildString {
+                    append("modern-try-catch-finally=")
+                    append(modernTryCatchFinallyTrace.lastOrNull() ?: "not-attempted")
+                    if (legacySubroutineNormalized) {
+                        append(", legacy-try-catch-finally=")
+                        append(legacyTryCatchFinallyTrace.lastOrNull() ?: "not-attempted")
+                        append(", legacy-finally=")
+                        append(legacyFinallyTrace.lastOrNull() ?: "not-attempted")
+                    }
+                }
+                val legacyResidualDetail = if (legacySubroutineNormalized) {
+                    buildString {
                         append("legacy-try-catch-finally=")
                         append(legacyTryCatchFinallyTrace.lastOrNull() ?: "not-attempted")
                         append(", legacy-finally=")
                         append(legacyFinallyTrace.lastOrNull() ?: "not-attempted")
                     }
+                } else {
+                    null
                 }
                 residualFamilies[key] = ExceptionResidualProfiler.profileCatchAll(
                     graph = graph,
@@ -172,7 +186,7 @@ internal class StructuredExceptionRecognizer {
                     protectedBlocks = protectedBlocks,
                     groupedHandlers = groupedHandlers,
                     facts = facts,
-                    legacyDetail = legacyRejectionDetails[key],
+                    legacyDetail = legacyResidualDetail,
                 )
             }
         }

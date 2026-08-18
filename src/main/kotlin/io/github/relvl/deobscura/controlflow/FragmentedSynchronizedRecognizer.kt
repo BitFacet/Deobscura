@@ -258,8 +258,8 @@ internal object FragmentedSynchronizedRecognizer {
             graph.edges.asSequence()
                 .filter { edge ->
                     edge.kind == ControlFlowEdgeKind.EXCEPTION &&
-                            edge.from in facts.blocks &&
-                            edge.to in facts.blocks
+                        edge.from in facts.blocks &&
+                        edge.to in facts.blocks
                 }
                 .forEach(::add)
         }

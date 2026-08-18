@@ -44,8 +44,8 @@ internal object ExceptionResidualProfiler {
         val boundaryCount = normalBoundaryTargets(protectedBlocks, topology.handlerEntries, facts).size
         val nestedGroupCount = exceptionTopology.groups.count { candidate ->
             candidate !== topology &&
-                    candidate.group.envelope.start >= group.envelope.start &&
-                    candidate.group.envelope.endExclusive <= group.envelope.endExclusive
+                candidate.group.envelope.start >= group.envelope.start &&
+                candidate.group.envelope.endExclusive <= group.envelope.endExclusive
         }
         val peerCount = catchAllHandlers.maxOfOrNull { handler ->
             val handlerIndex = exceptionLabelPosition(exceptionTopology.labelPositions, handler.handler)

@@ -123,7 +123,7 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
                     if (expectedReturnSite !in returnSites) {
                         throw StackInconsistencyException(
                             "RET in block ${block.id.value} uses return-address local ${terminator.slot} for " +
-                                    "$returnSites, expected $expectedReturnSite.",
+                                "$returnSites, expected $expectedReturnSite.",
                         )
                     }
                     val returnBlock = blockForInstruction(graph, expectedReturnSite)

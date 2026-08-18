@@ -389,8 +389,8 @@ internal class TypedCatchRecognizer {
         val candidates = blocks.asSequence()
             .filter { block ->
                 block != entry &&
-                        block in facts.postDominators[entry].orEmpty() &&
-                        facts.incoming[block].orEmpty().any { edge -> edge.from !in blocks }
+                    block in facts.postDominators[entry].orEmpty() &&
+                    facts.incoming[block].orEmpty().any { edge -> edge.from !in blocks }
             }
             .toList()
         return candidates.firstOrNull { candidate ->

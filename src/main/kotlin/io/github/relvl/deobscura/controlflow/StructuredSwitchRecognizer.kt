@@ -170,14 +170,14 @@ internal class StructuredSwitchRecognizer(private val transferClassifier: Region
 
     private fun switchContinuation(header: BasicBlockId, entries: Set<BasicBlockId>, facts: ControlFlowFacts, containingLoop: NaturalLoopFlowContext?): BasicBlockId? {
         fun isValidContinuation(candidate: BasicBlockId): Boolean = (containingLoop == null || candidate in containingLoop.blocks) &&
-                !reachesOtherCaseEntryBeforeHeader(candidate, header, entries, facts.outgoing)
+            !reachesOtherCaseEntryBeforeHeader(candidate, header, entries, facts.outgoing)
 
         immediatePostDominator(header, facts.postDominators)?.let { candidate -> if (isValidContinuation(candidate)) return candidate }
 
         val reachableFromHeader = reachableFrom(header, facts.outgoing)
         val externallySharedEntries = entries.filter { candidate ->
             isValidContinuation(candidate)
-                    && facts.incoming[candidate].orEmpty().any { edge -> edge.from != header && edge.from !in reachableFromHeader }
+                && facts.incoming[candidate].orEmpty().any { edge -> edge.from != header && edge.from !in reachableFromHeader }
         }
         if (externallySharedEntries.size == 1) return externallySharedEntries.single()
 
@@ -206,11 +206,11 @@ internal class StructuredSwitchRecognizer(private val transferClassifier: Region
 
         val externallySharedJoins = reachableFromHeader.filter { candidate ->
             candidate != header &&
-                    candidate !in entries &&
-                    isValidContinuation(candidate) &&
-                    candidate !in facts.explicitTerminalBlocks &&
-                    header !in reachableFrom(candidate, facts.outgoing) &&
-                    facts.incoming[candidate].orEmpty().any { edge -> edge.from !in reachableFromHeader }
+                candidate !in entries &&
+                isValidContinuation(candidate) &&
+                candidate !in facts.explicitTerminalBlocks &&
+                header !in reachableFrom(candidate, facts.outgoing) &&
+                facts.incoming[candidate].orEmpty().any { edge -> edge.from !in reachableFromHeader }
         }
         if (externallySharedJoins.size == 1) return externallySharedJoins.single()
 
@@ -359,13 +359,13 @@ internal class StructuredSwitchRecognizer(private val transferClassifier: Region
 
         val sharedTerminalBlocks = owners.filter { (block, blockOwners) ->
             block != continuation &&
-                    block !in caseEntries &&
-                    (
-                            blockOwners.size > 1 ||
-                                    predecessors[block].orEmpty().any { predecessor ->
-                                        predecessor != header && predecessor !in allCaseBlocks
-                                    }
-                            )
+                block !in caseEntries &&
+                (
+                    blockOwners.size > 1 ||
+                        predecessors[block].orEmpty().any { predecessor ->
+                            predecessor != header && predecessor !in allCaseBlocks
+                        }
+                    )
         }.keys
         if (sharedTerminalBlocks.isEmpty()) return
 

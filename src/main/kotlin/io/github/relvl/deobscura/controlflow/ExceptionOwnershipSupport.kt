@@ -28,8 +28,8 @@ internal fun closeOverContainedExceptionRegions(
         changed = false
         val containedGroups = groups.filter { candidate ->
             !excludeGroup(candidate) &&
-                    candidate.protectedBlocks.isNotEmpty() &&
-                    candidate.protectedBlocks.all { it in owned }
+                candidate.protectedBlocks.isNotEmpty() &&
+                candidate.protectedBlocks.all { it in owned }
         }
         val entriesByGroup = containedGroups.associateWith(handlerEntriesFor)
         val containedHandlerEntries = entriesByGroup.values.flatMapTo(linkedSetOf()) { it }

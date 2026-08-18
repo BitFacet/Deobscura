@@ -33,7 +33,7 @@ class ExpressionBuilder(
                     if (operation.instructionIndex != definition.instructionIndex) {
                         throw ExpressionIrInconsistencyException(
                             "SSA value v${definition.id.value} definition points to instruction ${definition.instructionIndex}, " +
-                                    "but its producing operation is ${operation.instructionIndex}.",
+                                "but its producing operation is ${operation.instructionIndex}.",
                         )
                     }
                     ExpressionValue(

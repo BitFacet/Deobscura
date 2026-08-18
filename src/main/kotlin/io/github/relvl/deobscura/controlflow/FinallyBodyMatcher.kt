@@ -24,11 +24,13 @@ internal object FinallyBodyMatcher {
         handlerEntryInstructionOffset: Int,
         normalEntry: BasicBlockId,
         facts: ControlFlowFacts,
-        allowSplitNormalCopy: Boolean = false
+        allowSplitNormalCopy: Boolean = false,
+        allowEquivalentTerminalReturnTargets: Boolean = false,
     ): FinallyBodyMatch? {
         val mapping = linkedMapOf<BasicBlockId, BasicBlockId>()
         var continuation: BasicBlockId? = null
         var terminalExitBlock: BasicBlockId? = null
+        val terminalContinuationTargets = linkedSetOf<BasicBlockId>()
 
         fun match(handlerBlock: BasicBlockId, normalBlock: BasicBlockId): Boolean {
             mapping[handlerBlock]?.let { return it == normalBlock }
@@ -44,8 +46,8 @@ internal object FinallyBodyMatcher {
             }
             val right = graph.instructions(graph.block(normalBlock))
             val trailingGoto = right.size == left.size + 1 &&
-                    right.last() is RawBranchInstruction &&
-                    (right.last() as RawBranchInstruction).opcode.mnemonic == "goto"
+                right.last() is RawBranchInstruction &&
+                (right.last() as RawBranchInstruction).opcode.mnemonic == "goto"
             val trailingReturn = right.size == left.size + 1 && right.last() is RawReturnInstruction
             val rightBody = if (trailingGoto || trailingReturn) right.dropLast(1) else right
             if (left.size != rightBody.size || left.indices.any { !equivalentFinallyInstruction(left[it], rightBody[it]) }) {
@@ -55,9 +57,9 @@ internal object FinallyBodyMatcher {
             val leftEdges = facts.outgoing[handlerBlock].orEmpty()
             val rightEdges = facts.outgoing[normalBlock].orEmpty()
             val terminalExit = trailingReturn &&
-                    rightEdges.isEmpty() &&
-                    leftEdges.size == 1 &&
-                    leftEdges.single().to == handlerExit
+                rightEdges.isEmpty() &&
+                leftEdges.size == 1 &&
+                leftEdges.single().to == handlerExit
             if (terminalExit) {
                 if (terminalExitBlock != null && terminalExitBlock != normalBlock) return false
                 terminalExitBlock = normalBlock
@@ -76,9 +78,14 @@ internal object FinallyBodyMatcher {
                     return false
                 val rightTarget = candidates.single().to
                 if (leftEdge.to == handlerExit) {
-                    if (continuation != null && continuation != rightTarget)
-                        return false
-                    continuation = rightTarget
+                    if (allowEquivalentTerminalReturnTargets && isStandaloneReturnBlock(graph, rightTarget, facts)) {
+                        if (continuation != null) return false
+                        terminalContinuationTargets += rightTarget
+                    } else {
+                        if (terminalContinuationTargets.isNotEmpty()) return false
+                        if (continuation != null && continuation != rightTarget) return false
+                        continuation = rightTarget
+                    }
                 } else {
                     if (leftEdge.to !in handlerBlocks || !match(leftEdge.to, rightTarget))
                         return false
@@ -88,8 +95,13 @@ internal object FinallyBodyMatcher {
         }
 
         if (!match(handlerEntry, normalEntry)) return null
-        if (continuation == null && terminalExitBlock == null) return null
-        if (continuation != null && terminalExitBlock != null) return null
+        if (continuation == null && terminalContinuationTargets.size == 1) {
+            continuation = terminalContinuationTargets.single()
+            terminalContinuationTargets.clear()
+        }
+        if (continuation == null && terminalExitBlock == null && terminalContinuationTargets.isEmpty()) return null
+        if (continuation != null && (terminalExitBlock != null || terminalContinuationTargets.isNotEmpty())) return null
+        if (terminalExitBlock != null && terminalContinuationTargets.isNotEmpty()) return null
         val normalBlocks = mapping.values.toSet()
         if (continuation != null && continuation in normalBlocks) return null
         if (normalBlocks.any { block -> facts.incoming[block].orEmpty().any { it.from !in normalBlocks && block != normalEntry } }) return null
@@ -107,6 +119,17 @@ internal object FinallyBodyMatcher {
         }
         if (!allowSplitNormalCopy && ranges.size != 1) return null
         return FinallyBodyMatch(normalBlocks, continuation, ranges)
+    }
+
+    private fun isStandaloneReturnBlock(
+        graph: ControlFlowGraph,
+        block: BasicBlockId,
+        facts: ControlFlowFacts,
+    ): Boolean {
+        val instructions = graph.instructions(graph.block(block))
+        return instructions.size == 1 &&
+            instructions.single() is RawReturnInstruction &&
+            facts.outgoing[block].orEmpty().isEmpty()
     }
 
     private fun equivalentFinallyInstruction(left: RawInstruction, right: RawInstruction): Boolean = when {

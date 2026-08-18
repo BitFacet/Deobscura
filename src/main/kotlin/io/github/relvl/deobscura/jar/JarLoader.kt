@@ -101,8 +101,8 @@ class JarLoader(
                 entries
                     .filter { entry ->
                         !entry.isDirectory &&
-                                entry.name.endsWith(CLASS_SUFFIX) &&
-                                (multiRelease || !entry.name.startsWith(MULTI_RELEASE_PREFIX))
+                            entry.name.endsWith(CLASS_SUFFIX) &&
+                            (multiRelease || !entry.name.startsWith(MULTI_RELEASE_PREFIX))
                     }
                     .map { entry ->
                         LoadedClass(

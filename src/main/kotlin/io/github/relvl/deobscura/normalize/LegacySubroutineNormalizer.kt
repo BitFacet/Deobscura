@@ -339,7 +339,7 @@ class LegacySubroutineNormalizer(
 
     private fun RawCode.hasLegacySubroutines(): Boolean = instructions.any { instruction ->
         instruction is RawRetInstruction ||
-                instruction is RawBranchInstruction && instruction.opcode.mnemonic in LEGACY_JSR_OPCODES
+            instruction is RawBranchInstruction && instruction.opcode.mnemonic in LEGACY_JSR_OPCODES
     }
 
     private data class BlockInstance(
