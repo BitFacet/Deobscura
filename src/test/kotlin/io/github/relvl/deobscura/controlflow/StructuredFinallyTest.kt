@@ -9,6 +9,7 @@ import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.expression.ExpressionAnalysis
 import io.github.relvl.deobscura.expression.ExpressionStatement
 import io.github.relvl.deobscura.raw.*
+import org.junit.jupiter.api.Assertions.assertTrue
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -868,6 +869,90 @@ class StructuredFinallyTest {
 
     // Pseudocode: try { BODY } catch (Exception e) { CATCH } finally { CLEANUP }
     @Test
+    fun `recognizes modern try catch finally with split store and merged cleanup rethrow`() {
+        val tryBlock = BasicBlockId(0)
+        val tryFinally = BasicBlockId(1)
+        val catchEntry = BasicBlockId(2)
+        val catchFinally = BasicBlockId(3)
+        val handlerEntry = BasicBlockId(4)
+        val handlerCleanupRethrow = BasicBlockId(5)
+        val continuation = BasicBlockId(6)
+        val edges = listOf(
+            edge(tryBlock, tryFinally, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(tryBlock, catchEntry, "java/lang/Exception"),
+            exceptionEdge(tryBlock, handlerEntry, null),
+            edge(tryFinally, continuation, ControlFlowEdgeKind.JUMP),
+            edge(catchEntry, catchFinally, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(catchEntry, handlerEntry, null),
+            edge(catchFinally, continuation, ControlFlowEdgeKind.JUMP),
+            edge(handlerEntry, handlerCleanupRethrow, ControlFlowEdgeKind.FALLTHROUGH),
+        )
+        val instructions = listOf(
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(10)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(10)),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 1),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 1),
+            RawThrowInstruction(JvmOpcode("athrow")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+        )
+        val blocks = listOf(
+            BasicBlock(tryBlock, 0, 1, emptyList(), emptyList()),
+            BasicBlock(tryFinally, 1, 3, emptyList(), emptyList()),
+            BasicBlock(catchEntry, 3, 4, emptyList(), emptyList()),
+            BasicBlock(catchFinally, 4, 6, emptyList(), emptyList()),
+            BasicBlock(handlerEntry, 6, 7, emptyList(), emptyList()),
+            BasicBlock(handlerCleanupRethrow, 7, 10, emptyList(), emptyList()),
+            BasicBlock(continuation, 10, 11, emptyList(), emptyList()),
+        )
+        val labels = List(12) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                instructions,
+                labels,
+                listOf(
+                    exceptionHandler(0, 1, 3, "java/lang/Exception"),
+                    exceptionHandler(0, 1, 6, null),
+                    exceptionHandler(3, 4, 6, null),
+                ),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            tryBlock,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(blocks.mapTo(linkedSetOf()) { it.id }, edges, tryBlock),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Throw(9, ValueId(0)),
+                    ExpressionStatement.Return(10, null),
+                ),
+            ),
+        )
+
+        val region = assertIs<StructuredRegion.TryCatchFinally>(result.regions.single())
+        assertEquals(setOf(tryBlock), region.tryBlocks)
+        assertEquals(setOf(catchEntry), region.catches.single().blocks)
+        assertEquals(handlerEntry, region.handlerEntry)
+        assertEquals(setOf(handlerEntry, handlerCleanupRethrow), region.handlerBlocks)
+        assertEquals(listOf(7..7), region.finallyBodyInstructionRanges)
+        assertEquals(setOf(tryFinally, catchFinally), region.normalCopyBlocks)
+        assertEquals(continuation, region.continuation)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    // Pseudocode: try { BODY } catch (Exception e) { CATCH } finally { CLEANUP }
+    @Test
     fun `recognizes modern try catch finally with linear cleanup handler`() {
         val tryBlock = BasicBlockId(0)
         val tryFinally = BasicBlockId(1)
@@ -1043,6 +1128,111 @@ class StructuredFinallyTest {
         assertEquals(handlerEntry, region.handlerEntry)
         assertEquals(setOf(specializedTryCopy, catchGuard, catchCleanup), region.normalCopyBlocks)
         assertEquals(continuation, region.continuation)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+
+    // Pseudocode: finally { try { CLOSE } catch (Throwable suppressed) { RECORD } ; AFTER }
+    @Test
+    fun `recognizes split finally around nested typed handler without claiming it`() {
+        val tryBlock = BasicBlockId(0)
+        val normalCleanup = BasicBlockId(1)
+        val normalNestedCatch = BasicBlockId(2)
+        val normalAfter = BasicBlockId(3)
+        val continuation = BasicBlockId(4)
+        val handlerEntry = BasicBlockId(5)
+        val handlerCleanup = BasicBlockId(6)
+        val handlerNestedCatch = BasicBlockId(7)
+        val handlerAfter = BasicBlockId(8)
+        val rethrow = BasicBlockId(9)
+        val edges = listOf(
+            edge(tryBlock, normalCleanup, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(tryBlock, handlerEntry, null),
+            edge(normalCleanup, normalAfter, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(normalCleanup, normalNestedCatch, "java/lang/Throwable"),
+            edge(normalNestedCatch, continuation, ControlFlowEdgeKind.JUMP),
+            edge(normalAfter, continuation, ControlFlowEdgeKind.JUMP),
+            edge(handlerEntry, handlerCleanup, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(handlerCleanup, handlerAfter, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(handlerCleanup, handlerNestedCatch, "java/lang/Throwable"),
+            edge(handlerNestedCatch, rethrow, ControlFlowEdgeKind.JUMP),
+            edge(handlerAfter, rethrow, ControlFlowEdgeKind.JUMP),
+        )
+        val instructions = listOf(
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(6)),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 7),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(8)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(8)),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 1),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(15)),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 8),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(17)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(17)),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 1),
+            RawThrowInstruction(JvmOpcode("athrow")),
+        )
+        val blocks = listOf(
+            BasicBlock(tryBlock, 0, 1, emptyList(), emptyList()),
+            BasicBlock(normalCleanup, 1, 3, emptyList(), emptyList()),
+            BasicBlock(normalNestedCatch, 3, 6, emptyList(), emptyList()),
+            BasicBlock(normalAfter, 6, 8, emptyList(), emptyList()),
+            BasicBlock(continuation, 8, 9, emptyList(), emptyList()),
+            BasicBlock(handlerEntry, 9, 10, emptyList(), emptyList()),
+            BasicBlock(handlerCleanup, 10, 12, emptyList(), emptyList()),
+            BasicBlock(handlerNestedCatch, 12, 15, emptyList(), emptyList()),
+            BasicBlock(handlerAfter, 15, 17, emptyList(), emptyList()),
+            BasicBlock(rethrow, 17, 19, emptyList(), emptyList()),
+        )
+        val labels = List(20) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                instructions,
+                labels,
+                listOf(
+                    exceptionHandler(0, 1, 9, null),
+                    exceptionHandler(1, 3, 3, "java/lang/Throwable"),
+                    exceptionHandler(10, 12, 12, "java/lang/Throwable"),
+                ),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            tryBlock,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(blocks.mapTo(linkedSetOf()) { it.id }, edges, tryBlock),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(8, null),
+                    ExpressionStatement.Throw(18, ValueId(0)),
+                ),
+            ),
+        )
+
+        val finallyRegion = result.regions.filterIsInstance<StructuredRegion.TryFinally>().single()
+        assertEquals(setOf(tryBlock), finallyRegion.tryBlocks)
+        assertEquals(setOf(handlerEntry, handlerCleanup, handlerAfter, rethrow), finallyRegion.handlerBlocks)
+        assertEquals(listOf(10..11, 15..16), finallyRegion.finallyBodyInstructionRanges)
+        assertEquals(setOf(normalCleanup, normalAfter), finallyRegion.normalCopyBlocks)
+        assertEquals(listOf(1..2, 6..7), finallyRegion.normalCopyInstructionIndices)
+        assertEquals(continuation, finallyRegion.continuation)
+        assertTrue(result.regions.filterIsInstance<StructuredRegion.TryCatch>().any { region ->
+            normalNestedCatch in region.catches.flatMapTo(linkedSetOf()) { it.blocks } ||
+                handlerNestedCatch in region.catches.flatMapTo(linkedSetOf()) { it.blocks }
+        })
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 

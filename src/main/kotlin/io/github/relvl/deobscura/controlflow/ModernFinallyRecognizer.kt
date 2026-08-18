@@ -354,7 +354,10 @@ internal object ModernFinallyRecognizer {
         val (rethrow, rethrowPrefixSize) = rethrowCandidates.single()
 
         val bodyBlocks = collectUntil(bodyEntry, rethrow, facts)
-        if (bodyBlocks.isEmpty() || rethrow in bodyBlocks) return reject("empty-or-overlapping-body")
+        val rethrowCleanupInstructionCount = rethrowPrefixSize - if (rethrow == handlerEntry) handlerEntryInstructionOffset else 0
+        if ((bodyBlocks.isEmpty() && rethrowCleanupInstructionCount <= 0) || rethrow in bodyBlocks) {
+            return reject("empty-or-overlapping-body")
+        }
         if (bodyBlocks.any { block -> rethrow !in facts.postDominators[block].orEmpty() }) return reject("rethrow-not-postdominator")
         if (bodyBlocks.any { block -> graph.instructions(graph.block(block)).any { it is RawSwitchInstruction } }) return reject("switch-in-cleanup")
         if (bodyBlocks.any { block -> facts.outgoing[block].orEmpty().any { edge -> edge.to !in bodyBlocks && edge.to != rethrow } }) return reject("cleanup-has-extra-exit")
@@ -376,7 +379,7 @@ internal object ModernFinallyRecognizer {
             normalBoundaryTargets(protectedBlocks, setOf(handlerEntry), facts)
         }
         if (boundaryTargets.isEmpty()) return reject("no-normal-boundary")
-        val directMatches = boundaryTargets.mapNotNull { target ->
+        val strictDirectMatches = boundaryTargets.mapNotNull { target ->
             FinallyBodyMatcher.match(
                 graph = graph,
                 handlerEntry = bodyEntry,
@@ -389,8 +392,35 @@ internal object ModernFinallyRecognizer {
                 allowEquivalentTerminalReturnTargets = allowTerminalAndGuardElidedNormalCopies,
             )?.let { target to it }
         }
-        val projectedMatches = if (allowTerminalAndGuardElidedNormalCopies && directMatches.isNotEmpty()) {
-            val unmatchedTargets = boundaryTargets - directMatches.mapTo(linkedSetOf()) { it.first }
+        // A TWR-style cleanup can be split by a nested catch(Throwable) used for addSuppressed.
+        // Only try this proof after the established matcher found nothing, so ordinary finally
+        // recognition and ownership remain completely unchanged.
+        val nestedDirectMatches = if (strictDirectMatches.isEmpty()) {
+            boundaryTargets.mapNotNull { target ->
+                FinallyBodyMatcher.match(
+                    graph = graph,
+                    handlerEntry = bodyEntry,
+                    handlerBlocks = bodyBlocks,
+                    handlerExit = rethrow,
+                    handlerEntryInstructionOffset = handlerEntryInstructionOffset,
+                    normalEntry = target,
+                    facts = facts,
+                    handlerExitInstructionPrefixLength = rethrowPrefixSize,
+                    allowSplitNormalCopy = true,
+                    allowEquivalentTerminalReturnTargets = allowTerminalAndGuardElidedNormalCopies,
+                    allowNestedSingleBlockHandlers = true,
+                )?.takeIf { it.matchedNestedHandlerCount > 0 }?.let { target to it }
+            }
+        } else {
+            emptyList()
+        }
+        val directMatches = if (strictDirectMatches.isNotEmpty()) strictDirectMatches else nestedDirectMatches
+        val usingNestedHandlerMatches = strictDirectMatches.isEmpty() && nestedDirectMatches.isNotEmpty()
+        val projectedMatches = if (
+            allowTerminalAndGuardElidedNormalCopies &&
+            strictDirectMatches.isNotEmpty()
+        ) {
+            val unmatchedTargets = boundaryTargets - strictDirectMatches.mapTo(linkedSetOf()) { it.first }
             matchGuardElidedBoundaryCopies(
                 graph = graph,
                 bodyEntry = bodyEntry,
@@ -416,23 +446,47 @@ internal object ModernFinallyRecognizer {
             continuations.single()
         }
 
-        val handlerRange = bodyBlocks.asSequence()
-            .map(graph::block)
-            .sortedBy { it.startInstructionIndex }
-            .let { blocks ->
-                val list = blocks.toList()
-                val first = list.first().startInstructionIndex + handlerEntryInstructionOffset
-                val rethrowBlock = graph.block(rethrow)
-                val lastExclusive = if (rethrowPrefixSize != 0) {
-                    rethrowBlock.startInstructionIndex + rethrowPrefixSize
-                } else {
-                    list.last().endInstructionIndexExclusive
+        val handlerRanges = if (usingNestedHandlerMatches) {
+            splitHandlerInstructionRanges(
+                graph = graph,
+                bodyBlocks = bodyBlocks,
+                handlerEntry = handlerEntry,
+                handlerEntryInstructionOffset = handlerEntryInstructionOffset,
+                handlerExit = rethrow,
+                handlerExitInstructionPrefixLength = rethrowPrefixSize,
+            ).also { ranges ->
+                val nestedCount = matches.map { it.matchedNestedHandlerCount }.distinct().singleOrNull()
+                    ?: return reject("nested-handler-count")
+                if (ranges.size != nestedCount + 1 || matches.any { it.instructionRanges.size != ranges.size }) {
+                    return reject("nested-handler-range-count")
                 }
-                val instructionCount = list.sumOf { it.endInstructionIndexExclusive - it.startInstructionIndex } -
-                    handlerEntryInstructionOffset + rethrowPrefixSize
-                if (lastExclusive - first != instructionCount) return reject("non-contiguous-handler-body")
-                first until lastExclusive
             }
+        } else {
+            listOf(
+                bodyBlocks.asSequence()
+                    .map(graph::block)
+                    .sortedBy { it.startInstructionIndex }
+                    .let { blocks ->
+                        val list = blocks.toList()
+                        val rethrowBlock = graph.block(rethrow)
+                        val first = if (list.isNotEmpty()) {
+                            list.first().startInstructionIndex + handlerEntryInstructionOffset
+                        } else {
+                            rethrowBlock.startInstructionIndex + if (rethrow == handlerEntry) handlerEntryInstructionOffset else 0
+                        }
+                        val lastExclusive = if (rethrowPrefixSize != 0) {
+                            rethrowBlock.startInstructionIndex + rethrowPrefixSize
+                        } else {
+                            list.last().endInstructionIndexExclusive
+                        }
+                        val bodyInstructionCount = list.sumOf { it.endInstructionIndexExclusive - it.startInstructionIndex } -
+                            if (handlerEntry in bodyBlocks) handlerEntryInstructionOffset else 0
+                        val instructionCount = bodyInstructionCount + rethrowCleanupInstructionCount
+                        if (lastExclusive - first != instructionCount) return reject("non-contiguous-handler-body")
+                        first until lastExclusive
+                    },
+            )
+        }
 
         return ModernFinallyShape(
             handlerEntry = handlerEntry,
@@ -441,10 +495,44 @@ internal object ModernFinallyRecognizer {
                 addAll(bodyBlocks)
                 add(rethrow)
             },
-            bodyInstructionRanges = listOf(handlerRange),
+            bodyInstructionRanges = handlerRanges,
             normalCopies = matches,
             continuation = continuation,
         )
+    }
+
+
+    /** Returns cleanup ranges while leaving already-structured nested handler islands unowned. */
+    private fun splitHandlerInstructionRanges(
+        graph: ControlFlowGraph,
+        bodyBlocks: Set<BasicBlockId>,
+        handlerEntry: BasicBlockId,
+        handlerEntryInstructionOffset: Int,
+        handlerExit: BasicBlockId,
+        handlerExitInstructionPrefixLength: Int,
+    ): List<IntRange> {
+        val ranges = instructionRanges(bodyBlocks, graph).toMutableList()
+        if (handlerEntryInstructionOffset != 0 && handlerEntry in bodyBlocks && ranges.isNotEmpty()) {
+            val first = ranges.first()
+            val trimmedStart = first.first + handlerEntryInstructionOffset
+            if (trimmedStart > first.last) ranges.removeAt(0) else ranges[0] = trimmedStart..first.last
+        }
+        if (handlerExitInstructionPrefixLength != 0) {
+            val exitBlock = graph.block(handlerExit)
+            val start = exitBlock.startInstructionIndex +
+                if (handlerExit == handlerEntry) handlerEntryInstructionOffset else 0
+            val endExclusive = exitBlock.startInstructionIndex + handlerExitInstructionPrefixLength
+            if (start < endExclusive) {
+                val prefix = start until endExclusive
+                val last = ranges.lastOrNull()
+                if (last != null && last.last + 1 == prefix.first) {
+                    ranges[ranges.lastIndex] = last.first..prefix.last
+                } else {
+                    ranges += prefix
+                }
+            }
+        }
+        return ranges
     }
 
 
