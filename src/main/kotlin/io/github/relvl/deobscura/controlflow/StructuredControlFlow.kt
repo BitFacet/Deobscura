@@ -120,6 +120,8 @@ data class UnstructuredControlFlowDiagnostic(
     val protectedStartInstructionIndex: Int? = null,
     val protectedEndInstructionIndexExclusive: Int? = null,
     val detail: String? = null,
+    /** Coarse structural family used to aggregate unsupported exception shapes across the corpus. */
+    val exceptionResidualFamily: String? = null,
 )
 
 enum class StructuredArmExitKind {

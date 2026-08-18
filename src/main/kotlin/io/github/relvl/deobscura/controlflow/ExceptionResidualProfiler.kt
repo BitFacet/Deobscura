@@ -1,0 +1,83 @@
+package io.github.relvl.deobscura.controlflow
+
+import io.github.relvl.deobscura.cfg.BasicBlockId
+import io.github.relvl.deobscura.cfg.ControlFlowGraph
+import io.github.relvl.deobscura.raw.JvmComputationalType
+import io.github.relvl.deobscura.raw.LocalOperation
+import io.github.relvl.deobscura.raw.RawExceptionHandler
+import io.github.relvl.deobscura.raw.RawLocalInstruction
+import io.github.relvl.deobscura.raw.RawThrowInstruction
+
+/** Builds coarse structural fingerprints for unsupported exception regions used only for corpus triage. */
+internal object ExceptionResidualProfiler {
+    /**
+     * Describes a rejected catch-all region without attempting recognition again. Buckets stay coarse
+     * on purpose so recurring compiler shapes converge on a small number of corpus families.
+     */
+    fun profileCatchAll(
+        graph: ControlFlowGraph,
+        topology: ExceptionGroupTopology,
+        header: BasicBlockId,
+        exceptionTopology: ExceptionTopology,
+        protectedBlocks: Set<BasicBlockId>,
+        groupedHandlers: Map<BasicBlockId?, List<RawExceptionHandler>>,
+        facts: ControlFlowFacts,
+        legacyDetail: String?,
+    ): String {
+        if (legacyDetail != null) return "legacy [$legacyDetail]"
+
+        val group = topology.group
+        val catchAllHandlers = group.handlers.filter { it.catchType == null }
+        val typedHandlerCount = group.handlers.size - catchAllHandlers.size
+        val boundaryCount = normalBoundaryTargets(protectedBlocks, topology.handlerEntries, facts).size
+        val nestedGroupCount = exceptionTopology.groups.count { candidate ->
+            candidate !== topology &&
+                    candidate.group.envelope.start >= group.envelope.start &&
+                    candidate.group.envelope.endExclusive <= group.envelope.endExclusive
+        }
+        val peerCount = catchAllHandlers.maxOfOrNull { handler ->
+            val handlerIndex = exceptionLabelPosition(exceptionTopology.labelPositions, handler.handler)
+            exceptionTopology.catchAllPeersByHandlerInstructionIndex[handlerIndex].orEmpty().size
+        } ?: 0
+        val handlerShape = groupedHandlers.keys.filterNotNull().singleOrNull()?.let { entry ->
+            classifyHandlerEntry(graph, entry)
+        } ?: if (groupedHandlers.size > 1) "multiple-entries" else "missing-entry"
+
+        return buildString {
+            append("modern ")
+            append(if (typedHandlerCount == 0) "catch-all-only" else "mixed+$typedHandlerCount")
+            append(", handler=").append(handlerShape)
+            append(", boundaries=").append(countBucket(boundaryCount))
+            append(", peers=").append(countBucket(peerCount))
+            append(", nested=").append(countBucket(nestedGroupCount))
+            if (hasExternalProtectedEntry(header, protectedBlocks, facts)) append(", protected-external-entry")
+        }
+    }
+
+    private fun classifyHandlerEntry(graph: ControlFlowGraph, entry: BasicBlockId): String {
+        val instructions = graph.instructions(graph.block(entry))
+        if (instructions.isEmpty()) return "empty"
+        val first = instructions.firstOrNull() as? RawLocalInstruction ?: return "noncanonical-entry"
+        if (first.operation != LocalOperation.STORE || first.type != JvmComputationalType.REFERENCE) {
+            return "noncanonical-entry"
+        }
+        if (instructions.size == 1) return "exception-store-only"
+
+        val reload = instructions.getOrNull(instructions.lastIndex - 1) as? RawLocalInstruction
+        if (instructions.lastOrNull() is RawThrowInstruction &&
+            reload?.operation == LocalOperation.LOAD &&
+            reload.slot == first.slot
+        ) {
+            return "linear-rethrow"
+        }
+        return "exception-store-prefix"
+    }
+
+    private fun countBucket(count: Int): String = when (count) {
+        0 -> "0"
+        1 -> "1"
+        2 -> "2"
+        in 3..4 -> "3-4"
+        else -> "5+"
+    }
+}

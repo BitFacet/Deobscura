@@ -124,7 +124,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
             }
         }
         val continuations = normalCopies.mapTo(linkedSetOf()) { match ->
-            normalizeLegacyFinallyContinuation(match.continuation, graph, facts, provenance)
+            normalizeLegacyFinallyContinuation(requireNotNull(match.continuation), graph, facts, provenance)
         }
         if (continuations.size != 1) return rejectLegacy(rejectionTrace, "continuation-count=${continuations.size}")
 

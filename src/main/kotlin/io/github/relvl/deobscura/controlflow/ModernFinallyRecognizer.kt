@@ -19,6 +19,7 @@ internal object ModernFinallyRecognizer {
         facts: ControlFlowFacts
     ): StructuredRegion.TryFinally? =
         recognizeLinearCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts)
+            ?: recognizeSplitLinearCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts)
             ?: recognizeBranchingCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts)
 
     /**
@@ -74,6 +75,79 @@ internal object ModernFinallyRecognizer {
             handlerEntry = handlerEntry,
             handlerBlocks = setOf(handlerEntry),
             finallyBodyInstructionRanges = listOf(handlerBodyStart..(handlerBodyStart + body.size - 1)),
+            normalCopyInstructionIndices = matches.map { it.second },
+            normalCopyBlocks = matches.mapTo(linkedSetOf()) { it.first },
+            continuation = continuationCandidates.singleOrNull(),
+            protectedStartInstructionIndex = group.envelope.start,
+            protectedEndInstructionIndexExclusive = group.envelope.endExclusive,
+            protectedRanges = group.segments.map { segment ->
+                StructuredProtectedRange(segment.range.start, segment.range.endExclusive)
+            },
+        )
+    }
+
+    /**
+     * Handles the equally canonical split form `astore ex` -> `BODY; aload ex; athrow`.
+     * Some compilers introduce the block boundary immediately after storing the exception even
+     * though the cleanup itself is linear.
+     */
+    private fun recognizeSplitLinearCanonicalFinally(
+        graph: ControlFlowGraph,
+        topology: ExceptionGroupTopology,
+        header: BasicBlockId,
+        protectedBlocks: Set<BasicBlockId>,
+        groupedHandlers: Map<BasicBlockId?, List<RawExceptionHandler>>,
+        facts: ControlFlowFacts,
+    ): StructuredRegion.TryFinally? {
+        val group = topology.group
+        if (group.handlers.size != 1 || group.handlers.single().catchType != null) return null
+        if (groupedHandlers.size != 1) return null
+        if (hasExternalProtectedEntry(header, protectedBlocks, facts)) return null
+
+        val handlerEntry = groupedHandlers.keys.single() ?: return null
+        val entryInstructions = graph.instructions(graph.block(handlerEntry))
+        if (entryInstructions.size != 1) return null
+        val store = entryInstructions.single() as? RawLocalInstruction ?: return null
+        if (store.operation != LocalOperation.STORE || store.type != JvmComputationalType.REFERENCE) return null
+
+        val bodyBlock = facts.outgoing[handlerEntry].orEmpty()
+            .map { it.to }
+            .distinct()
+            .singleOrNull() ?: return null
+        if (facts.incoming[bodyBlock].orEmpty().any { it.from != handlerEntry }) return null
+
+        val bodyInstructions = graph.instructions(graph.block(bodyBlock))
+        if (bodyInstructions.size < 3) return null
+        val reload = bodyInstructions[bodyInstructions.lastIndex - 1] as? RawLocalInstruction ?: return null
+        if (reload.operation != LocalOperation.LOAD || reload.type != JvmComputationalType.REFERENCE || reload.slot != store.slot) return null
+        if (bodyInstructions.last() !is RawThrowInstruction) return null
+
+        val body = bodyInstructions.subList(0, bodyInstructions.size - 2)
+        if (body.isEmpty() || body.any(::isControlTransfer)) return null
+        if (facts.outgoing[bodyBlock].orEmpty().isNotEmpty()) return null
+
+        val boundaryTargets = normalBoundaryTargets(protectedBlocks, setOf(handlerEntry), facts)
+        if (boundaryTargets.isEmpty()) return null
+        val matches = boundaryTargets.mapNotNull { target ->
+            val block = graph.block(target)
+            val instructions = graph.instructions(block)
+            if (instructions.size < body.size || instructions.subList(0, body.size) != body) return@mapNotNull null
+            target to (block.startInstructionIndex..<block.startInstructionIndex + body.size)
+        }
+        if (matches.isEmpty()) return null
+
+        val continuationCandidates = matches.mapNotNullTo(linkedSetOf()) { (target, _) ->
+            facts.outgoing[target].orEmpty().map { it.to }.distinct().singleOrNull()
+        }
+        if (continuationCandidates.size > 1) return null
+
+        val bodyStart = graph.block(bodyBlock).startInstructionIndex
+        return StructuredRegion.TryFinally(
+            header = header,
+            tryBlocks = protectedBlocks,
+            handlerEntry = handlerEntry,
+            handlerBlocks = linkedSetOf(handlerEntry, bodyBlock),
+            finallyBodyInstructionRanges = listOf(bodyStart..(bodyStart + body.size - 1)),
             normalCopyInstructionIndices = matches.map { it.second },
             normalCopyBlocks = matches.mapTo(linkedSetOf()) { it.first },
             continuation = continuationCandidates.singleOrNull(),

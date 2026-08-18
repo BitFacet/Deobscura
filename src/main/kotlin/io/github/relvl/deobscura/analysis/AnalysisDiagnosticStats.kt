@@ -2,6 +2,8 @@ package io.github.relvl.deobscura.analysis
 
 import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
 import io.github.relvl.deobscura.controlflow.StructuredRegion
+import io.github.relvl.deobscura.controlflow.UnstructuredControlFlowKind
+import io.github.relvl.deobscura.controlflow.UnstructuredControlFlowReason
 import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
 import io.github.relvl.deobscura.expression.ExpressionAnalysis
 import io.github.relvl.deobscura.expression.ExpressionNode
@@ -32,7 +34,7 @@ internal class AnalysisDiagnosticStats {
         valueFlow.record(analysis.valueFlow)
         ssa.record(methodName, analysis.graph, analysis.initialSsa, analysis.optimization)
         expression.record(analysis.expression)
-        structuredControlFlow.record(analysis.structuredControlFlow)
+        structuredControlFlow.record(methodName, analysis.structuredControlFlow)
     }
 
     fun recordProgress(progress: MethodAnalysisProgress) {
@@ -83,11 +85,12 @@ internal class StructuredControlFlowDiagnosticStats {
     private var loopBodyIfRegionCount = 0L
     private var loopContinuationIfRegionCount = 0L
     private var loopBreakEdgeCount = 0L
-    private val unstructuredReasonCounts = linkedMapOf<io.github.relvl.deobscura.controlflow.UnstructuredControlFlowReason, Long>()
+    private val unstructuredReasonCounts = linkedMapOf<UnstructuredControlFlowReason, Long>()
+    private val exceptionResidualFamilies = ExceptionResidualFamilyStats()
     var inconsistencyCount = 0
     var failureCount = 0
 
-    fun record(analysis: StructuredControlFlowAnalysis) {
+    fun record(methodName: String, analysis: StructuredControlFlowAnalysis) {
         analyzedMethodCount++
         conditionalBranchCount += analysis.conditionalBranchCount
         switchCount += analysis.switchCount
@@ -104,6 +107,7 @@ internal class StructuredControlFlowDiagnosticStats {
         loopBreakEdgeCount += analysis.regions.filterIsInstance<StructuredRegion.While>().sumOf { it.breakEdges.size.toLong() }
         analysis.unstructured.forEach { diagnostic ->
             unstructuredReasonCounts[diagnostic.reason] = unstructuredReasonCounts.getOrDefault(diagnostic.reason, 0L) + 1L
+            exceptionResidualFamilies.record(methodName, diagnostic)
         }
         val ifs = analysis.regions.count { it is StructuredRegion.If }
         val whiles = analysis.regions.count { it is StructuredRegion.While }
@@ -123,7 +127,7 @@ internal class StructuredControlFlowDiagnosticStats {
         synchronizedRegionCount += synchronizeds
         unstructuredConditionalCount += analysis.unstructuredConditionalCount
         unstructuredSwitchCount += analysis.unstructured.count {
-            it.kind == io.github.relvl.deobscura.controlflow.UnstructuredControlFlowKind.SWITCH
+            it.kind == UnstructuredControlFlowKind.SWITCH
         }
         unstructuredExceptionRegionCount += analysis.unstructuredExceptionRegionCount
         if (ifs + whiles + switches + exceptions + analysis.booleanConditionFolds.size + analysis.shortCircuitConditionFolds.size > 0) structuredMethodCount++
@@ -179,11 +183,75 @@ internal class StructuredControlFlowDiagnosticStats {
                     .joinToString { (reason, count) -> "${reason.diagnosticName}=$count" },
             )
         }
+        exceptionResidualFamilies.log(logger)
         logger.info(
             "Structured control-flow analysis completed with {} failure(s): {} inconsistent state(s).",
             failureCount,
             inconsistencyCount,
         )
+    }
+}
+
+
+/** Aggregates unsupported catch-all regions into coarse structural families with a few examples. */
+internal class ExceptionResidualFamilyStats(
+    private val representativeLimit: Int = 3,
+    private val familyLogLimit: Int = 16,
+) {
+    private data class Family(
+        var count: Long = 0,
+        val representatives: LinkedHashSet<String> = linkedSetOf(),
+    )
+
+    private val families = linkedMapOf<String, Family>()
+
+    fun record(methodName: String, diagnostic: io.github.relvl.deobscura.controlflow.UnstructuredControlFlowDiagnostic) {
+        if (diagnostic.kind != UnstructuredControlFlowKind.EXCEPTION ||
+            diagnostic.reason != UnstructuredControlFlowReason.EXCEPTION_CATCH_ALL_UNSUPPORTED
+        ) return
+        val familyName = diagnostic.exceptionResidualFamily ?: "unclassified"
+        val family = families.getOrPut(familyName) { Family() }
+        family.count++
+        if (family.representatives.size < representativeLimit) family.representatives += methodName
+    }
+
+    internal fun summaries(): List<String> = families.entries
+        .sortedWith(compareByDescending<Map.Entry<String, Family>> { it.value.count }.thenBy { it.key })
+        .map { (name, family) ->
+            buildString {
+                append(name).append('=').append(family.count)
+                if (family.representatives.isNotEmpty()) {
+                    append(" [e.g. ").append(family.representatives.joinToString()).append(']')
+                }
+            }
+        }
+
+    fun log(logger: Logger) {
+        val ordered = families.entries
+            .sortedWith(compareByDescending<Map.Entry<String, Family>> { it.value.count }.thenBy { it.key })
+        if (ordered.isEmpty()) return
+
+        logger.info(
+            "Unsupported catch-all/finally residuals grouped into {} structural family(s); showing up to {} largest.",
+            ordered.size,
+            familyLogLimit,
+        )
+        ordered.take(familyLogLimit).forEach { (name, family) ->
+            logger.info(
+                "Finally residual family: {} region(s), {}; examples: {}.",
+                family.count,
+                name,
+                family.representatives.joinToString(),
+            )
+        }
+        if (ordered.size > familyLogLimit) {
+            val hidden = ordered.drop(familyLogLimit)
+            logger.info(
+                "Finally residual families omitted: {} family(s), {} region(s).",
+                hidden.size,
+                hidden.sumOf { it.value.count },
+            )
+        }
     }
 }
 

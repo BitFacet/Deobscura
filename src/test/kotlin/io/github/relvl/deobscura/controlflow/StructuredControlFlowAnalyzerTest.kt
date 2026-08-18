@@ -2318,6 +2318,139 @@ class StructuredControlFlowAnalyzerTest {
     }
 
     @Test
+    fun `recognizes split linear finally with terminal normal copies`() {
+        val tryBlock = BasicBlockId(0)
+        val normalLeft = BasicBlockId(1)
+        val normalRight = BasicBlockId(2)
+        val handlerEntry = BasicBlockId(3)
+        val handlerBody = BasicBlockId(4)
+        val edges = listOf(
+            edge(tryBlock, normalRight, ControlFlowEdgeKind.CONDITIONAL),
+            edge(tryBlock, normalLeft, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(tryBlock, handlerEntry, null),
+            edge(handlerEntry, handlerBody, ControlFlowEdgeKind.FALLTHROUGH),
+        )
+        val instructions = listOf(
+            RawBranchInstruction(JvmOpcode("ifeq"), RawLabelId(3)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 1),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 1),
+            RawThrowInstruction(JvmOpcode("athrow")),
+        )
+        val blocks = listOf(
+            BasicBlock(tryBlock, 0, 1, emptyList(), emptyList()),
+            BasicBlock(normalLeft, 1, 3, emptyList(), emptyList()),
+            BasicBlock(normalRight, 3, 5, emptyList(), emptyList()),
+            BasicBlock(handlerEntry, 5, 6, emptyList(), emptyList()),
+            BasicBlock(handlerBody, 6, 9, emptyList(), emptyList()),
+        )
+        val labels = List(10) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                instructions,
+                labels,
+                listOf(exceptionHandler(0, 1, 5, null)),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            tryBlock,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(blocks.mapTo(linkedSetOf()) { it.id }, edges, tryBlock),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(2, null),
+                    ExpressionStatement.Return(4, null),
+                    ExpressionStatement.Throw(8, ValueId(0)),
+                ),
+            ),
+        )
+
+        val region = result.regions.filterIsInstance<StructuredRegion.TryFinally>().single()
+        assertEquals(setOf(tryBlock), region.tryBlocks)
+        assertEquals(setOf(handlerEntry, handlerBody), region.handlerBlocks)
+        assertEquals(listOf(6..6), region.finallyBodyInstructionRanges)
+        assertEquals(listOf(1..1, 3..3), region.normalCopyInstructionIndices.sortedBy { it.first })
+        assertEquals(setOf(normalLeft, normalRight), region.normalCopyBlocks)
+        assertEquals(null, region.continuation)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    @Test
+    fun `recognizes branching finally copied before terminal return`() {
+        val tryBlock = BasicBlockId(0)
+        val normalCopy = BasicBlockId(1)
+        val handlerEntry = BasicBlockId(2)
+        val handlerBody = BasicBlockId(3)
+        val rethrow = BasicBlockId(4)
+        val edges = listOf(
+            edge(tryBlock, normalCopy, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(tryBlock, handlerEntry, null),
+            edge(handlerEntry, handlerBody, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(handlerBody, rethrow, ControlFlowEdgeKind.FALLTHROUGH),
+        )
+        val instructions = listOf(
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 1),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 1),
+            RawThrowInstruction(JvmOpcode("athrow")),
+        )
+        val blocks = listOf(
+            BasicBlock(tryBlock, 0, 1, emptyList(), emptyList()),
+            BasicBlock(normalCopy, 1, 3, emptyList(), emptyList()),
+            BasicBlock(handlerEntry, 3, 4, emptyList(), emptyList()),
+            BasicBlock(handlerBody, 4, 5, emptyList(), emptyList()),
+            BasicBlock(rethrow, 5, 7, emptyList(), emptyList()),
+        )
+        val labels = List(8) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                instructions,
+                labels,
+                listOf(exceptionHandler(0, 1, 3, null)),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            tryBlock,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(blocks.mapTo(linkedSetOf()) { it.id }, edges, tryBlock),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(2, null),
+                    ExpressionStatement.Throw(6, ValueId(0)),
+                ),
+            ),
+        )
+
+        val region = result.regions.filterIsInstance<StructuredRegion.TryFinally>().single()
+        assertEquals(setOf(tryBlock), region.tryBlocks)
+        assertEquals(setOf(normalCopy), region.normalCopyBlocks)
+        assertEquals(listOf(1..1), region.normalCopyInstructionIndices)
+        assertEquals(null, region.continuation)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    @Test
     fun `recognizes branching finally from duplicated normal body`() {
         val b0 = BasicBlockId(0)
         val b1 = BasicBlockId(1)

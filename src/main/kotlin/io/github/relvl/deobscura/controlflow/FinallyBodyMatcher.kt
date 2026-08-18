@@ -4,11 +4,12 @@ import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.raw.RawBranchInstruction
 import io.github.relvl.deobscura.raw.RawInstruction
+import io.github.relvl.deobscura.raw.RawReturnInstruction
 
 /** A proven normal-flow copy of the exceptional finally body. */
 internal data class FinallyBodyMatch(
     val blocks: Set<BasicBlockId>,
-    val continuation: BasicBlockId,
+    val continuation: BasicBlockId?,
     val instructionRanges: List<IntRange>,
 )
 
@@ -27,6 +28,7 @@ internal object FinallyBodyMatcher {
     ): FinallyBodyMatch? {
         val mapping = linkedMapOf<BasicBlockId, BasicBlockId>()
         var continuation: BasicBlockId? = null
+        var terminalExitBlock: BasicBlockId? = null
 
         fun match(handlerBlock: BasicBlockId, normalBlock: BasicBlockId): Boolean {
             mapping[handlerBlock]?.let { return it == normalBlock }
@@ -41,19 +43,27 @@ internal object FinallyBodyMatcher {
                 }
             }
             val right = graph.instructions(graph.block(normalBlock))
-            val rightBody = if (right.size == left.size + 1 && right.last() is RawBranchInstruction && (right.last() as RawBranchInstruction).opcode.mnemonic == "goto") {
-                right.dropLast(1)
-            } else {
-                right
-            }
+            val trailingGoto = right.size == left.size + 1 &&
+                    right.last() is RawBranchInstruction &&
+                    (right.last() as RawBranchInstruction).opcode.mnemonic == "goto"
+            val trailingReturn = right.size == left.size + 1 && right.last() is RawReturnInstruction
+            val rightBody = if (trailingGoto || trailingReturn) right.dropLast(1) else right
             if (left.size != rightBody.size || left.indices.any { !equivalentFinallyInstruction(left[it], rightBody[it]) }) {
                 return false
             }
 
             val leftEdges = facts.outgoing[handlerBlock].orEmpty()
             val rightEdges = facts.outgoing[normalBlock].orEmpty()
-            if (leftEdges.size != rightEdges.size)
-                return false
+            val terminalExit = trailingReturn &&
+                    rightEdges.isEmpty() &&
+                    leftEdges.size == 1 &&
+                    leftEdges.single().to == handlerExit
+            if (terminalExit) {
+                if (terminalExitBlock != null && terminalExitBlock != normalBlock) return false
+                terminalExitBlock = normalBlock
+                return true
+            }
+            if (leftEdges.size != rightEdges.size) return false
 
             for (leftEdge in leftEdges) {
                 val sameKind = rightEdges.filter { it.kind == leftEdge.kind }
@@ -78,14 +88,25 @@ internal object FinallyBodyMatcher {
         }
 
         if (!match(handlerEntry, normalEntry)) return null
-        val resolvedContinuation = continuation ?: return null
+        if (continuation == null && terminalExitBlock == null) return null
+        if (continuation != null && terminalExitBlock != null) return null
         val normalBlocks = mapping.values.toSet()
-        if (resolvedContinuation in normalBlocks) return null
+        if (continuation != null && continuation in normalBlocks) return null
         if (normalBlocks.any { block -> facts.incoming[block].orEmpty().any { it.from !in normalBlocks && block != normalEntry } }) return null
 
-        val ranges = instructionRanges(normalBlocks, graph)
+        val ranges = instructionRanges(normalBlocks, graph).let { rawRanges ->
+            val terminal = terminalExitBlock ?: return@let rawRanges
+            val terminalInstruction = graph.block(terminal).endInstructionIndexExclusive - 1
+            rawRanges.mapNotNull { range ->
+                when {
+                    terminalInstruction !in range -> range
+                    range.first == range.last -> null
+                    else -> range.first..(range.last - 1)
+                }
+            }
+        }
         if (!allowSplitNormalCopy && ranges.size != 1) return null
-        return FinallyBodyMatch(normalBlocks, resolvedContinuation, ranges)
+        return FinallyBodyMatch(normalBlocks, continuation, ranges)
     }
 
     private fun equivalentFinallyInstruction(left: RawInstruction, right: RawInstruction): Boolean = when {

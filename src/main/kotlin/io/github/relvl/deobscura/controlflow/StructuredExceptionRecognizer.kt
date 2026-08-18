@@ -28,6 +28,7 @@ internal class StructuredExceptionRecognizer {
         val regions = mutableListOf<StructuredRegion>()
         val rejections = linkedMapOf<ExceptionRegionKey, UnstructuredControlFlowReason>()
         val legacyRejectionDetails = linkedMapOf<ExceptionRegionKey, String>()
+        val residualFamilies = linkedMapOf<ExceptionRegionKey, String>()
         val consumedGroups = mutableSetOf<ExceptionRegionKey>()
 
         groupTopologies.forEach { topology ->
@@ -131,7 +132,9 @@ internal class StructuredExceptionRecognizer {
                 graph = graph,
                 topology = topology,
                 header = header,
-                protectedBlocks = protectedBlocks,
+                // Unlike catches, finally must keep source-terminal transfer blocks outside the
+                // physical try range: those blocks can contain the duplicated cleanup before return.
+                protectedBlocks = topology.protectedBlocks,
                 groupedHandlers = groupedHandlers,
                 facts = facts,
             )
@@ -147,11 +150,23 @@ internal class StructuredExceptionRecognizer {
                         append(legacyFinallyTrace.lastOrNull() ?: "not-attempted")
                     }
                 }
+                residualFamilies[key] = ExceptionResidualProfiler.profileCatchAll(
+                    graph = graph,
+                    topology = topology,
+                    header = header,
+                    exceptionTopology = exceptionTopology,
+                    protectedBlocks = protectedBlocks,
+                    groupedHandlers = groupedHandlers,
+                    facts = facts,
+                    legacyDetail = legacyRejectionDetails[key],
+                )
             }
         }
 
-        return ExceptionRecognition(regions, rejections, groupTopologies.size, legacyRejectionDetails)
+        return ExceptionRecognition(regions, rejections, groupTopologies.size, legacyRejectionDetails, residualFamilies)
     }
+
+
 }
 
 /** Stable key for diagnostics attached to one coalesced protected range. */
@@ -166,4 +181,5 @@ internal data class ExceptionRecognition(
     val rejections: Map<ExceptionRegionKey, UnstructuredControlFlowReason>,
     val regionCount: Int,
     val legacyRejectionDetails: Map<ExceptionRegionKey, String> = emptyMap(),
+    val residualFamilies: Map<ExceptionRegionKey, String> = emptyMap(),
 )

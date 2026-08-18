@@ -5,13 +5,15 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 val interestingIr = listOf(
-    "org/apache/xerces/jaxp/validation/DOMValidatorHelper.ir",
-    "org/apache/xerces/jaxp/validation/StAXValidatorHelper.ir",
-    "org/apache/xerces/jaxp/validation/ValidatorHandlerImpl.ir",
-    "org/apache/xerces/impl/dtd/XMLDTDLoader.ir",
-    "org/apache/xerces/parsers/DTDConfiguration.ir",
-    "org/apache/xerces/impl/xs/opti/SchemaParsingConfig.ir",
-    "org/apache/xerces/parsers/NonValidatingConfiguration.ir",
+    // 651: catch-all-only, exception-store-only, boundaries=0, peers=1
+    "org/antlr/v4/runtime/atn/LexerATNSimulator.ir",
+    "org/antlr/v4/runtime/atn/ParserATNSimulator.ir",
+
+    // 363/355: catch-all-only, exception-store-only, peers=2
+    "org/apache/commons/io/input/ReadAheadInputStream.ir",
+
+    // более сложная peers=3-4 форма — полезна для сравнения
+    "org/apache/commons/io/input/Tailer.ir",
 )
 
 fun findProjectRoot(start: Path): Path {

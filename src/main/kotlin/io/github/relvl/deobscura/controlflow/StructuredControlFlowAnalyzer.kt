@@ -127,6 +127,7 @@ class StructuredControlFlowAnalyzer {
                             protectedStartInstructionIndex = key.protectedStartInstructionIndex,
                             protectedEndInstructionIndexExclusive = key.protectedEndInstructionIndexExclusive,
                             detail = exceptionRecognition.legacyRejectionDetails[key],
+                            exceptionResidualFamily = exceptionRecognition.residualFamilies[key],
                         ),
                     )
                 }
