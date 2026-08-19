@@ -135,6 +135,30 @@ internal object FragmentedSynchronizedRecognizer {
                 )
             if (protectedRanges.isEmpty()) continue
 
+            val syntheticCleanupCompanions = allGroups.filter { candidate ->
+                candidate !in family &&
+                    handlerCopies.any { copy ->
+                        candidate.group.handlers.size == 1 &&
+                            candidate.group.handlers.single().catchType == null &&
+                            candidate.group.envelope.start == copy.handlerStart &&
+                            candidate.group.envelope.endExclusive == copy.shape.monitorExitInstructionIndex + 1 &&
+                            candidate.handlerEntries == setOf(copy.entry)
+                    }
+            }
+            if (handlerCopies.any { copy ->
+                    syntheticCleanupCompanions.count { candidate ->
+                        candidate.group.envelope.start == copy.handlerStart &&
+                            candidate.group.envelope.endExclusive == copy.shape.monitorExitInstructionIndex + 1 &&
+                            candidate.handlerEntries == setOf(copy.entry)
+                    } > 1
+                }
+            ) continue
+            val syntheticCleanupRanges = syntheticCleanupCompanions.flatMap { companion ->
+                companion.group.segments.map { segment ->
+                    StructuredProtectedRange(segment.range.start, segment.range.endExclusive)
+                }
+            }
+
             val representative = handlerCopies.first()
             return SynchronizedRecognition(
                 region = StructuredRegion.Synchronized(
@@ -150,9 +174,15 @@ internal object FragmentedSynchronizedRecognizer {
                     protectedStartInstructionIndex = protectedRanges.minOf { range -> range.startInstructionIndex },
                     protectedEndInstructionIndexExclusive = protectedRanges.maxOf { range -> range.endInstructionIndexExclusive },
                     protectedRanges = protectedRanges,
+                    syntheticCleanupProtectedRanges = syntheticCleanupRanges,
                 ),
-                consumedGroupKeys = family.drop(1).mapTo(linkedSetOf()) { candidate ->
-                    ExceptionRegionKey(candidate.group.envelope.start, candidate.group.envelope.endExclusive)
+                consumedGroupKeys = linkedSetOf<ExceptionRegionKey>().apply {
+                    family.drop(1).mapTo(this) { candidate ->
+                        ExceptionRegionKey(candidate.group.envelope.start, candidate.group.envelope.endExclusive)
+                    }
+                    syntheticCleanupCompanions.mapTo(this) { companion ->
+                        ExceptionRegionKey(companion.group.envelope.start, companion.group.envelope.endExclusive)
+                    }
                 },
             )
         }

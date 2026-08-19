@@ -405,6 +405,94 @@ class StructuredSynchronizedTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: synchronized (m) { try { A } catch (E e) { H } B }  // one catch-all plus self-protected cleanup
+    @Test
+    fun `recognizes canonical synchronized body with rejoining nested catch and cleanup companion`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val b3 = BasicBlockId(3)
+        val nestedHandler = BasicBlockId(4)
+        val cleanup = BasicBlockId(5)
+        val edges = listOf(
+            edge(b0, b1, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(b1, b2, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b1, cleanup, null),
+            edge(b2, b3, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b2, nestedHandler, "java/lang/Exception"),
+            exceptionEdge(b2, cleanup, null),
+            exceptionEdge(b3, cleanup, null),
+            edge(nestedHandler, b3, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(cleanup, cleanup, null),
+        )
+        val instructions = listOf(
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 2),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorenter")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 5),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 3),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 3),
+            RawThrowInstruction(JvmOpcode("athrow")),
+        )
+        val blocks = listOf(
+            BasicBlock(b0, 0, 3, emptyList(), emptyList()),
+            BasicBlock(b1, 3, 4, emptyList(), emptyList()),
+            BasicBlock(b2, 4, 5, emptyList(), emptyList()),
+            BasicBlock(b3, 5, 8, emptyList(), emptyList()),
+            BasicBlock(nestedHandler, 8, 10, emptyList(), emptyList()),
+            BasicBlock(cleanup, 10, 15, emptyList(), emptyList()),
+        )
+        val labels = List(16) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                instructions,
+                labels,
+                listOf(
+                    exceptionHandler(3, 8, 10, null),
+                    exceptionHandler(4, 5, 8, "java/lang/Exception"),
+                    exceptionHandler(10, 13, 10, null),
+                ),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            b0,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(b0, b1, b2, b3, nestedHandler, cleanup), edges, b0),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(7, null),
+                    ExpressionStatement.Throw(14, ValueId(0)),
+                ),
+            ),
+            legacySubroutineNormalized = false,
+        )
+
+        val region = result.regions.filterIsInstance<StructuredRegion.Synchronized>().single()
+        assertEquals(b0, region.header)
+        assertEquals(b1, region.bodyEntry)
+        assertEquals(setOf(b1, b2, b3, nestedHandler), region.bodyBlocks)
+        assertEquals(setOf(cleanup), region.handlerBlocks)
+        assertEquals(listOf(6), region.normalMonitorExitInstructionIndices)
+        assertEquals(listOf(StructuredProtectedRange(10, 13)), region.syntheticCleanupProtectedRanges)
+        assertEquals(3, result.exceptionRegionCount)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
     // Pseudocode: synchronized (m) { BODY }  // handler keeps Throwable on stack: aload m; monitorexit; athrow
     @Test
     fun `recognizes synchronized cleanup with exception kept on operand stack`() {

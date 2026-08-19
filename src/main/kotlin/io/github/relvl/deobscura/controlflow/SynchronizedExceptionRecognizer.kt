@@ -77,7 +77,12 @@ internal object SynchronizedExceptionRecognizer {
             facts = facts,
         )
         if (bodyBlocks.isEmpty()) return null
-        if (hasExternalProtectedEntry(header, bodyBlocks, facts)) return null
+        if (hasExternalProtectedEntry(header, bodyBlocks, facts)) {
+            // A nested catch may rejoin the synchronized body and therefore look like an external
+            // normal predecessor to the strict single-range proof. The fragmented recognizer owns
+            // the exception-aware closure needed for that shape.
+            return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts)
+        }
 
         val monitorEnterBlock = facts.instructionToBlock.getOrNull(monitorEnterInstructionIndex) ?: return null
         val cleanupCompanions = allGroups.filter { candidate ->
