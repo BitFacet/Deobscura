@@ -1,6 +1,7 @@
 package io.github.relvl.deobscura.controlflow
 
 import io.github.relvl.deobscura.cfg.BasicBlockId
+import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.raw.*
 
@@ -414,8 +415,39 @@ internal object ModernFinallyRecognizer {
         } else {
             emptyList()
         }
-        val directMatches = if (strictDirectMatches.isNotEmpty()) strictDirectMatches else nestedDirectMatches
+        val exceptionIslandMatches = if (strictDirectMatches.isEmpty() && nestedDirectMatches.isEmpty()) {
+            boundaryTargets.mapNotNull { target ->
+                FinallyBodyMatcher.match(
+                    graph = graph,
+                    handlerEntry = bodyEntry,
+                    handlerBlocks = bodyBlocks,
+                    handlerExit = rethrow,
+                    handlerEntryInstructionOffset = handlerEntryInstructionOffset,
+                    normalEntry = target,
+                    facts = facts,
+                    handlerExitInstructionPrefixLength = rethrowPrefixSize,
+                    allowSplitNormalCopy = true,
+                    allowEquivalentTerminalReturnTargets = allowTerminalAndGuardElidedNormalCopies,
+                )?.takeIf { match ->
+                    cleanupGapsAreExceptionHandlerIslands(
+                        blocks = match.blocks,
+                        ranges = match.instructionRanges,
+                        graph = graph,
+                        facts = facts,
+                    )
+                }?.let { target to it }
+            }
+        } else {
+            emptyList()
+        }
+        val directMatches = when {
+            strictDirectMatches.isNotEmpty() -> strictDirectMatches
+            nestedDirectMatches.isNotEmpty() -> nestedDirectMatches
+            else -> exceptionIslandMatches
+        }
         val usingNestedHandlerMatches = strictDirectMatches.isEmpty() && nestedDirectMatches.isNotEmpty()
+        val usingExceptionIslandMatches =
+            strictDirectMatches.isEmpty() && nestedDirectMatches.isEmpty() && exceptionIslandMatches.isNotEmpty()
         val projectedMatches = if (
             allowTerminalAndGuardElidedNormalCopies &&
             strictDirectMatches.isNotEmpty()
@@ -461,6 +493,22 @@ internal object ModernFinallyRecognizer {
                     return reject("nested-handler-range-count")
                 }
             }
+        } else if (usingExceptionIslandMatches) {
+            splitHandlerInstructionRanges(
+                graph = graph,
+                bodyBlocks = bodyBlocks,
+                handlerEntry = handlerEntry,
+                handlerEntryInstructionOffset = handlerEntryInstructionOffset,
+                handlerExit = rethrow,
+                handlerExitInstructionPrefixLength = rethrowPrefixSize,
+            ).also { ranges ->
+                if (ranges.size < 2 ||
+                    matches.any { it.instructionRanges.size != ranges.size } ||
+                    !cleanupGapsAreExceptionHandlerIslands(bodyBlocks, ranges, graph, facts)
+                ) {
+                    return reject("handler-split-not-exception-islands")
+                }
+            }
         } else {
             listOf(
                 bodyBlocks.asSequence()
@@ -499,6 +547,63 @@ internal object ModernFinallyRecognizer {
             normalCopies = matches,
             continuation = continuation,
         )
+    }
+
+
+    /**
+     * Allows a physically split normal cleanup copy only when every gap is an exception-only
+     * handler island entered from blocks already proven equivalent to the exceptional cleanup.
+     * The gap itself stays outside the finally copy's ownership.
+     */
+    private fun cleanupGapsAreExceptionHandlerIslands(
+        blocks: Set<BasicBlockId>,
+        ranges: List<IntRange>,
+        graph: ControlFlowGraph,
+        facts: ControlFlowFacts,
+    ): Boolean {
+        if (ranges.size < 2) return false
+
+        for ((left, right) in ranges.zipWithNext()) {
+            val gapStart = left.last + 1
+            val gapEndExclusive = right.first
+            if (gapStart >= gapEndExclusive) return false
+
+            val gapBlocks = graph.blocks.asSequence()
+                .filter { block ->
+                    block.startInstructionIndex >= gapStart &&
+                        block.endInstructionIndexExclusive <= gapEndExclusive
+                }
+                .mapTo(linkedSetOf()) { it.id }
+            if (gapBlocks.isEmpty()) return false
+
+            val exceptionEntries = graph.edges.asSequence()
+                .filter { edge ->
+                    edge.kind == ControlFlowEdgeKind.EXCEPTION &&
+                        edge.from in blocks &&
+                        edge.to in gapBlocks
+                }
+                .mapTo(linkedSetOf()) { it.to }
+            if (exceptionEntries.isEmpty()) return false
+
+            if (gapBlocks.any { block ->
+                    facts.incoming[block].orEmpty().any { edge -> edge.from !in gapBlocks }
+                }) {
+                return false
+            }
+
+            val reachable = linkedSetOf<BasicBlockId>()
+            val pending = ArrayDeque(exceptionEntries)
+            while (pending.isNotEmpty()) {
+                val block = pending.removeFirst()
+                if (!reachable.add(block)) continue
+                facts.outgoing[block].orEmpty()
+                    .map { it.to }
+                    .filter { it in gapBlocks && it !in reachable }
+                    .forEach(pending::addLast)
+            }
+            if (reachable != gapBlocks) return false
+        }
+        return true
     }
 
 
