@@ -36,6 +36,7 @@ internal object FinallyBodyMatcher {
         var terminalExitBlock: BasicBlockId? = null
         val terminalContinuationTargets = linkedSetOf<BasicBlockId>()
         var matchedNestedHandlerCount = 0
+        val matchedNestedNormalHandlers = linkedSetOf<BasicBlockId>()
 
         fun matchNestedHandler(leftTarget: BasicBlockId, rightTarget: BasicBlockId): Boolean {
             if (leftTarget in handlerBlocks || rightTarget in mapping.values) return false
@@ -58,9 +59,17 @@ internal object FinallyBodyMatcher {
             if (leftNormalEdges.size != 1 || leftNormalEdges.single().to != handlerExit) return false
             if (rightNormalEdges.size != 1) return false
             val rightContinuation = rightNormalEdges.single().to
-            if (terminalContinuationTargets.isNotEmpty()) return false
-            if (continuation != null && continuation != rightContinuation) return false
-            continuation = rightContinuation
+            val mappedHandlerExit = mapping[handlerExit]
+            if (mappedHandlerExit != null) {
+                // If the rethrow block itself carries a cleanup prefix, the nested handler rejoins
+                // that prefix in both copies rather than the final continuation after it.
+                if (rightContinuation != mappedHandlerExit) return false
+            } else {
+                if (terminalContinuationTargets.isNotEmpty()) return false
+                if (continuation != null && continuation != rightContinuation) return false
+                continuation = rightContinuation
+            }
+            matchedNestedNormalHandlers += rightTarget
             matchedNestedHandlerCount++
             return true
         }
@@ -172,7 +181,13 @@ internal object FinallyBodyMatcher {
         if (terminalExitBlock != null && terminalContinuationTargets.isNotEmpty()) return null
         val normalBlocks = mapping.values.toSet()
         if (continuation != null && continuation in normalBlocks) return null
-        if (normalBlocks.any { block -> facts.incoming[block].orEmpty().any { it.from !in normalBlocks && block != normalEntry } }) return null
+        if (normalBlocks.any { block ->
+                facts.incoming[block].orEmpty().any { edge ->
+                    edge.from !in normalBlocks &&
+                        edge.from !in matchedNestedNormalHandlers &&
+                        block != normalEntry
+                }
+            }) return null
 
         val ranges = instructionRanges(normalBlocks, graph).let { rawRanges ->
             val terminal = terminalExitBlock ?: return@let rawRanges
