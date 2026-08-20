@@ -163,6 +163,10 @@ internal class StructuredExceptionRecognizer {
                 legacyRejectionDetails[key] = buildString {
                     append("synchronized=")
                     append(synchronizedTrace.lastOrNull() ?: "not-attempted")
+                    synchronizedResidualContext(topology, regions)?.let { context ->
+                        append(", synchronized-context=")
+                        append(context)
+                    }
                     append(", modern-try-catch-finally=")
                     append(modernTryCatchFinallyTrace.lastOrNull() ?: "not-attempted")
                     if (legacySubroutineNormalized) {
@@ -200,6 +204,77 @@ internal class StructuredExceptionRecognizer {
 
 
 }
+
+
+private fun synchronizedResidualContext(
+    topology: ExceptionGroupTopology,
+    regions: List<StructuredRegion>,
+): String? {
+    val range = topology.group.envelope
+    val candidates = regions.asSequence()
+        .filterIsInstance<StructuredRegion.Synchronized>()
+        .filter { region -> region.monitorEnterInstructionIndex < range.endExclusive }
+        .map { region ->
+            val lastNormalExit = region.normalMonitorExitInstructionIndices.maxOrNull() ?: return@map null
+            val bodyOverlap = topology.protectedBlocks.count { block -> block in region.bodyBlocks }
+            val handlerOverlap = topology.protectedBlocks.count { block -> block in region.handlerBlocks }
+            val handlerEntryOverlap = topology.handlerEntries.count { block -> block in region.handlerBlocks }
+            val distance = when {
+                range.endExclusive <= region.monitorEnterInstructionIndex -> region.monitorEnterInstructionIndex - range.endExclusive
+                range.start > lastNormalExit -> range.start - lastNormalExit
+                else -> 0
+            }
+            SynchronizedResidualContext(
+                region = region,
+                lastNormalExit = lastNormalExit,
+                bodyOverlap = bodyOverlap,
+                handlerOverlap = handlerOverlap,
+                handlerEntryOverlap = handlerEntryOverlap,
+                distance = distance,
+            )
+        }
+        .filterNotNull()
+        .sortedWith(compareBy<SynchronizedResidualContext> { context -> context.distance }.thenByDescending { context -> context.region.monitorEnterInstructionIndex })
+        .take(2)
+        .toList()
+    if (candidates.isEmpty()) return null
+
+    return candidates.joinToString(";") { context ->
+        val region = context.region
+        buildString {
+            append("monitor@")
+            append(region.monitorEnterInstructionIndex)
+            append("/handler-exit@")
+            append(region.handlerMonitorExitInstructionIndex)
+            append("/normal-exit@")
+            append(context.lastNormalExit)
+            append("/position=")
+            append(
+                when {
+                    range.endExclusive <= region.monitorEnterInstructionIndex -> "before-monitor"
+                    range.start > context.lastNormalExit -> "after-monitor"
+                    range.start > region.handlerMonitorExitInstructionIndex -> "between-handler-and-normal-exit"
+                    else -> "inside-monitor-span"
+                },
+            )
+            append("/body-overlap=")
+            append(context.bodyOverlap)
+            append("/handler-overlap=")
+            append(context.handlerOverlap)
+            append("/handler-entry-overlap=")
+            append(context.handlerEntryOverlap)
+        }
+    }
+}
+
+private data class SynchronizedResidualContext(
+    val region: StructuredRegion.Synchronized,
+    val lastNormalExit: Int,
+    val bodyOverlap: Int,
+    val handlerOverlap: Int,
+    val handlerEntryOverlap: Int,
+    val distance: Int,
+)
 
 /** Stable key for diagnostics attached to one coalesced protected range. */
 internal data class ExceptionRegionKey(

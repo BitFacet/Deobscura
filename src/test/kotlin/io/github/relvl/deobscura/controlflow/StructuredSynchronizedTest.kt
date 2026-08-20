@@ -423,6 +423,7 @@ class StructuredSynchronizedTest {
             exceptionEdge(b1, h1, null),
             edge(b2, b3, ControlFlowEdgeKind.FALLTHROUGH),
             exceptionEdge(b2, h2, null),
+            exceptionEdge(nestedHandler, h1, null),
         )
         val instructions = listOf(
             RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 2),
@@ -466,6 +467,10 @@ class StructuredSynchronizedTest {
                     exceptionHandler(3, 4, 8, "java/lang/Exception"),
                     exceptionHandler(3, 4, 9, null),
                     exceptionHandler(4, 5, 14, null),
+                    // The nested throwing handler is itself protected by the already-proven monitor cleanup.
+                    // A later typed entry is physically present but shadowed by the leading catch-all.
+                    exceptionHandler(8, 9, 9, null),
+                    exceptionHandler(8, 9, 14, "java/lang/Exception"),
                 ),
                 emptyList(),
             ),
@@ -496,7 +501,7 @@ class StructuredSynchronizedTest {
         assertEquals(2, region.monitorSlot)
         assertEquals(2, region.monitorEnterInstructionIndex)
         assertEquals(listOf(6), region.normalMonitorExitInstructionIndices)
-        assertEquals(2, result.exceptionRegionCount)
+        assertEquals(3, result.exceptionRegionCount)
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 

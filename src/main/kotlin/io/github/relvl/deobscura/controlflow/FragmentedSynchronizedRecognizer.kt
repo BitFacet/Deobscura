@@ -196,7 +196,19 @@ internal object FragmentedSynchronizedRecognizer {
                     } > 1
                 }
             ) continue
-            val syntheticCleanupRanges = syntheticCleanupCompanions.flatMap { companion ->
+            val shadowedCleanupCompanions = allGroups.filter { candidate ->
+                candidate !in family &&
+                    candidate !in syntheticCleanupCompanions &&
+                    candidate.protectedBlocks.isNotEmpty() &&
+                    candidate.protectedBlocks.all { block -> block in bodyBlocks } &&
+                    startsWithSynchronizedCleanup(
+                        candidate = candidate,
+                        synchronizedHandlerBlocks = handlerBlocks,
+                        graph = graph,
+                        facts = facts,
+                    )
+            }
+            val syntheticCleanupRanges = (syntheticCleanupCompanions + shadowedCleanupCompanions).flatMap { companion ->
                 companion.group.segments.map { segment ->
                     StructuredProtectedRange(segment.range.start, segment.range.endExclusive)
                 }
@@ -223,7 +235,7 @@ internal object FragmentedSynchronizedRecognizer {
                     family.drop(1).mapTo(this) { candidate ->
                         ExceptionRegionKey(candidate.group.envelope.start, candidate.group.envelope.endExclusive)
                     }
-                    syntheticCleanupCompanions.mapTo(this) { companion ->
+                    (syntheticCleanupCompanions + shadowedCleanupCompanions).mapTo(this) { companion ->
                         ExceptionRegionKey(companion.group.envelope.start, companion.group.envelope.endExclusive)
                     }
                 },
@@ -232,6 +244,25 @@ internal object FragmentedSynchronizedRecognizer {
         return null
     }
 
+
+
+    /**
+     * A physical range already owned by the synchronized body may still carry legacy exception-table
+     * entries after normalization. It is redundant only when handler lookup starts with one of the
+     * already-proven monitor cleanup handlers; that catch-all shadows every later entry for the range.
+     */
+    private fun startsWithSynchronizedCleanup(
+        candidate: ExceptionGroupTopology,
+        synchronizedHandlerBlocks: Set<BasicBlockId>,
+        graph: ControlFlowGraph,
+        facts: ControlFlowFacts,
+    ): Boolean {
+        val first = candidate.group.handlers.firstOrNull() ?: return false
+        if (first.catchType != null) return false
+        val handlerIndex = handlerInstructionIndex(first, graph, facts) ?: return false
+        val entry = facts.instructionToBlock.getOrNull(handlerIndex) ?: return false
+        return entry in synchronizedHandlerBlocks
+    }
 
     /**
      * Expands source ownership over nested exception handlers whose protected scope is already
