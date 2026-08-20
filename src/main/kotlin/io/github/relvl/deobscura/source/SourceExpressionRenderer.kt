@@ -8,6 +8,7 @@ import io.github.relvl.deobscura.raw.JvmType
 /** Minimal source-facing rendering for Expression IR. Names remain deliberately technical. */
 internal class SourceExpressionRenderer(
     private val deobfuscation: DeobfuscationPlan = DeobfuscationPlan(),
+    private val bindings: SourceValueBindings = SourceValueBindings.EMPTY,
 ) {
     fun renderDefinition(value: ExpressionValue, expression: ExpressionAnalysis): String {
         val rendered = renderNode(value.node, expression)
@@ -76,7 +77,7 @@ internal class SourceExpressionRenderer(
         is ExpressionNode.Root -> when (val origin = node.origin) {
             is io.github.relvl.deobscura.analysis.ValueOrigin.This -> "this"
             is io.github.relvl.deobscura.analysis.ValueOrigin.Parameter -> "arg${origin.index}"
-            is io.github.relvl.deobscura.analysis.ValueOrigin.ExceptionHandler -> "caught"
+            is io.github.relvl.deobscura.analysis.ValueOrigin.ExceptionHandler -> bindings.exceptionParameter(origin.handlerInstructionIndex) ?: "caught"
             is io.github.relvl.deobscura.analysis.ValueOrigin.ReturnAddress -> "/* return-address@${origin.returnInstructionIndex} */ null"
             is io.github.relvl.deobscura.analysis.ValueOrigin.Instruction -> "v${origin.index}"
         }
@@ -241,5 +242,20 @@ internal class SourceExpressionRenderer(
         const val PRECEDENCE_MULTIPLICATIVE = 9
         const val PRECEDENCE_UNARY = 10
         const val PRECEDENCE_PRIMARY = 11
+    }
+}
+
+
+/** Lexical source names assigned to JVM-root values already represented by source syntax. */
+internal data class SourceValueBindings(
+    private val exceptionParameters: Map<Int, String> = emptyMap(),
+) {
+    fun exceptionParameter(handlerInstructionIndex: Int): String? = exceptionParameters[handlerInstructionIndex]
+
+    fun withExceptionParameter(handlerInstructionIndex: Int, name: String): SourceValueBindings =
+        copy(exceptionParameters = exceptionParameters + (handlerInstructionIndex to name))
+
+    companion object {
+        val EMPTY = SourceValueBindings()
     }
 }

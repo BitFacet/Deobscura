@@ -23,7 +23,6 @@ class JavaLikeSourceRenderer(
     private val deobfuscation: DeobfuscationPlan = DeobfuscationPlan(),
     private val methodOverrides: MethodOverrideAnalysis = MethodOverrideAnalysis.EMPTY,
 ) {
-    private val expressionRenderer = SourceExpressionRenderer(deobfuscation)
     fun renderClass(rawClass: RawClass, analyses: Map<SourceMethodKey, MethodAnalysis>): String = buildString {
         val sourceInternalName = deobfuscation.classInternalName(rawClass.internalName)
         val packageName = sourceInternalName.substringBeforeLast('/', missingDelimiterValue = "").replace('/', '.')
@@ -107,7 +106,7 @@ class JavaLikeSourceRenderer(
 
     private fun renderBody(analysis: MethodAnalysis, indent: Int, out: StringBuilder) {
         val context = RenderContext(analysis)
-        renderSourceBlock(analysis.sourceStructure.root, context, indent, out)
+        renderSourceBlock(analysis.sourceStructure.root, context, SourceValueBindings.EMPTY, indent, out)
         if (analysis.sourceStructure.issues.isNotEmpty()) {
             appendIndented(out, indent, "/* source projection debt: ${analysis.sourceStructure.issues.size} issue(s) */")
         }
@@ -116,6 +115,7 @@ class JavaLikeSourceRenderer(
     private fun renderSourceBlock(
         block: SourceBlock,
         context: RenderContext,
+        bindings: SourceValueBindings,
         indent: Int,
         out: StringBuilder,
         instructionRanges: List<IntRange> = emptyList(),
@@ -123,55 +123,55 @@ class JavaLikeSourceRenderer(
     ) {
         block.nodes.forEach { node ->
             when (node) {
-                is SourceNode.BasicBlock -> renderPhysicalBlock(node.block, context, indent, out, fallback = false, instructionRanges = instructionRanges, suppressMonitor = suppressMonitor)
+                is SourceNode.BasicBlock -> renderPhysicalBlock(node.block, context, bindings, indent, out, fallback = false, instructionRanges = instructionRanges, suppressMonitor = suppressMonitor)
                 is SourceNode.Unstructured -> {
                     appendIndented(out, indent, "/* unresolved control flow: ${node.diagnostics.joinToString { it.reason.diagnosticName }} */")
-                    renderPhysicalBlock(node.block, context, indent, out, fallback = true, instructionRanges = instructionRanges, suppressMonitor = suppressMonitor)
+                    renderPhysicalBlock(node.block, context, bindings, indent, out, fallback = true, instructionRanges = instructionRanges, suppressMonitor = suppressMonitor)
                 }
                 is SourceNode.ProjectionFallback -> {
                     appendIndented(out, indent, "/* projection fallback: ${node.reason.name.lowercase().replace('_', '-')} */")
-                    renderPhysicalBlock(node.block, context, indent, out, fallback = true, instructionRanges = instructionRanges, suppressMonitor = suppressMonitor)
+                    renderPhysicalBlock(node.block, context, bindings, indent, out, fallback = true, instructionRanges = instructionRanges, suppressMonitor = suppressMonitor)
                 }
-                is SourceNode.Structured -> renderStructured(node, context, indent, out)
+                is SourceNode.Structured -> renderStructured(node, context, bindings, indent, out)
             }
         }
     }
 
-    private fun renderStructured(node: SourceNode.Structured, context: RenderContext, indent: Int, out: StringBuilder) {
+    private fun renderStructured(node: SourceNode.Structured, context: RenderContext, bindings: SourceValueBindings, indent: Int, out: StringBuilder) {
         val region = node.region
         when (region) {
             is StructuredRegion.If -> {
-                renderPhysicalBlock(region.header, context, indent, out, includeControl = false)
-                appendIndented(out, indent, "if (${renderCondition(region.condition, context.analysis)}) {")
-                renderPart(node, SourceRegionPartKind.THEN, 0, context, indent + 1, out)
+                renderPhysicalBlock(region.header, context, bindings, indent, out, includeControl = false)
+                appendIndented(out, indent, "if (${renderCondition(region.condition, context.analysis, bindings)}) {")
+                renderPart(node, SourceRegionPartKind.THEN, 0, context, bindings, indent + 1, out)
                 region.thenExit?.let { renderArmExit(it, indent + 1, out) }
                 val elsePart = node.parts.firstOrNull { it.kind == SourceRegionPartKind.ELSE }
                 if (elsePart != null) {
                     appendIndented(out, indent, "} else {")
-                    renderSourceBlock(elsePart.body, context, indent + 1, out, elsePart.instructionRanges)
+                    renderSourceBlock(elsePart.body, context, bindings, indent + 1, out, elsePart.instructionRanges)
                     region.elseExit?.let { renderArmExit(it, indent + 1, out) }
                 }
                 appendIndented(out, indent, "}")
             }
 
             is StructuredRegion.While -> {
-                renderPhysicalBlock(region.header, context, indent, out, includeControl = false)
+                renderPhysicalBlock(region.header, context, bindings, indent, out, includeControl = false)
                 val condition = if (region.negateCondition) region.condition.negated() else region.condition
-                appendIndented(out, indent, "while (${renderCondition(condition, context.analysis)}) {")
-                renderPart(node, SourceRegionPartKind.LOOP_BODY, 0, context, indent + 1, out)
+                appendIndented(out, indent, "while (${renderCondition(condition, context.analysis, bindings)}) {")
+                renderPart(node, SourceRegionPartKind.LOOP_BODY, 0, context, bindings, indent + 1, out)
                 appendIndented(out, indent, "}")
             }
 
             is StructuredRegion.Switch -> {
-                renderPhysicalBlock(region.header, context, indent, out, includeControl = false)
-                appendIndented(out, indent, "switch (${expressionRenderer.renderValue(region.selector, context.analysis.expression)}) {")
+                renderPhysicalBlock(region.header, context, bindings, indent, out, includeControl = false)
+                appendIndented(out, indent, "switch (${expressionRenderer(bindings).renderValue(region.selector, context.analysis.expression)}) {")
                 node.parts.filter { it.kind == SourceRegionPartKind.SWITCH_CASE }
                     .sortedBy { it.ordinal }
                     .forEach { part ->
                         val case = region.cases[part.ordinal]
                         case.labels.forEach { appendIndented(out, indent + 1, "case $it:") }
                         if (case.isDefault) appendIndented(out, indent + 1, "default:")
-                        renderSourceBlock(part.body, context, indent + 2, out)
+                        renderSourceBlock(part.body, context, bindings, indent + 2, out)
                         renderSwitchTransfers(case.transfers, indent + 2, out)
                     }
                 appendIndented(out, indent, "}")
@@ -179,38 +179,48 @@ class JavaLikeSourceRenderer(
 
             is StructuredRegion.TryCatch -> {
                 appendIndented(out, indent, "try {")
-                renderPart(node, SourceRegionPartKind.TRY_BODY, 0, context, indent + 1, out)
+                renderPart(node, SourceRegionPartKind.TRY_BODY, 0, context, bindings, indent + 1, out)
                 region.catches.forEachIndexed { index, catch ->
-                    appendIndented(out, indent, "} catch (${catch.catchTypes.joinToString(" | ") { sourceName(it) }} e$index) {")
-                    renderPart(node, SourceRegionPartKind.CATCH_BODY, index, context, indent + 1, out)
+                    val parameterName = "e$index"
+                    val catchBindings = bindings.withExceptionParameter(
+                        context.analysis.graph.block(catch.entry).startInstructionIndex,
+                        parameterName,
+                    )
+                    appendIndented(out, indent, "} catch (${catch.catchTypes.joinToString(" | ") { sourceName(it) }} $parameterName) {")
+                    renderPart(node, SourceRegionPartKind.CATCH_BODY, index, context, catchBindings, indent + 1, out)
                 }
                 appendIndented(out, indent, "}")
             }
 
             is StructuredRegion.TryFinally -> {
                 appendIndented(out, indent, "try {")
-                renderPart(node, SourceRegionPartKind.TRY_BODY, 0, context, indent + 1, out)
+                renderPart(node, SourceRegionPartKind.TRY_BODY, 0, context, bindings, indent + 1, out)
                 appendIndented(out, indent, "} finally {")
-                renderPart(node, SourceRegionPartKind.FINALLY_BODY, 0, context, indent + 1, out)
+                renderPart(node, SourceRegionPartKind.FINALLY_BODY, 0, context, bindings, indent + 1, out)
                 appendIndented(out, indent, "}")
             }
 
             is StructuredRegion.TryCatchFinally -> {
                 appendIndented(out, indent, "try {")
-                renderPart(node, SourceRegionPartKind.TRY_BODY, 0, context, indent + 1, out)
+                renderPart(node, SourceRegionPartKind.TRY_BODY, 0, context, bindings, indent + 1, out)
                 region.catches.forEachIndexed { index, catch ->
-                    appendIndented(out, indent, "} catch (${catch.catchTypes.joinToString(" | ") { sourceName(it) }} e$index) {")
-                    renderPart(node, SourceRegionPartKind.CATCH_BODY, index, context, indent + 1, out)
+                    val parameterName = "e$index"
+                    val catchBindings = bindings.withExceptionParameter(
+                        context.analysis.graph.block(catch.entry).startInstructionIndex,
+                        parameterName,
+                    )
+                    appendIndented(out, indent, "} catch (${catch.catchTypes.joinToString(" | ") { sourceName(it) }} $parameterName) {")
+                    renderPart(node, SourceRegionPartKind.CATCH_BODY, index, context, catchBindings, indent + 1, out)
                 }
                 appendIndented(out, indent, "} finally {")
-                renderPart(node, SourceRegionPartKind.FINALLY_BODY, 0, context, indent + 1, out)
+                renderPart(node, SourceRegionPartKind.FINALLY_BODY, 0, context, bindings, indent + 1, out)
                 appendIndented(out, indent, "}")
             }
 
             is StructuredRegion.Synchronized -> {
-                renderPhysicalBlock(region.header, context, indent, out, includeControl = false)
+                renderPhysicalBlock(region.header, context, bindings, indent, out, includeControl = false)
                 appendIndented(out, indent, "synchronized (/* monitor local[${region.monitorSlot}] */) {")
-                renderPart(node, SourceRegionPartKind.SYNCHRONIZED_BODY, 0, context, indent + 1, out)
+                renderPart(node, SourceRegionPartKind.SYNCHRONIZED_BODY, 0, context, bindings, indent + 1, out)
                 appendIndented(out, indent, "}")
             }
         }
@@ -221,16 +231,18 @@ class JavaLikeSourceRenderer(
         kind: SourceRegionPartKind,
         ordinal: Int,
         context: RenderContext,
+        bindings: SourceValueBindings,
         indent: Int,
         out: StringBuilder,
     ) {
         node.parts.firstOrNull { it.kind == kind && it.ordinal == ordinal }
-            ?.let { renderSourceBlock(it.body, context, indent, out, it.instructionRanges, kind == SourceRegionPartKind.SYNCHRONIZED_BODY) }
+            ?.let { renderSourceBlock(it.body, context, bindings, indent, out, it.instructionRanges, kind == SourceRegionPartKind.SYNCHRONIZED_BODY) }
     }
 
     private fun renderPhysicalBlock(
         block: BasicBlockId,
         context: RenderContext,
+        bindings: SourceValueBindings,
         indent: Int,
         out: StringBuilder,
         fallback: Boolean = false,
@@ -241,7 +253,7 @@ class JavaLikeSourceRenderer(
         if (fallback) appendIndented(out, indent, "B${block.value}:")
         val contentIndent = indent + if (fallback) 1 else 0
         context.phisByBlock[block].orEmpty().forEach { value ->
-            appendIndented(out, contentIndent, expressionRenderer.renderDefinition(value, context.analysis.expression) + ";")
+            appendIndented(out, contentIndent, expressionRenderer(bindings).renderDefinition(value, context.analysis.expression) + ";")
         }
         context.eventsByBlock[block].orEmpty()
             .filter { event -> instructionRanges.isEmpty() || instructionRanges.any { event.instructionIndex in it } }
@@ -250,12 +262,12 @@ class JavaLikeSourceRenderer(
                 is BlockEvent.Value -> appendIndented(
                     out,
                     contentIndent,
-                    expressionRenderer.renderDefinition(event.value, context.analysis.expression) + ";",
+                    expressionRenderer(bindings).renderDefinition(event.value, context.analysis.expression) + ";",
                 )
                 is BlockEvent.Statement -> {
                     if (!includeControl && event.statement.isStructuralControl()) return@forEach
                     if (suppressMonitor && event.statement is ExpressionStatement.Monitor) return@forEach
-                    val rendered = renderStatement(event.statement, block, context)
+                    val rendered = renderStatement(event.statement, block, context, bindings)
                     appendIndented(out, contentIndent, rendered + ";")
                 }
             }
@@ -263,7 +275,7 @@ class JavaLikeSourceRenderer(
         if (fallback) renderFallbackTransfers(block, context, indent + 1, out)
     }
 
-    private fun renderStatement(statement: ExpressionStatement, block: BasicBlockId, context: RenderContext): String {
+    private fun renderStatement(statement: ExpressionStatement, block: BasicBlockId, context: RenderContext, bindings: SourceValueBindings): String {
         val outgoing = context.outgoingByBlock[block].orEmpty()
         return when (statement) {
             is ExpressionStatement.Branch -> {
@@ -275,7 +287,7 @@ class JavaLikeSourceRenderer(
                     val fallthrough = outgoing.firstOrNull { it.kind == ControlFlowEdgeKind.FALLTHROUGH }?.to
                     buildString {
                         append("if (")
-                        append(expressionRenderer.renderCondition(condition, context.analysis.expression))
+                        append(expressionRenderer(bindings).renderCondition(condition, context.analysis.expression))
                         append(")")
                         taken?.let { append(" goto B${it.value}") }
                         fallthrough?.let { append(" else goto B${it.value}") }
@@ -286,10 +298,10 @@ class JavaLikeSourceRenderer(
             is ExpressionStatement.Switch -> {
                 val cases = outgoing.filter { it.kind == ControlFlowEdgeKind.SWITCH }
                     .joinToString { edge -> edge.switchValue?.let { "$it: B${edge.to.value}" } ?: "default: B${edge.to.value}" }
-                "switch (${expressionRenderer.renderValue(statement.selector, context.analysis.expression)}) -> [$cases]"
+                "switch (${expressionRenderer(bindings).renderValue(statement.selector, context.analysis.expression)}) -> [$cases]"
             }
 
-            else -> expressionRenderer.renderStatement(statement, context.analysis.expression)
+            else -> expressionRenderer(bindings).renderStatement(statement, context.analysis.expression)
         }
     }
 
@@ -318,14 +330,16 @@ class JavaLikeSourceRenderer(
         } }
     }
 
-    private fun renderCondition(condition: StructuredCondition, analysis: MethodAnalysis): String = when (condition) {
-        is StructuredCondition.Atomic -> expressionRenderer.renderCondition(condition.condition, analysis.expression)
+    private fun expressionRenderer(bindings: SourceValueBindings) = SourceExpressionRenderer(deobfuscation, bindings)
+
+    private fun renderCondition(condition: StructuredCondition, analysis: MethodAnalysis, bindings: SourceValueBindings): String = when (condition) {
+        is StructuredCondition.Atomic -> expressionRenderer(bindings).renderCondition(condition.condition, analysis.expression)
         is StructuredCondition.And -> condition.terms.joinToString(" && ") { term ->
-            val rendered = renderCondition(term, analysis)
+            val rendered = renderCondition(term, analysis, bindings)
             if (term is StructuredCondition.Or) "($rendered)" else rendered
         }
         is StructuredCondition.Or -> condition.terms.joinToString(" || ") { term ->
-            val rendered = renderCondition(term, analysis)
+            val rendered = renderCondition(term, analysis, bindings)
             if (term is StructuredCondition.And) "($rendered)" else rendered
         }
     }
