@@ -152,12 +152,15 @@ internal class TypedCatchRecognizer {
         hasExternalCatchEntry: (BasicBlockId, Set<BasicBlockId>, Set<BasicBlockId>) -> Boolean,
         supportsCatchExit: (Set<BasicBlockId>, BasicBlockId?) -> Boolean,
         requiredContinuation: BasicBlockId? = null,
+        hasExternalProtectedEntryCheck: ((BasicBlockId, Set<BasicBlockId>) -> Boolean)? = null,
     ): TypedCatchScopeAnalysis {
         val header = scope.header
         val protectedBlocks = scope.protectedBlocks
         val handlersByEntry = scope.handlersByEntry
         val protectedRanges = scope.protectedRanges
-        if (header !in protectedBlocks || hasExternalProtectedEntry(header, protectedBlocks, facts)) {
+        val hasExternalProtectedEntry = hasExternalProtectedEntryCheck?.invoke(header, protectedBlocks)
+            ?: hasExternalProtectedEntry(header, protectedBlocks, facts)
+        if (header !in protectedBlocks || hasExternalProtectedEntry) {
             return TypedCatchScopeAnalysis(failure = TypedCatchScopeFailure.PROTECTED_EXTERNAL_ENTRY)
         }
 

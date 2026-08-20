@@ -252,6 +252,11 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
             },
             supportsCatchExit = { _, _ -> true },
             requiredContinuation = continuation,
+            hasExternalProtectedEntryCheck = { sourceHeader, blocks ->
+                hasExternalEntry(blocks, facts) { target, source ->
+                    target == sourceHeader || source in finallyCopyBlocks
+                }
+            },
         )
         if (typedScope.failure != null) {
             val reason = when (typedScope.failure) {
