@@ -326,6 +326,7 @@ internal object ModernFinallyRecognizer {
         rejectionTrace: MutableList<String>? = null,
         allowTerminalAndGuardElidedNormalCopies: Boolean = false,
         excludeExceptionalCleanupFromNormalBoundaries: Boolean = false,
+        allowDivergentNormalContinuations: Boolean = false,
     ): ModernFinallyShape? {
         fun reject(reason: String): ModernFinallyShape? {
             rejectionTrace?.add(reason)
@@ -470,8 +471,11 @@ internal object ModernFinallyRecognizer {
         if (matches.isEmpty()) return reject("no-matching-normal-copy")
         val continuation = if (allowTerminalAndGuardElidedNormalCopies) {
             val continuations = matches.mapNotNullTo(linkedSetOf()) { it.continuation }
-            if (continuations.size != 1) return reject("continuation-count=${continuations.size}")
-            continuations.single()
+            when {
+                continuations.size == 1 -> continuations.single()
+                allowDivergentNormalContinuations && continuations.size > 1 -> null
+                else -> return reject("continuation-count=${continuations.size}")
+            }
         } else {
             val continuations = matches.mapTo(linkedSetOf()) { it.continuation }
             if (continuations.size != 1) return reject("continuation-count=${continuations.size}")

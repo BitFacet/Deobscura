@@ -57,6 +57,7 @@ internal class ModernTryCatchFinallyRecognizer(
             rejectionTrace = finallyShapeTrace,
             allowTerminalAndGuardElidedNormalCopies = true,
             excludeExceptionalCleanupFromNormalBoundaries = true,
+            allowDivergentNormalContinuations = true,
         ) ?: return reject("finally-shape:${finallyShapeTrace.lastOrNull() ?: "unknown"}")
         val continuation = finallyShape.continuation
 
