@@ -468,7 +468,41 @@ internal object ModernFinallyRecognizer {
             emptyList()
         }
         val matches = directMatches.map { it.second } + projectedMatches
-        if (matches.isEmpty()) return reject("no-matching-normal-copy")
+        if (matches.isEmpty()) {
+            val details = boundaryTargets.joinToString(";") { target ->
+                val splitProbe = FinallyBodyMatcher.match(
+                    graph = graph,
+                    handlerEntry = bodyEntry,
+                    handlerBlocks = bodyBlocks,
+                    handlerExit = rethrow,
+                    handlerEntryInstructionOffset = handlerEntryInstructionOffset,
+                    normalEntry = target,
+                    facts = facts,
+                    handlerExitInstructionPrefixLength = rethrowPrefixSize,
+                    allowSplitNormalCopy = true,
+                    allowEquivalentTerminalReturnTargets = allowTerminalAndGuardElidedNormalCopies,
+                )
+                when {
+                    splitProbe == null -> "B${target.value}:shape-mismatch"
+                    splitProbe.instructionRanges.size <= 1 -> "B${target.value}:single-range-unmatched"
+                    else -> {
+                        val islandGap = cleanupGapsAreExceptionHandlerIslands(
+                            blocks = splitProbe.blocks,
+                            ranges = splitProbe.instructionRanges,
+                            graph = graph,
+                            facts = facts,
+                        )
+                        val gapDetails = if (islandGap) {
+                            ""
+                        } else {
+                            ":${describeCleanupGaps(splitProbe.blocks, splitProbe.instructionRanges, graph, facts)}"
+                        }
+                        "B${target.value}:split-normal-copy:${splitProbe.instructionRanges.size}:exception-islands=$islandGap$gapDetails"
+                    }
+                }
+            }
+            return reject("no-matching-normal-copy:$details")
+        }
         val continuation = if (allowTerminalAndGuardElidedNormalCopies) {
             val continuations = matches.mapNotNullTo(linkedSetOf()) { it.continuation }
             when {
@@ -555,6 +589,40 @@ internal object ModernFinallyRecognizer {
     }
 
 
+
+    private fun describeCleanupGaps(
+        blocks: Set<BasicBlockId>,
+        ranges: List<IntRange>,
+        graph: ControlFlowGraph,
+        facts: ControlFlowFacts,
+    ): String = ranges.zipWithNext().joinToString("|") { (left, right) ->
+        val gapStart = left.last + 1
+        val gapEndExclusive = right.first
+        val gapBlocks = graph.blocks.asSequence()
+            .filter { block ->
+                block.startInstructionIndex >= gapStart &&
+                    block.endInstructionIndexExclusive <= gapEndExclusive
+            }
+            .mapTo(linkedSetOf()) { it.id }
+        val normalEntries = gapBlocks.flatMap { block ->
+            facts.incoming[block].orEmpty()
+                .filter { edge -> edge.from !in gapBlocks }
+                .map { edge -> "B${edge.from.value}->B${edge.to.value}:${edge.kind}" }
+        }.distinct()
+        val exceptionEntries = graph.edges.asSequence()
+            .filter { edge ->
+                edge.kind == ControlFlowEdgeKind.EXCEPTION &&
+                    edge.from in blocks &&
+                    edge.to in gapBlocks
+            }
+            .map { edge -> "B${edge.from.value}->B${edge.to.value}" }
+            .distinct()
+            .toList()
+        "gap=$gapStart..<$gapEndExclusive/blocks=${gapBlocks.joinToString(",") { "B${it.value}" }}" +
+            "/normal-in=${normalEntries.ifEmpty { listOf("none") }.joinToString(",")}" +
+            "/exception-in=${exceptionEntries.ifEmpty { listOf("none") }.joinToString(",")}"
+    }
+
     /**
      * Allows a physically split normal cleanup copy only when every gap is an exception-only
      * handler island entered from blocks already proven equivalent to the exceptional cleanup.
@@ -575,7 +643,8 @@ internal object ModernFinallyRecognizer {
 
             val gapBlocks = graph.blocks.asSequence()
                 .filter { block ->
-                    block.startInstructionIndex >= gapStart &&
+                    block.id in facts.blocks &&
+                        block.startInstructionIndex >= gapStart &&
                         block.endInstructionIndexExclusive <= gapEndExclusive
                 }
                 .mapTo(linkedSetOf()) { it.id }

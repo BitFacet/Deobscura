@@ -1435,6 +1435,114 @@ class StructuredFinallyTest {
     }
 
 
+    // Same split-finally shape, but dead bytecode is physically laid out before one handler
+    // island. Unreachable padding must not become part of the source-level gap proof.
+    @Test
+    fun `recognizes finally copies split by exception islands across unreachable padding`() {
+        val tryBlock = BasicBlockId(0)
+        val normalBefore = BasicBlockId(1)
+        val normalGapHandler = BasicBlockId(2)
+        val unreachablePadding = BasicBlockId(10)
+        val normalAfter = BasicBlockId(3)
+        val continuation = BasicBlockId(4)
+        val handlerEntry = BasicBlockId(5)
+        val handlerBefore = BasicBlockId(6)
+        val handlerGapHandler = BasicBlockId(7)
+        val handlerAfter = BasicBlockId(8)
+        val rethrow = BasicBlockId(9)
+        val edges = listOf(
+            edge(tryBlock, normalBefore, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(tryBlock, handlerEntry, null),
+            edge(normalBefore, normalAfter, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(normalBefore, normalGapHandler, null),
+            edge(normalAfter, continuation, ControlFlowEdgeKind.JUMP),
+            edge(handlerEntry, handlerBefore, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(handlerBefore, handlerAfter, ControlFlowEdgeKind.JUMP),
+            exceptionEdge(handlerBefore, handlerGapHandler, null),
+            edge(handlerAfter, rethrow, ControlFlowEdgeKind.JUMP),
+        )
+        val instructions = listOf(
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(5)),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 7),
+            RawThrowInstruction(JvmOpcode("athrow")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(7)),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 1),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(13)),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 8),
+            RawThrowInstruction(JvmOpcode("athrow")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(15)),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 1),
+            RawThrowInstruction(JvmOpcode("athrow")),
+        )
+        val blocks = listOf(
+            BasicBlock(tryBlock, 0, 1, emptyList(), emptyList()),
+            BasicBlock(normalBefore, 1, 3, emptyList(), emptyList()),
+            BasicBlock(unreachablePadding, 3, 4, emptyList(), emptyList()),
+            BasicBlock(normalGapHandler, 4, 5, emptyList(), emptyList()),
+            BasicBlock(normalAfter, 5, 7, emptyList(), emptyList()),
+            BasicBlock(continuation, 7, 8, emptyList(), emptyList()),
+            BasicBlock(handlerEntry, 8, 9, emptyList(), emptyList()),
+            BasicBlock(handlerBefore, 9, 11, emptyList(), emptyList()),
+            BasicBlock(handlerGapHandler, 11, 13, emptyList(), emptyList()),
+            BasicBlock(handlerAfter, 13, 15, emptyList(), emptyList()),
+            BasicBlock(rethrow, 15, 17, emptyList(), emptyList()),
+        )
+        val labels = List(18) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                instructions,
+                labels,
+                listOf(
+                    exceptionHandler(0, 1, 8, null),
+                    exceptionHandler(1, 3, 4, null),
+                    exceptionHandler(9, 11, 11, null),
+                ),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            tryBlock,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(
+                blocks.asSequence().map { it.id }.filter { it != unreachablePadding }.toCollection(linkedSetOf()),
+                edges,
+                tryBlock,
+            ),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Throw(4, ValueId(1)),
+                    ExpressionStatement.Return(7, null),
+                    ExpressionStatement.Throw(12, ValueId(2)),
+                    ExpressionStatement.Throw(16, ValueId(0)),
+                ),
+            ),
+        )
+
+        val finallyRegion = result.regions.filterIsInstance<StructuredRegion.TryFinally>().single()
+        assertEquals(setOf(tryBlock), finallyRegion.tryBlocks)
+        assertEquals(setOf(handlerEntry, handlerBefore, handlerAfter, rethrow), finallyRegion.handlerBlocks)
+        assertEquals(listOf(9..10, 13..14), finallyRegion.finallyBodyInstructionRanges)
+        assertEquals(setOf(normalBefore, normalAfter), finallyRegion.normalCopyBlocks)
+        assertEquals(listOf(1..2, 5..6), finallyRegion.normalCopyInstructionIndices)
+        assertEquals(continuation, finallyRegion.continuation)
+
+        // The two physical gap handlers remain owned by their own exception-table groups.
+        assertEquals(2, result.unstructuredExceptionRegionCount)
+    }
+
+
     // One source try/catch/finally may resume different normal flows after the same cleanup copy.
     @Test
     fun `recognizes branching modern try catch finally with distinct normal continuations`() {
