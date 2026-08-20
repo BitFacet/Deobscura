@@ -1,6 +1,8 @@
 package io.github.relvl.deobscura.source
 
+import io.github.relvl.deobscura.analysis.JvmValueType
 import io.github.relvl.deobscura.analysis.SsaAnalysis
+import io.github.relvl.deobscura.analysis.SsaPhiLocation
 import io.github.relvl.deobscura.analysis.SsaValueUse
 import io.github.relvl.deobscura.analysis.ValueId
 import io.github.relvl.deobscura.cfg.BasicBlockId
@@ -11,10 +13,14 @@ import io.github.relvl.deobscura.controlflow.StructuredRegion
 import io.github.relvl.deobscura.expression.ExpressionAnalysis
 import io.github.relvl.deobscura.expression.ExpressionNode
 import io.github.relvl.deobscura.expression.ExpressionStatement
+import io.github.relvl.deobscura.expression.ExpressionValue
+import io.github.relvl.deobscura.raw.JvmComputationalType
+import io.github.relvl.deobscura.raw.JvmReferenceType
 
 /** Source-only rewrites of SSA locals that are proven from already-structured control flow. */
 data class SourceLocalAnalysis(
     val conditionalValues: Map<ValueId, SourceConditionalValue> = emptyMap(),
+    val conditionalAssignments: Map<ValueId, SourceConditionalAssignment> = emptyMap(),
     val suppressedDefinitions: Set<ValueId> = emptySet(),
     val consumedIfHeaders: Set<BasicBlockId> = emptySet(),
 )
@@ -25,12 +31,18 @@ data class SourceConditionalValue(
     val elseValue: ValueId,
 )
 
+/** A local phi represented as an initializer followed by an assignment in one structured if arm. */
+data class SourceConditionalAssignment(
+    val initialValue: ValueId,
+    val assignedValue: ValueId,
+)
+
 /**
- * Recognizes the smallest safe source-local pattern first: a structured if/else whose only payload
- * is producing constants for predecessor-addressed phi values at the common continuation.
+ * Reconstructs source-local forms only when already-structured control flow proves their placement.
+ * Pure constant diamonds become conditional expressions; one-arm local phis become an explicit
+ * declaration before the if and an assignment in the populated arm.
  *
- * The canonical SSA/Expression IR remains untouched. The source layer can therefore render a
- * conditional expression and hide the compiler materialization diamond without changing analysis.
+ * Canonical SSA/Expression IR remains untouched.
  */
 class SourceLocalAnalyzer {
     fun analyze(
@@ -44,11 +56,12 @@ class SourceLocalAnalyzer {
                 for (index in block.startInstructionIndex until block.endInstructionIndexExclusive) put(index, block.id)
             }
         }
-        val materializedValuesByBlock = expression.values.values
+        val materializedValueBlocks = expression.values.values
             .asSequence()
             .filter { it.instructionIndices.isNotEmpty() && it.id !in expression.materialization.inlineValues }
-            .mapNotNull { value -> instructionToBlock[value.instructionIndices.last()]?.let { it to value.id } }
-            .groupBy({ it.first }, { it.second })
+            .mapNotNull { value -> instructionToBlock[value.instructionIndices.last()]?.let { value.id to it } }
+            .toMap()
+        val materializedValuesByBlock = materializedValueBlocks.entries.groupBy({ it.value }, { it.key })
         val statementsByBlock = expression.statements
             .mapNotNull { statement -> instructionToBlock[statement.instructionIndex]?.let { it to statement } }
             .groupBy({ it.first }, { it.second })
@@ -58,41 +71,85 @@ class SourceLocalAnalyzer {
         val nestedHeaders = structure.regions.mapTo(linkedSetOf()) { it.header }
 
         val conditionalValues = linkedMapOf<ValueId, SourceConditionalValue>()
+        val conditionalAssignments = linkedMapOf<ValueId, SourceConditionalAssignment>()
         val suppressedDefinitions = linkedSetOf<ValueId>()
         val consumedIfHeaders = linkedSetOf<BasicBlockId>()
 
         structure.regions.filterIsInstance<StructuredRegion.If>().forEach { region ->
             if (region.thenExit != null || region.elseExit != null) return@forEach
-            if (region.thenBlocks.isEmpty() || region.elseBlocks.isEmpty()) return@forEach
-            if (((region.thenBlocks + region.elseBlocks) - region.header).any { it in nestedHeaders }) return@forEach
 
-            val candidates = phisByBlock[region.continuation].orEmpty().mapNotNull { phiValue ->
+            if (region.thenBlocks.isNotEmpty() && region.elseBlocks.isNotEmpty()) {
+                if (((region.thenBlocks + region.elseBlocks) - region.header).any { it in nestedHeaders }) return@forEach
+
+                val candidates = phisByBlock[region.continuation].orEmpty().mapNotNull { phiValue ->
+                    val phi = phiValue.node as ExpressionNode.Phi
+                    if (phi.inputs.size != 2 || phi.inputs.any { it.predecessor == null }) return@mapNotNull null
+                    val thenInput = phi.inputs.singleOrNull { it.predecessor in region.thenBlocks }?.value ?: return@mapNotNull null
+                    val elseInput = phi.inputs.singleOrNull { it.predecessor in region.elseBlocks }?.value ?: return@mapNotNull null
+                    if (!isSingleUseConstant(thenInput, phiValue.id, ssa, expression)) return@mapNotNull null
+                    if (!isSingleUseConstant(elseInput, phiValue.id, ssa, expression)) return@mapNotNull null
+                    phiValue.id to SourceConditionalValue(region.condition, thenInput, elseInput)
+                }.toMap()
+                if (candidates.isEmpty()) return@forEach
+
+                val candidateInputs = candidates.values.flatMapTo(linkedSetOf()) { listOf(it.thenValue, it.elseValue) }
+                val armBlocks = region.thenBlocks + region.elseBlocks
+                val emittedArmValues = armBlocks.flatMap { materializedValuesByBlock[it].orEmpty() }.toSet()
+                if (emittedArmValues != candidateInputs) return@forEach
+                val hasSemanticStatement = armBlocks
+                    .flatMap { statementsByBlock[it].orEmpty() }
+                    .any { it !is ExpressionStatement.Branch }
+                if (hasSemanticStatement) return@forEach
+                if (armBlocks.any { phisByBlock[it].orEmpty().isNotEmpty() }) return@forEach
+
+                conditionalValues.putAll(candidates)
+                suppressedDefinitions += candidateInputs
+                consumedIfHeaders += region.header
+                return@forEach
+            }
+
+            val assignmentBlocks = when {
+                region.thenBlocks.isNotEmpty() && region.elseBlocks.isEmpty() -> region.thenBlocks
+                region.thenBlocks.isEmpty() && region.elseBlocks.isNotEmpty() -> region.elseBlocks
+                else -> return@forEach
+            }
+            if (assignmentBlocks.any { it in nestedHeaders }) return@forEach
+
+            phisByBlock[region.continuation].orEmpty().forEach phiLoop@{ phiValue ->
+                if (!canDeclareSourceLocal(phiValue)) return@phiLoop
                 val phi = phiValue.node as ExpressionNode.Phi
-                if (phi.inputs.size != 2 || phi.inputs.any { it.predecessor == null }) return@mapNotNull null
-                val thenInput = phi.inputs.singleOrNull { it.predecessor in region.thenBlocks }?.value ?: return@mapNotNull null
-                val elseInput = phi.inputs.singleOrNull { it.predecessor in region.elseBlocks }?.value ?: return@mapNotNull null
-                if (!isSingleUseConstant(thenInput, phiValue.id, ssa, expression)) return@mapNotNull null
-                if (!isSingleUseConstant(elseInput, phiValue.id, ssa, expression)) return@mapNotNull null
-                phiValue.id to SourceConditionalValue(region.condition, thenInput, elseInput)
-            }.toMap()
-            if (candidates.isEmpty()) return@forEach
+                if (phi.location !is SsaPhiLocation.Local) return@phiLoop
+                if (phi.inputs.size != 2 || phi.inputs.any { it.predecessor == null }) return@phiLoop
+                val initialInput = phi.inputs.singleOrNull { it.predecessor == region.header }?.value ?: return@phiLoop
+                val assignedInput = phi.inputs.singleOrNull { it.predecessor in assignmentBlocks }?.value ?: return@phiLoop
+                if (materializedValueBlocks[initialInput] != region.header) return@phiLoop
+                if (materializedValueBlocks[assignedInput] !in assignmentBlocks) return@phiLoop
+                if (!isSingleUsePhiInput(initialInput, phiValue.id, ssa, expression)) return@phiLoop
+                if (!isSingleUsePhiInput(assignedInput, phiValue.id, ssa, expression)) return@phiLoop
 
-            val candidateInputs = candidates.values.flatMapTo(linkedSetOf()) { listOf(it.thenValue, it.elseValue) }
-            val armBlocks = region.thenBlocks + region.elseBlocks
-            val emittedArmValues = armBlocks.flatMap { materializedValuesByBlock[it].orEmpty() }.toSet()
-            if (emittedArmValues != candidateInputs) return@forEach
-            val hasSemanticStatement = armBlocks
-                .flatMap { statementsByBlock[it].orEmpty() }
-                .any { it !is ExpressionStatement.Branch }
-            if (hasSemanticStatement) return@forEach
-            if (armBlocks.any { phisByBlock[it].orEmpty().isNotEmpty() }) return@forEach
-
-            conditionalValues.putAll(candidates)
-            suppressedDefinitions += candidateInputs
-            consumedIfHeaders += region.header
+                conditionalAssignments[phiValue.id] = SourceConditionalAssignment(initialInput, assignedInput)
+            }
         }
 
-        return SourceLocalAnalysis(conditionalValues, suppressedDefinitions, consumedIfHeaders)
+        return SourceLocalAnalysis(conditionalValues, conditionalAssignments, suppressedDefinitions, consumedIfHeaders)
+    }
+
+    private fun canDeclareSourceLocal(value: ExpressionValue): Boolean = when (val type = value.type) {
+        is JvmValueType.Computational -> type.type != JvmComputationalType.RETURN_ADDRESS
+        is JvmValueType.Reference -> type.referenceType is JvmReferenceType.Exact
+    }
+
+    private fun isSingleUsePhiInput(
+        valueId: ValueId,
+        phiOutput: ValueId,
+        ssa: SsaAnalysis,
+        expression: ExpressionAnalysis,
+    ): Boolean {
+        val value = expression.values[valueId] ?: return false
+        if (value.node is ExpressionNode.Phi || value.instructionIndices.isEmpty()) return false
+        if (valueId in expression.materialization.inlineValues) return false
+        val uses = ssa.uses[valueId].orEmpty()
+        return uses.size == 1 && (uses.single() as? SsaValueUse.Phi)?.output == phiOutput
     }
 
     private fun isSingleUseConstant(

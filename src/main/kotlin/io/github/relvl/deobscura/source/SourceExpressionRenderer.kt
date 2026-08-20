@@ -38,6 +38,15 @@ internal class SourceExpressionRenderer(
         expression: ExpressionAnalysis,
     ): String = "var v${value.id.value} = $condition ? ${renderConditionalOperand(thenValue, expression)} : ${renderConditionalOperand(elseValue, expression)}"
 
+    fun renderLocalDeclaration(
+        target: ExpressionValue,
+        initializer: ValueId,
+        expression: ExpressionAnalysis,
+    ): String = "${formatValueType(target.type)} v${target.id.value} = ${renderValueForType(initializer, target.type, expression)}"
+
+    fun renderLocalAssignment(target: ValueId, value: ValueId, targetType: JvmValueType, expression: ExpressionAnalysis): String =
+        "v${target.value} = ${renderValueForType(value, targetType, expression)}"
+
     fun renderCondition(condition: BranchCondition, expression: ExpressionAnalysis): String {
         renderThreeWayComparison(condition, expression)?.let { return it }
 
@@ -373,6 +382,41 @@ internal class SourceExpressionRenderer(
         repeat(node.dimensions.size) { component = (component as? JvmType.ArrayType)?.componentType ?: component }
         val dimensions = node.dimensions.joinToString("") { "[${renderValue(it, expression)}]" }
         return "new ${formatType(component)}$dimensions"
+    }
+
+    private fun renderValueForType(id: ValueId, type: JvmValueType, expression: ExpressionAnalysis): String =
+        if (type == JvmValueType.Computational(JvmComputationalType.BOOLEAN)) {
+            renderSourceLocalBooleanValue(id, expression)
+        } else {
+            renderSourceLocalValue(id, expression)
+        }
+
+    /**
+     * Renders a value whose original definition is being absorbed into a reconstructed source local.
+     * Unlike renderValue(), this deliberately ignores ExpressionMaterialization.inlineValues: the old
+     * SSA temporary will no longer be emitted, so referring to its vN name would leave an undefined value.
+     */
+    private fun renderSourceLocalValue(
+        id: ValueId,
+        expression: ExpressionAnalysis,
+        parentPrecedence: Int = PRECEDENCE_LOWEST,
+    ): String {
+        val value = expression.values[id] ?: return "v${id.value}"
+        if (value.node is ExpressionNode.Root) return renderNode(value.node, expression)
+        val precedence = precedence(value.node)
+        val rendered = renderInlineNode(value.node, expression, precedence)
+        return if (precedence < parentPrecedence) "($rendered)" else rendered
+    }
+
+    private fun renderSourceLocalBooleanValue(id: ValueId, expression: ExpressionAnalysis): String {
+        val value = expression.values[id] ?: return "v${id.value} != 0"
+        val constant = (value.node as? ExpressionNode.Constant)?.value
+        if (constant?.equals(0) == true) return "false"
+        if (constant?.equals(1) == true) return "true"
+        if (value.type == JvmValueType.Computational(JvmComputationalType.BOOLEAN)) {
+            return renderSourceLocalValue(id, expression)
+        }
+        return "${renderSourceLocalValue(id, expression, PRECEDENCE_EQUALITY)} != 0"
     }
 
     private fun formatValueType(type: io.github.relvl.deobscura.analysis.JvmValueType): String = when (type) {

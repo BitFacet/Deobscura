@@ -69,18 +69,20 @@ internal class SourceLocalDiagnosticStats {
     var methodCount = 0
     private var analyzedMethodCount = 0
     private var conditionalValueCount = 0L
+    private var conditionalAssignmentCount = 0L
     private var consumedIfCount = 0L
 
     fun record(analysis: io.github.relvl.deobscura.source.SourceLocalAnalysis) {
         analyzedMethodCount++
         conditionalValueCount += analysis.conditionalValues.size
+        conditionalAssignmentCount += analysis.conditionalAssignments.size
         consumedIfCount += analysis.consumedIfHeaders.size
     }
 
     fun log(logger: Logger) {
         logger.info(
-            "Source locals analyzed {}/{} method(s): {} conditional phi value(s), {} materialization if(s) removed.",
-            analyzedMethodCount, methodCount, conditionalValueCount, consumedIfCount,
+            "Source locals analyzed {}/{} method(s): {} conditional phi value(s), {} conditional assignment phi value(s), {} materialization if(s) removed.",
+            analyzedMethodCount, methodCount, conditionalValueCount, conditionalAssignmentCount, consumedIfCount,
         )
     }
 }

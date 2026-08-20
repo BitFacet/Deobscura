@@ -355,7 +355,8 @@ class JavaLikeSourceRenderer(
     ) {
         if (fallback) appendIndented(out, indent, "B${block.value}:")
         val contentIndent = indent + if (fallback) 1 else 0
-        context.phisByBlock[block].orEmpty().forEach { value ->
+        context.phisByBlock[block].orEmpty().forEach phiLoop@{ value ->
+            if (value.id in context.analysis.sourceLocals.conditionalAssignments) return@phiLoop
             val conditional = context.analysis.sourceLocals.conditionalValues[value.id]
             val rendered = if (conditional == null) {
                 expressionRenderer(bindings).renderDefinition(value, context.analysis.expression)
@@ -377,6 +378,35 @@ class JavaLikeSourceRenderer(
             when (event) {
                 is BlockEvent.Value -> {
                     if (event.value.id in context.analysis.sourceLocals.suppressedDefinitions) return@eventLoop
+                    val declaration = context.localDeclarationByInitializer[event.value.id]
+                    if (declaration != null) {
+                        val target = context.analysis.expression.values.getValue(declaration.first)
+                        appendIndented(
+                            out,
+                            contentIndent,
+                            expressionRenderer(bindings).renderLocalDeclaration(
+                                target,
+                                declaration.second.initialValue,
+                                context.analysis.expression,
+                            ) + ";",
+                        )
+                        return@eventLoop
+                    }
+                    val assignment = context.localAssignmentByValue[event.value.id]
+                    if (assignment != null) {
+                        val target = context.analysis.expression.values.getValue(assignment)
+                        appendIndented(
+                            out,
+                            contentIndent,
+                            expressionRenderer(bindings).renderLocalAssignment(
+                                assignment,
+                                event.value.id,
+                                target.type,
+                                context.analysis.expression,
+                            ) + ";",
+                        )
+                        return@eventLoop
+                    }
                     appendIndented(
                         out,
                         contentIndent,
@@ -591,6 +621,14 @@ class JavaLikeSourceRenderer(
             .filter { it.node is ExpressionNode.Phi }
             .groupBy { (it.node as ExpressionNode.Phi).blockId }
         val eventsByBlock: Map<BasicBlockId, List<BlockEvent>> = buildEvents(analysis)
+        val localDeclarationByInitializer: Map<ValueId, Pair<ValueId, SourceConditionalAssignment>> =
+            analysis.sourceLocals.conditionalAssignments.entries.associate { (phi, assignment) ->
+                assignment.initialValue to (phi to assignment)
+            }
+        val localAssignmentByValue: Map<ValueId, ValueId> =
+            analysis.sourceLocals.conditionalAssignments.entries.associate { (phi, assignment) ->
+                assignment.assignedValue to phi
+            }
 
         companion object {
             private fun buildEvents(analysis: MethodAnalysis): Map<BasicBlockId, List<BlockEvent>> {

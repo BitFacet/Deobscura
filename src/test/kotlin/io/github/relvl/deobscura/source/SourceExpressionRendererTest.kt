@@ -1,8 +1,10 @@
 package io.github.relvl.deobscura.source
 
 import io.github.relvl.deobscura.analysis.JvmValueType
+import io.github.relvl.deobscura.analysis.SsaPhiLocation
 import io.github.relvl.deobscura.analysis.ValueId
 import io.github.relvl.deobscura.analysis.ValueOrigin
+import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.expression.*
 import io.github.relvl.deobscura.raw.JvmMethodDescriptor
 import io.github.relvl.deobscura.raw.JvmReferenceType
@@ -475,6 +477,59 @@ class SourceExpressionRendererTest {
         ),
         bootstrapArguments = listOf(constantDesc(recipe)) + constants,
     )
+
+    @Test
+    fun `renders reconstructed local with explicit phi type`() {
+        val initializer = ValueId(1)
+        val target = ValueId(2)
+        val longType = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.LONG)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                initializer to ExpressionValue(
+                    initializer,
+                    longType,
+                    ExpressionNode.Constant(constantDesc(0L)),
+                ),
+                target to ExpressionValue(
+                    target,
+                    longType,
+                    ExpressionNode.Phi(BasicBlockId(1), SsaPhiLocation.Local(0), emptyList()),
+                ),
+            ),
+            statements = emptyList(),
+        )
+
+        val renderer = SourceExpressionRenderer()
+        assertEquals("long v2 = 0", renderer.renderLocalDeclaration(expression.values.getValue(target), initializer, expression))
+        assertEquals("v2 = 0", renderer.renderLocalAssignment(target, initializer, longType, expression))
+    }
+
+    @Test
+    fun `renders boolean reconstructed local using boolean context`() {
+        val initializer = ValueId(1)
+        val target = ValueId(2)
+        val booleanType = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.BOOLEAN)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                initializer to ExpressionValue(
+                    initializer,
+                    JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT),
+                    ExpressionNode.Constant(constantDesc(0)),
+                ),
+                target to ExpressionValue(
+                    target,
+                    booleanType,
+                    ExpressionNode.Phi(BasicBlockId(1), SsaPhiLocation.Local(0), emptyList()),
+                ),
+            ),
+            statements = emptyList(),
+        )
+
+        assertEquals(
+            "boolean v2 = false",
+            SourceExpressionRenderer().renderLocalDeclaration(expression.values.getValue(target), initializer, expression),
+        )
+    }
 
     private fun renderThreeWayCondition(nanResult: Int?, operator: ComparisonOperator): String {
         val leftId = ValueId(1)
