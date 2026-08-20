@@ -58,6 +58,65 @@ class FinallyBodyMatcherTest {
     }
 
     @Test
+    fun `matches guarded cleanup with equivalent terminal return exits`() {
+        val handlerGuard = BasicBlockId(0)
+        val handlerCleanup = BasicBlockId(1)
+        val rethrow = BasicBlockId(2)
+        val normalGuard = BasicBlockId(3)
+        val normalCleanup = BasicBlockId(4)
+        val directReturn = BasicBlockId(5)
+        val instructions = listOf(
+            RawLocalInstruction(JvmOpcode("iload"), LocalOperation.LOAD, JvmComputationalType.INT, 3),
+            RawBranchInstruction(JvmOpcode("ifeq"), RawLabelId(3)),
+            RawNopInstruction(JvmOpcode("nop")),
+            local("aload", LocalOperation.LOAD, 1),
+            RawThrowInstruction(JvmOpcode("athrow")),
+            RawLocalInstruction(JvmOpcode("iload"), LocalOperation.LOAD, JvmComputationalType.INT, 3),
+            RawBranchInstruction(JvmOpcode("ifeq"), RawLabelId(9)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+        )
+        val graph = graph(
+            instructions,
+            listOf(
+                BasicBlock(handlerGuard, 0, 2, emptyList(), emptyList()),
+                BasicBlock(handlerCleanup, 2, 3, emptyList(), emptyList()),
+                BasicBlock(rethrow, 3, 5, emptyList(), emptyList()),
+                BasicBlock(normalGuard, 5, 7, emptyList(), emptyList()),
+                BasicBlock(normalCleanup, 7, 9, emptyList(), emptyList()),
+                BasicBlock(directReturn, 9, 10, emptyList(), emptyList()),
+            ),
+        )
+        val facts = facts(
+            listOf(
+                ControlFlowEdge(handlerGuard, rethrow, ControlFlowEdgeKind.CONDITIONAL),
+                ControlFlowEdge(handlerGuard, handlerCleanup, ControlFlowEdgeKind.FALLTHROUGH),
+                ControlFlowEdge(handlerCleanup, rethrow, ControlFlowEdgeKind.FALLTHROUGH),
+                ControlFlowEdge(normalGuard, directReturn, ControlFlowEdgeKind.CONDITIONAL),
+                ControlFlowEdge(normalGuard, normalCleanup, ControlFlowEdgeKind.FALLTHROUGH),
+            ),
+        )
+
+        val match = assertNotNull(
+            FinallyBodyMatcher.match(
+                graph = graph,
+                handlerEntry = handlerGuard,
+                handlerBlocks = setOf(handlerGuard, handlerCleanup),
+                handlerExit = rethrow,
+                handlerEntryInstructionOffset = 0,
+                normalEntry = normalGuard,
+                facts = facts,
+                allowEquivalentTerminalReturnTargets = true,
+            ),
+        )
+
+        assertEquals(setOf(normalGuard, normalCleanup), match.blocks)
+        assertEquals(null, match.continuation)
+        assertEquals(listOf(5..7), match.instructionRanges)
+    }
+
+    @Test
     fun `rejects non bijective local renaming`() {
         val handler = BasicBlockId(0)
         val rethrow = BasicBlockId(1)

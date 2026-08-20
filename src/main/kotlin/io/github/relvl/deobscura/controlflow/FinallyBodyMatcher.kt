@@ -172,13 +172,22 @@ internal object FinallyBodyMatcher {
         }
 
         if (!match(handlerEntry, normalEntry)) return null
-        if (continuation == null && terminalContinuationTargets.size == 1) {
+        if (continuation == null && terminalExitBlock == null && terminalContinuationTargets.size == 1) {
             continuation = terminalContinuationTargets.single()
             terminalContinuationTargets.clear()
         }
         if (continuation == null && terminalExitBlock == null && terminalContinuationTargets.isEmpty()) return null
         if (continuation != null && (terminalExitBlock != null || terminalContinuationTargets.isNotEmpty())) return null
-        if (terminalExitBlock != null && terminalContinuationTargets.isNotEmpty()) return null
+        if (terminalExitBlock != null && terminalContinuationTargets.isNotEmpty()) {
+            if (!allowEquivalentTerminalReturnTargets) return null
+            val terminalBlocks = terminalContinuationTargets + requireNotNull(terminalExitBlock)
+            val returnTypes = terminalBlocks.mapNotNullTo(linkedSetOf()) { block ->
+                (graph.instructions(graph.block(block)).lastOrNull() as? RawReturnInstruction)?.type
+            }
+            if (returnTypes.size != 1 || terminalBlocks.any { block ->
+                    graph.instructions(graph.block(block)).lastOrNull() !is RawReturnInstruction
+                }) return null
+        }
         val normalBlocks = mapping.values.toSet()
         if (continuation != null && continuation in normalBlocks) return null
         if (normalBlocks.any { block ->

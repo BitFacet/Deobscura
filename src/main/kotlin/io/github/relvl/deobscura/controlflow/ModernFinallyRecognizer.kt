@@ -473,7 +473,8 @@ internal object ModernFinallyRecognizer {
             val continuations = matches.mapNotNullTo(linkedSetOf()) { it.continuation }
             when {
                 continuations.size == 1 -> continuations.single()
-                allowDivergentNormalContinuations && continuations.size > 1 -> null
+                allowDivergentNormalContinuations &&
+                    (continuations.size > 1 || matches.all { it.continuation == null }) -> null
                 else -> return reject("continuation-count=${continuations.size}")
             }
         } else {
