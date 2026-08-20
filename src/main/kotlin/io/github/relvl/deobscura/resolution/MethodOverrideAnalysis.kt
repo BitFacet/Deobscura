@@ -1,12 +1,7 @@
 package io.github.relvl.deobscura.resolution
 
-import io.github.relvl.deobscura.raw.ClassImporter
-import io.github.relvl.deobscura.raw.JvmReferenceType
-import io.github.relvl.deobscura.raw.JvmType
-import io.github.relvl.deobscura.raw.RawClass
-import io.github.relvl.deobscura.raw.RawImportResult
-import io.github.relvl.deobscura.raw.RawMethod
-import java.util.ArrayDeque
+import io.github.relvl.deobscura.raw.*
+import java.util.*
 
 /**
  * Source-level virtual method relationships derived from the complete application hierarchy.
@@ -17,6 +12,7 @@ import java.util.ArrayDeque
  */
 data class MethodOverrideKey(val ownerInternalName: String, val name: String, val descriptor: String)
 
+@ConsistentCopyVisibility
 data class MethodOverrideAnalysis internal constructor(
     private val familyByMethod: Map<MethodOverrideKey, MethodOverrideKey>,
     private val membersByFamily: Map<MethodOverrideKey, Set<MethodOverrideKey>>,

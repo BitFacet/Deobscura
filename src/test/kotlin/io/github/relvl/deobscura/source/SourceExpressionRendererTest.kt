@@ -3,19 +3,13 @@ package io.github.relvl.deobscura.source
 import io.github.relvl.deobscura.analysis.JvmValueType
 import io.github.relvl.deobscura.analysis.ValueId
 import io.github.relvl.deobscura.analysis.ValueOrigin
-import io.github.relvl.deobscura.expression.ExpressionAnalysis
-import io.github.relvl.deobscura.expression.ComparisonOperator
-import io.github.relvl.deobscura.expression.BranchOperand
-import io.github.relvl.deobscura.expression.BranchCondition
-import io.github.relvl.deobscura.expression.ExpressionNode
-import io.github.relvl.deobscura.expression.ExpressionStatement
-import io.github.relvl.deobscura.expression.FieldSymbol
-import io.github.relvl.deobscura.expression.InvocationKind
-import io.github.relvl.deobscura.expression.MethodSymbol
-import io.github.relvl.deobscura.expression.ExpressionValue
+import io.github.relvl.deobscura.expression.*
 import io.github.relvl.deobscura.raw.JvmMethodDescriptor
 import io.github.relvl.deobscura.raw.JvmReferenceType
 import io.github.relvl.deobscura.raw.JvmType
+import java.lang.constant.ClassDesc
+import java.lang.constant.DirectMethodHandleDesc
+import java.lang.constant.MethodHandleDesc
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -275,6 +269,171 @@ class SourceExpressionRendererTest {
         assertEquals("v1 == v2", renderThreeWayCondition(nanResult = -1, ComparisonOperator.EQ))
         assertEquals("v1 != v2", renderThreeWayCondition(nanResult = 1, ComparisonOperator.NE))
     }
+
+    @Test
+    fun `renders string concat recipe with literals and dynamic arguments`() {
+        val firstId = ValueId(1)
+        val secondId = ValueId(2)
+        val resultId = ValueId(3)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                firstId to rootValue(firstId, JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT)),
+                secondId to rootValue(secondId, JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType("java/lang/String")))),
+                resultId to ExpressionValue(
+                    id = resultId,
+                    type = JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType("java/lang/String"))),
+                    node = ExpressionNode.DynamicCall(
+                        stringConcatCallSite("value=\u0001, text=\u0001", listOf(JvmType.IntType, JvmType.ObjectType("java/lang/String"))),
+                        listOf(firstId, secondId),
+                    ),
+                ),
+            ),
+            statements = emptyList(),
+        )
+
+        val rendered = SourceExpressionRenderer().renderDefinition(expression.values.getValue(resultId), expression)
+
+        assertEquals("var v3 = \"value=\" + v1 + \", text=\" + v2", rendered)
+    }
+
+    @Test
+    fun `prefixes empty string when concat starts with numeric arguments`() {
+        val firstId = ValueId(1)
+        val secondId = ValueId(2)
+        val resultId = ValueId(3)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                firstId to rootValue(firstId, JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT)),
+                secondId to rootValue(secondId, JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT)),
+                resultId to ExpressionValue(
+                    id = resultId,
+                    type = JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType("java/lang/String"))),
+                    node = ExpressionNode.DynamicCall(
+                        stringConcatCallSite("\u0001\u0001", listOf(JvmType.IntType, JvmType.IntType)),
+                        listOf(firstId, secondId),
+                    ),
+                ),
+            ),
+            statements = emptyList(),
+        )
+
+        val rendered = SourceExpressionRenderer().renderDefinition(expression.values.getValue(resultId), expression)
+
+        assertEquals("var v3 = \"\" + v1 + v2", rendered)
+    }
+
+    @Test
+    fun `parenthesizes lower precedence expression inside concat`() {
+        val leftId = ValueId(1)
+        val rightId = ValueId(2)
+        val shiftId = ValueId(3)
+        val resultId = ValueId(4)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                leftId to rootValue(leftId, JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT)),
+                rightId to rootValue(rightId, JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT)),
+                shiftId to ExpressionValue(
+                    id = shiftId,
+                    type = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT),
+                    node = ExpressionNode.Binary(BinaryOperator.SHIFT_LEFT, leftId, rightId),
+                ),
+                resultId to ExpressionValue(
+                    id = resultId,
+                    type = JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType("java/lang/String"))),
+                    node = ExpressionNode.DynamicCall(
+                        stringConcatCallSite("\u0001 NULL bytes", listOf(JvmType.IntType)),
+                        listOf(shiftId),
+                    ),
+                ),
+            ),
+            statements = emptyList(),
+            materialization = ExpressionMaterialization(inlineValues = setOf(shiftId)),
+        )
+
+        val rendered = SourceExpressionRenderer().renderDefinition(expression.values.getValue(resultId), expression)
+
+        assertEquals("var v4 = \"\" + (v1 << v2) + \" NULL bytes\"", rendered)
+    }
+
+    @Test
+    fun `renders bootstrap constants from concat recipe`() {
+        val argumentId = ValueId(1)
+        val resultId = ValueId(2)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                argumentId to rootValue(argumentId, JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType("java/lang/String")))),
+                resultId to ExpressionValue(
+                    id = resultId,
+                    type = JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType("java/lang/String"))),
+                    node = ExpressionNode.DynamicCall(
+                        stringConcatCallSite(
+                            "prefix=\u0002, value=\u0001",
+                            listOf(JvmType.ObjectType("java/lang/String")),
+                            constantDesc("fixed"),
+                        ),
+                        listOf(argumentId),
+                    ),
+                ),
+            ),
+            statements = emptyList(),
+        )
+
+        val rendered = SourceExpressionRenderer().renderDefinition(expression.values.getValue(resultId), expression)
+
+        assertEquals("var v2 = \"prefix=fixed, value=\" + v1", rendered)
+    }
+
+    @Test
+    fun `uses concat parameter type for boolean source rendering`() {
+        val argumentId = ValueId(1)
+        val resultId = ValueId(2)
+        val argument = ExpressionValue(
+            id = argumentId,
+            type = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT),
+            node = ExpressionNode.Constant(constantDesc(1)),
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                argumentId to argument,
+                resultId to ExpressionValue(
+                    id = resultId,
+                    type = JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType("java/lang/String"))),
+                    node = ExpressionNode.DynamicCall(
+                        stringConcatCallSite("enabled=\u0001", listOf(JvmType.BooleanType)),
+                        listOf(argumentId),
+                    ),
+                ),
+            ),
+            statements = emptyList(),
+        )
+
+        val rendered = SourceExpressionRenderer().renderDefinition(expression.values.getValue(resultId), expression)
+
+        assertEquals("var v2 = \"enabled=\" + true", rendered)
+    }
+
+    private fun rootValue(id: ValueId, type: JvmValueType): ExpressionValue = ExpressionValue(
+        id = id,
+        type = type,
+        node = ExpressionNode.Root(ValueOrigin.Instruction(id.value)),
+    )
+
+    private fun stringConcatCallSite(
+        recipe: String,
+        parameterTypes: List<JvmType>,
+        vararg constants: java.lang.constant.ConstantDesc,
+    ): DynamicCallSite = DynamicCallSite(
+        name = "makeConcatWithConstants",
+        descriptor = "",
+        type = JvmMethodDescriptor(parameterTypes, JvmType.ObjectType("java/lang/String")),
+        bootstrapMethod = MethodHandleDesc.of(
+            DirectMethodHandleDesc.Kind.STATIC,
+            ClassDesc.of("java.lang.invoke.StringConcatFactory"),
+            "makeConcatWithConstants",
+            "(Ljava/lang/Object;)Ljava/lang/Object;",
+        ),
+        bootstrapArguments = listOf(constantDesc(recipe)) + constants,
+    )
 
     private fun renderThreeWayCondition(nanResult: Int?, operator: ComparisonOperator): String {
         val leftId = ValueId(1)

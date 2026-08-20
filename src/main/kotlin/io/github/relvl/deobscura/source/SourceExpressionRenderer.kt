@@ -80,7 +80,8 @@ internal class SourceExpressionRenderer(
         }
         is ExpressionStatement.Call -> renderCall(statement.method, statement.receiver, statement.arguments, expression)
         is ExpressionStatement.DynamicCall ->
-            "/* invokedynamic ${statement.callSite.name} */ (${renderArguments(statement.arguments, statement.callSite.type.parameterTypes, expression)})"
+            renderStringConcat(statement.callSite, statement.arguments, expression)
+                ?: "/* invokedynamic ${statement.callSite.name} */ (${renderArguments(statement.arguments, statement.callSite.type.parameterTypes, expression)})"
         is ExpressionStatement.Return -> statement.value?.let { value ->
             val rendered = methodReturnType?.let { renderValue(value, expression, it) } ?: renderValue(value, expression)
             "return $rendered"
@@ -117,7 +118,8 @@ internal class SourceExpressionRenderer(
         is ExpressionNode.ArrayLength -> "${renderValue(node.array, expression)}.length"
         is ExpressionNode.Call -> renderCall(node.method, node.receiver, node.arguments, expression)
         is ExpressionNode.DynamicCall ->
-            "/* invokedynamic ${node.callSite.name} */ (${renderArguments(node.arguments, node.callSite.type.parameterTypes, expression)})"
+            renderStringConcat(node.callSite, node.arguments, expression)
+                ?: "/* invokedynamic ${node.callSite.name} */ (${renderArguments(node.arguments, node.callSite.type.parameterTypes, expression)})"
         is ExpressionNode.NewObject -> "new ${sourceName(node.internalName)} /* uninitialized */"
         is ExpressionNode.ConstructObject ->
             "new ${sourceName(node.internalName)}(${renderArguments(node.arguments, node.constructor.type.parameterTypes, expression)})"
@@ -229,6 +231,7 @@ internal class SourceExpressionRenderer(
             BinaryOperator.BIT_OR -> PRECEDENCE_BIT_OR
         }
         is ExpressionNode.Increment -> PRECEDENCE_ADDITIVE
+        is ExpressionNode.DynamicCall -> if (isStringConcatCallSite(node.callSite)) PRECEDENCE_ADDITIVE else PRECEDENCE_PRIMARY
         is ExpressionNode.Unary, is ExpressionNode.Conversion -> PRECEDENCE_UNARY
         else -> PRECEDENCE_PRIMARY
     }
@@ -237,6 +240,93 @@ internal class SourceExpressionRenderer(
         val rendered = renderValue(id, expression, PRECEDENCE_UNARY)
         val value = expression.values[id] ?: return rendered
         return if (id in expression.materialization.inlineValues && precedence(value.node) < PRECEDENCE_UNARY) "($rendered)" else rendered
+    }
+
+    private fun renderStringConcat(
+        callSite: DynamicCallSite,
+        arguments: List<ValueId>,
+        expression: ExpressionAnalysis,
+    ): String? {
+        if (!isStringConcatCallSite(callSite)) return null
+        val recipe = (callSite.bootstrapArguments.firstOrNull() as? Any) as? String ?: return null
+        val constants = callSite.bootstrapArguments.drop(1)
+        val parts = mutableListOf<StringConcatPart>()
+        val literal = StringBuilder()
+        var argumentIndex = 0
+        var constantIndex = 0
+
+        fun flushLiteral() {
+            if (literal.isNotEmpty()) {
+                parts += StringConcatPart.Literal(literal.toString())
+                literal.setLength(0)
+            }
+        }
+
+        for (character in recipe) {
+            when (character) {
+                '\u0001' -> {
+                    flushLiteral()
+                    val argument = arguments.getOrNull(argumentIndex) ?: return null
+                    val expectedType = callSite.type.parameterTypes.getOrNull(argumentIndex)
+                    val rendered = renderStringConcatArgument(argument, expectedType, expression)
+                    parts += StringConcatPart.Expression(rendered)
+                    argumentIndex++
+                }
+                '\u0002' -> {
+                    val constant = constants.getOrNull(constantIndex) ?: return null
+                    val rendered = renderStringConcatConstant(constant) ?: return null
+                    literal.append(rendered)
+                    constantIndex++
+                }
+                else -> literal.append(character)
+            }
+        }
+        flushLiteral()
+        if (argumentIndex != arguments.size || constantIndex != constants.size) return null
+
+        if (parts.isEmpty()) return "\"\""
+        val renderedParts = parts.map { part ->
+            when (part) {
+                is StringConcatPart.Literal -> formatConstant(part.value)
+                is StringConcatPart.Expression -> part.source
+            }
+        }.toMutableList()
+        if (parts.first() !is StringConcatPart.Literal) renderedParts.add(0, "\"\"")
+        return renderedParts.joinToString(" + ")
+    }
+
+    private fun renderStringConcatArgument(
+        argument: ValueId,
+        expectedType: JvmType?,
+        expression: ExpressionAnalysis,
+    ): String {
+        if (expectedType != JvmType.BooleanType) {
+            return renderValue(argument, expression, PRECEDENCE_ADDITIVE + 1)
+        }
+
+        val value = expression.values[argument]
+        val constant = (value?.node as? ExpressionNode.Constant)?.value
+        if (constant?.equals(0) == true) return "false"
+        if (constant?.equals(1) == true) return "true"
+        if (value?.type == JvmValueType.Computational(JvmComputationalType.BOOLEAN)) {
+            return renderValue(argument, expression, PRECEDENCE_ADDITIVE + 1)
+        }
+        return "(${renderValue(argument, expression, PRECEDENCE_EQUALITY)} != 0)"
+    }
+
+    private fun isStringConcatCallSite(callSite: DynamicCallSite): Boolean =
+        callSite.bootstrapMethod.owner().descriptorString() == "Ljava/lang/invoke/StringConcatFactory;" &&
+            callSite.bootstrapMethod.methodName() == "makeConcatWithConstants"
+
+    private fun renderStringConcatConstant(constant: java.lang.constant.ConstantDesc): String? =
+        when (val value: Any = constant) {
+            is String, is Int, is Long, is Float, is Double -> value.toString()
+            else -> null
+        }
+
+    private sealed interface StringConcatPart {
+        data class Literal(val value: String) : StringConcatPart
+        data class Expression(val source: String) : StringConcatPart
     }
 
     private fun renderCall(
