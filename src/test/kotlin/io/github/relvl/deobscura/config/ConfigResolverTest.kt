@@ -22,7 +22,7 @@ class ConfigResolverTest {
                 input = "input.jar",
                 classpath = listOf("lib/*.jar", "missing.jar"),
                 output = "result",
-                technicalIr = "technical-ir",
+                technicalIr = false,
             ),
         )
 
@@ -32,49 +32,33 @@ class ConfigResolverTest {
             resolution.config.classpath,
         )
         assertEquals(workingDirectory.resolve("result"), resolution.config.output)
-        assertEquals(workingDirectory.resolve("result/technical-ir"), resolution.config.technicalIr)
+        assertEquals(false, resolution.config.technicalIr)
         assertTrue(resolution.warnings.any { "missing.jar" in it })
     }
 
     @Test
-    fun `technical IR must stay inside output directory`() {
+    fun `output cannot contain configured input data because it is deleted on startup`() {
         val workingDirectory = Files.createTempDirectory("deobscura-resolver-test")
-        createJar(workingDirectory.resolve("input.jar"))
-
-        listOf("", ".", "../outside").forEach { technicalIr ->
-            assertFailsWith<ConfigException> {
-                ConfigResolver(workingDirectory).resolve(
-                    DeobscuraConfig(input = "input.jar", output = "result", technicalIr = technicalIr),
-                )
-            }
-        }
+        val output = Files.createDirectories(workingDirectory.resolve("result"))
+        createJar(output.resolve("input.jar"))
 
         assertFailsWith<ConfigException> {
             ConfigResolver(workingDirectory).resolve(
-                DeobscuraConfig(
-                    input = "input.jar",
-                    output = "result",
-                    technicalIr = workingDirectory.resolve("absolute-ir").toString(),
-                ),
+                DeobscuraConfig(input = "result/input.jar", output = "result"),
             )
         }
     }
 
     @Test
-    fun `technical IR cannot contain configured input data`() {
+    fun `technical IR is enabled by default`() {
         val workingDirectory = Files.createTempDirectory("deobscura-resolver-test")
-        val irDirectory = Files.createDirectories(workingDirectory.resolve("result/technical-ir"))
-        createJar(irDirectory.resolve("input.jar"))
+        createJar(workingDirectory.resolve("input.jar"))
 
-        assertFailsWith<ConfigException> {
-            ConfigResolver(workingDirectory).resolve(
-                DeobscuraConfig(
-                    input = "result/technical-ir/input.jar",
-                    output = "result",
-                    technicalIr = "technical-ir",
-                ),
-            )
-        }
+        val resolution = ConfigResolver(workingDirectory).resolve(
+            DeobscuraConfig(input = "input.jar", output = "result"),
+        )
+
+        assertTrue(resolution.config.technicalIr)
     }
 
     @Test

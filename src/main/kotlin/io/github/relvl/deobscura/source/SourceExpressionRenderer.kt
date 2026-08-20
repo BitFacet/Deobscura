@@ -1,11 +1,14 @@
 package io.github.relvl.deobscura.source
 
 import io.github.relvl.deobscura.analysis.ValueId
+import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
 import io.github.relvl.deobscura.expression.*
 import io.github.relvl.deobscura.raw.JvmType
 
 /** Minimal source-facing rendering for Expression IR. Names remain deliberately technical. */
-internal class SourceExpressionRenderer {
+internal class SourceExpressionRenderer(
+    private val deobfuscation: DeobfuscationPlan = DeobfuscationPlan(),
+) {
     fun renderDefinition(value: ExpressionValue, expression: ExpressionAnalysis): String {
         val rendered = renderNode(value.node, expression)
         return if (value.node is ExpressionNode.Phi) {
@@ -45,8 +48,13 @@ internal class SourceExpressionRenderer {
 
     fun renderStatement(statement: ExpressionStatement, expression: ExpressionAnalysis): String = when (statement) {
         is ExpressionStatement.FieldWrite -> {
-            val target = statement.receiver?.let { "${renderValue(it, expression)}.${statement.field.name}" }
-                ?: "${sourceName(statement.field.ownerInternalName)}.${statement.field.name}"
+            val fieldName = deobfuscation.fieldName(
+                statement.field.ownerInternalName,
+                statement.field.name,
+                statement.field.descriptor,
+            )
+            val target = statement.receiver?.let { "${renderValue(it, expression)}.$fieldName" }
+                ?: "${sourceName(statement.field.ownerInternalName)}.$fieldName"
             "$target = ${renderValue(statement.value, expression)}"
         }
         is ExpressionStatement.ArrayWrite ->
@@ -78,8 +86,11 @@ internal class SourceExpressionRenderer {
             renderInlineNode(node, expression, precedence(node))
         is ExpressionNode.ThreeWayCompare ->
             "cmp(${renderValue(node.left, expression)}, ${renderValue(node.right, expression)})"
-        is ExpressionNode.FieldRead -> node.receiver?.let { "${renderValue(it, expression)}.${node.field.name}" }
-            ?: "${sourceName(node.field.ownerInternalName)}.${node.field.name}"
+        is ExpressionNode.FieldRead -> {
+            val fieldName = deobfuscation.fieldName(node.field.ownerInternalName, node.field.name, node.field.descriptor)
+            node.receiver?.let { "${renderValue(it, expression)}.$fieldName" }
+                ?: "${sourceName(node.field.ownerInternalName)}.$fieldName"
+        }
         is ExpressionNode.ArrayRead -> "${renderValue(node.array, expression)}[${renderValue(node.index, expression)}]"
         is ExpressionNode.ArrayLength -> "${renderValue(node.array, expression)}.length"
         is ExpressionNode.Call -> renderCall(node.method, node.receiver, node.arguments, expression)
@@ -147,7 +158,8 @@ internal class SourceExpressionRenderer {
         expression: ExpressionAnalysis,
     ): String {
         val target = receiver?.let { renderValue(it, expression) } ?: sourceName(method.ownerInternalName)
-        return "$target.${method.name}(${arguments.joinToString { renderValue(it, expression) }})"
+        val methodName = deobfuscation.methodName(method.ownerInternalName, method.name, method.descriptor)
+        return "$target.$methodName(${arguments.joinToString { renderValue(it, expression) }})"
     }
 
     private fun renderNewArray(node: ExpressionNode.NewArray, expression: ExpressionAnalysis): String {
@@ -214,7 +226,7 @@ internal class SourceExpressionRenderer {
         }
     }
 
-    private fun sourceName(internalName: String): String = internalName.removePrefix("class/").replace('/', '.')
+    private fun sourceName(internalName: String): String = deobfuscation.classInternalName(internalName).replace('/', '.')
 
     private companion object {
         const val PRECEDENCE_LOWEST = 0

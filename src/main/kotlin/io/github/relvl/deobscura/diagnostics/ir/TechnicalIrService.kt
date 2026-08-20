@@ -1,5 +1,6 @@
 package io.github.relvl.deobscura.diagnostics.ir
 
+import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
 import io.github.relvl.deobscura.raw.RawClass
 import org.slf4j.LoggerFactory
 import java.nio.charset.StandardCharsets
@@ -16,6 +17,7 @@ object TechnicalIrService {
     private var root: Path? = null
     private var inputJar: Path? = null
     private var currentLocator: TechnicalIrLocator? = null
+    private var deobfuscation: DeobfuscationPlan = DeobfuscationPlan()
 
     val enabled: Boolean
         get() = root != null
@@ -27,11 +29,16 @@ object TechnicalIrService {
         reset()
         if (outputDirectory == null) return
 
-        deleteRecursively(outputDirectory)
         Files.createDirectories(outputDirectory)
         root = outputDirectory
         this.inputJar = inputJar
-        currentLocator = TechnicalIrLocator(outputDirectory)
+        currentLocator = TechnicalIrLocator(outputDirectory, deobfuscation::classInternalName)
+    }
+
+
+    fun setDeobfuscation(plan: DeobfuscationPlan) {
+        deobfuscation = plan
+        currentLocator = root?.let { TechnicalIrLocator(it, plan::classInternalName) }
     }
 
     fun captureClass(rawClass: RawClass) {
@@ -93,6 +100,7 @@ object TechnicalIrService {
         root = null
         inputJar = null
         currentLocator = null
+        deobfuscation = DeobfuscationPlan()
     }
 
     private fun writeClass(outputDirectory: Path, snapshot: ClassSnapshot) {
@@ -126,13 +134,6 @@ object TechnicalIrService {
             },
             StandardCharsets.UTF_8,
         )
-    }
-
-    private fun deleteRecursively(path: Path) {
-        if (Files.notExists(path)) return
-        Files.walk(path).use { paths ->
-            paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
-        }
     }
 
     private fun formatElapsed(nanos: Long): String =

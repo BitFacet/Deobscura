@@ -27,8 +27,7 @@ class ConfigResolver(
 
         val runtimeVersion = resolveRuntimeVersion(runtime, config.runtime != null, warnings)
         val output = resolvePath(config.output)
-        val technicalIr = config.technicalIr?.let { resolveOutputSubdirectory(output, it) }
-        technicalIr?.let { validateTechnicalIrDoesNotContainInputs(it, input, classpath, runtime) }
+        validateOutputDoesNotContainInputs(output, input, classpath, runtime)
 
         return ConfigResolution(
             config = ResolvedConfig(
@@ -37,7 +36,8 @@ class ConfigResolver(
                 runtime = runtime,
                 runtimeVersion = runtimeVersion,
                 output = output,
-                technicalIr = technicalIr,
+                deobfuscation = config.deobfuscation,
+                technicalIr = config.technicalIr,
             ),
             warnings = warnings,
         )
@@ -144,34 +144,19 @@ class ConfigResolver(
         return (if (path.isAbsolute) path else normalizedWorkingDirectory.resolve(path)).normalize()
     }
 
-    private fun resolveOutputSubdirectory(output: Path, value: String): Path {
-        if (value.isBlank()) {
-            throw ConfigException("technicalIr must be null or a non-empty relative subdirectory under output.")
-        }
-        val configured = Path.of(value)
-        if (configured.isAbsolute) {
-            throw ConfigException("technicalIr must be relative to output, not absolute: $value")
-        }
-        val normalizedOutput = output.toAbsolutePath().normalize()
-        val resolved = normalizedOutput.resolve(configured).normalize()
-        if (resolved == normalizedOutput || !resolved.startsWith(normalizedOutput)) {
-            throw ConfigException("technicalIr must name a subdirectory inside output: $value")
-        }
-        return resolved
-    }
-
-    private fun validateTechnicalIrDoesNotContainInputs(
-        technicalIr: Path,
+    private fun validateOutputDoesNotContainInputs(
+        output: Path,
         input: Path,
         classpath: List<Path>,
         runtime: Path,
     ) {
+        val normalizedOutput = output.toAbsolutePath().normalize()
         val protectedPaths = listOf(input) + classpath + runtime
         protectedPaths.forEach { protectedPath ->
             val normalized = protectedPath.toAbsolutePath().normalize()
-            if (normalized.startsWith(technicalIr)) {
+            if (normalized.startsWith(normalizedOutput)) {
                 throw ConfigException(
-                    "technicalIr '$technicalIr' would delete configured input data '$normalized' on startup.",
+                    "Output '$normalizedOutput' would delete configured input data '$normalized' on startup.",
                 )
             }
         }

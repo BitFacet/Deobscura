@@ -1,5 +1,7 @@
 package io.github.relvl.deobscura.diagnostics.ir
 
+import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
+import io.github.relvl.deobscura.raw.RawClass
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.exists
@@ -13,9 +15,9 @@ class TechnicalIrServiceTest {
     }
 
     @Test
-    fun `configure removes stale contents and writeAll writes manifest`() {
+    fun `configure preserves shared output contents and writeAll writes manifest`() {
         val parent = Files.createTempDirectory("deobscura-ir-test")
-        val root = Files.createDirectories(parent.resolve("out/technical-ir"))
+        val root = Files.createDirectories(parent.resolve("out"))
         val staleDirectory = Files.createDirectories(root.resolve("old/nested"))
         val staleFile = staleDirectory.resolve("stale.ir")
         Files.writeString(staleFile, "old run")
@@ -23,7 +25,7 @@ class TechnicalIrServiceTest {
 
         TechnicalIrService.configure(root, input)
 
-        assertFalse(staleFile.exists())
+        assertTrue(staleFile.exists())
         assertTrue(TechnicalIrService.enabled)
         TechnicalIrService.writeAll()
 
@@ -74,4 +76,23 @@ class TechnicalIrServiceTest {
         assertTrue(locator.classFile("odd/CON").endsWith(Path.of("odd", "%43ON.ir")))
         assertTrue(locator.classFile("odd/a:b").endsWith(Path.of("odd", "a%3Ab.ir")))
     }
+    @Test
+    fun `deobfuscation maps IR path beside source path`() {
+        val root = Files.createTempDirectory("deobscura-ir-deobfuscation-test")
+        val rawClass = RawClass(
+            internalName = "class/Sample",
+            majorVersion = 65,
+            minorVersion = 0,
+            accessFlags = 0x0001,
+            superName = "java/lang/Object",
+            interfaces = emptyList(),
+            fields = emptyList(),
+            methods = emptyList(),
+        )
+        TechnicalIrService.configure(root, root.resolveSibling("input.jar"))
+        TechnicalIrService.setDeobfuscation(DeobfuscationPlan.build(listOf(rawClass), enabled = true))
+
+        assertTrue(requireNotNull(TechnicalIrService.locator).classFile("class/Sample").endsWith(Path.of("package_class", "Sample.ir")))
+    }
+
 }

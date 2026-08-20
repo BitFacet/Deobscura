@@ -1,6 +1,7 @@
 package io.github.relvl.deobscura.source
 
 import io.github.relvl.deobscura.analysis.MethodAnalysis
+import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
 import io.github.relvl.deobscura.raw.RawClass
 import org.slf4j.LoggerFactory
 import java.nio.charset.StandardCharsets
@@ -11,19 +12,21 @@ import java.util.Locale
 /** Collects completed analyses and writes the first Java-like source projection after analysis. */
 object SourceOutputService {
     private val logger = LoggerFactory.getLogger(SourceOutputService::class.java)
-    private val renderer = JavaLikeSourceRenderer()
     private val classes = linkedMapOf<String, SourceClassSnapshot>()
     private var root: Path? = null
+    private var deobfuscation: DeobfuscationPlan = DeobfuscationPlan()
 
     val enabled: Boolean
         get() = root != null
 
     fun configure(outputDirectory: Path) {
         reset()
-        val sourceRoot = outputDirectory.resolve(SOURCE_SUBDIRECTORY)
-        deleteGeneratedSources(sourceRoot)
-        Files.createDirectories(sourceRoot)
-        root = sourceRoot
+        Files.createDirectories(outputDirectory)
+        root = outputDirectory
+    }
+
+    fun setDeobfuscation(plan: DeobfuscationPlan) {
+        deobfuscation = plan
     }
 
     fun captureClass(rawClass: RawClass) {
@@ -42,10 +45,12 @@ object SourceOutputService {
         val outputDirectory = root ?: return
         val startedAt = System.nanoTime()
         val snapshots = classes.values.toList()
+        val renderer = JavaLikeSourceRenderer(deobfuscation)
         logger.info("Writing Java-like source for {} class(es) to {}...", snapshots.size, outputDirectory)
 
         snapshots.forEach { snapshot ->
-            val path = sourceFile(outputDirectory, snapshot.rawClass.internalName)
+            val sourceInternalName = deobfuscation.classInternalName(snapshot.rawClass.internalName)
+            val path = sourceFile(outputDirectory, sourceInternalName)
             Files.createDirectories(requireNotNull(path.parent))
             Files.writeString(path, renderer.renderClass(snapshot.rawClass, snapshot.methods), StandardCharsets.UTF_8)
         }
@@ -61,14 +66,7 @@ object SourceOutputService {
     fun reset() {
         classes.clear()
         root = null
-    }
-
-    private fun deleteGeneratedSources(path: Path) {
-        if (Files.notExists(path)) return
-        Files.walk(path).use { paths ->
-            paths.filter { Files.isRegularFile(it) && it.fileName.toString().endsWith(".java") }
-                .forEach { Files.deleteIfExists(it) }
-        }
+        deobfuscation = DeobfuscationPlan()
     }
 
     private fun sourceFile(root: Path, internalName: String): Path {
@@ -105,7 +103,6 @@ object SourceOutputService {
     private fun formatElapsed(nanos: Long): String =
         String.format(Locale.ROOT, "%.1f s", nanos / 1_000_000_000.0)
 
-    const val SOURCE_SUBDIRECTORY = "source"
     private const val HEX = "0123456789ABCDEF"
     private val WINDOWS_RESERVED_NAMES = buildSet {
         addAll(listOf("CON", "PRN", "AUX", "NUL"))

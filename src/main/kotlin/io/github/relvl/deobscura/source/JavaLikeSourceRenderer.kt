@@ -6,6 +6,7 @@ import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowEdge
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.controlflow.*
+import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
 import io.github.relvl.deobscura.expression.ComparisonOperator
 import io.github.relvl.deobscura.expression.ExpressionNode
 import io.github.relvl.deobscura.expression.ExpressionStatement
@@ -17,12 +18,14 @@ import io.github.relvl.deobscura.raw.*
  * and Expression IR; anything unresolved remains explicit block/goto-style fallback instead of being
  * guessed into Java syntax.
  */
-class JavaLikeSourceRenderer {
-    private val expressionRenderer = SourceExpressionRenderer()
+class JavaLikeSourceRenderer(
+    private val deobfuscation: DeobfuscationPlan = DeobfuscationPlan(),
+) {
+    private val expressionRenderer = SourceExpressionRenderer(deobfuscation)
     fun renderClass(rawClass: RawClass, analyses: Map<SourceMethodKey, MethodAnalysis>): String = buildString {
-        val packageName = rawClass.internalName.substringBeforeLast('/', missingDelimiterValue = "")
-            .replace('/', '.')
-        val simpleName = rawClass.internalName.substringAfterLast('/')
+        val sourceInternalName = deobfuscation.classInternalName(rawClass.internalName)
+        val packageName = sourceInternalName.substringBeforeLast('/', missingDelimiterValue = "").replace('/', '.')
+        val simpleName = sourceInternalName.substringAfterLast('/')
         if (packageName.isNotEmpty()) {
             appendLine("package $packageName;")
             appendLine()
@@ -43,21 +46,21 @@ class JavaLikeSourceRenderer {
         rawClass.fields.forEach { field ->
             append("    ")
             append(memberModifiers(field.accessFlags))
-            append("${formatType(field.type)} ${field.name};")
+            append("${formatType(field.type)} ${deobfuscation.fieldName(rawClass.internalName, field.name, field.descriptor)};")
             appendLine()
         }
         if (rawClass.fields.isNotEmpty() && rawClass.methods.isNotEmpty()) appendLine()
 
         rawClass.methods.forEachIndexed { index, method ->
             val analysis = analyses[SourceMethodKey(method.name, method.descriptor)]
-            appendLine(renderMethod(simpleName, method, analysis).trimEnd().prependIndent("    "))
+            appendLine(renderMethod(rawClass.internalName, simpleName, method, analysis).trimEnd().prependIndent("    "))
             if (index != rawClass.methods.lastIndex) appendLine()
         }
 
         appendLine("}")
     }
 
-    private fun renderMethod(ownerSimpleName: String, method: RawMethod, analysis: MethodAnalysis?): String = buildString {
+    private fun renderMethod(methodOwnerInternalName: String, ownerSimpleName: String, method: RawMethod, analysis: MethodAnalysis?): String = buildString {
         if (method.name == "<clinit>") {
             appendLine("static {")
             if (analysis == null) appendLine("    /* analysis unavailable */") else renderBody(analysis, 1, this)
@@ -71,7 +74,7 @@ class JavaLikeSourceRenderer {
         } else {
             append(formatType(method.type.returnType))
             append(' ')
-            append(method.name)
+            append(deobfuscation.methodName(methodOwnerInternalName, method.name, method.descriptor))
         }
         append('(')
         append(method.type.parameterTypes.mapIndexed { index, type -> "${formatType(type)} arg$index" }.joinToString())
@@ -382,7 +385,7 @@ class JavaLikeSourceRenderer {
         is JvmType.ArrayType -> "${formatType(type.componentType)}[]"
     }
 
-    private fun sourceName(internalName: String): String = internalName.removePrefix("class/").replace('/', '.')
+    private fun sourceName(internalName: String): String = deobfuscation.classInternalName(internalName).replace('/', '.')
 
     private class RenderContext(val analysis: MethodAnalysis) {
         val outgoingByBlock: Map<BasicBlockId, List<ControlFlowEdge>> = analysis.optimization.controlFlow.edges.groupBy { it.from }

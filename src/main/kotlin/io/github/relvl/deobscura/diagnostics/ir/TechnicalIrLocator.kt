@@ -5,9 +5,10 @@ import java.nio.file.Path
 
 class TechnicalIrLocator(
     val root: Path,
+    private val classInternalName: (String) -> String = { it },
 ) {
     fun classFile(ownerInternalName: String): Path {
-        val segments = ownerInternalName.split('/')
+        val segments = classInternalName(ownerInternalName).split('/')
         require(segments.isNotEmpty() && segments.none(String::isEmpty)) {
             "Invalid class internal name '$ownerInternalName'."
         }

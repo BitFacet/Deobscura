@@ -170,7 +170,8 @@ class JarLoaderTest {
         runtime = Path.of(System.getProperty("java.home")),
         runtimeVersion = runtimeVersion,
         output = directory.resolve("out"),
-        technicalIr = null,
+        deobfuscation = true,
+        technicalIr = true,
     )
 
     private fun writeJar(

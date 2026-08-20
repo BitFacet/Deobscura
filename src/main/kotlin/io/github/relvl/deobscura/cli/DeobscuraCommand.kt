@@ -9,7 +9,9 @@ import io.github.relvl.deobscura.config.ConfigLoadResult
 import io.github.relvl.deobscura.config.ConfigRepository
 import io.github.relvl.deobscura.config.ConfigResolver
 import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
+import io.github.relvl.deobscura.deobfuscation.Deobfuscator
 import io.github.relvl.deobscura.source.SourceOutputService
+import io.github.relvl.deobscura.output.OutputDirectoryService
 import io.github.relvl.deobscura.jar.JarLoader
 import io.github.relvl.deobscura.raw.ClassImporter
 import io.github.relvl.deobscura.resolution.ClassHierarchy
@@ -81,13 +83,20 @@ class DeobscuraCommand : Callable<Int> {
         }
 
         val resolution = ConfigResolver(workingDirectory).resolve(loaded.config)
-        TechnicalIrService.configure(resolution.config.technicalIr, resolution.config.input)
+        OutputDirectoryService.recreate(
+            resolution.config.output,
+            listOf(absoluteConfigPath, resolution.config.input) + resolution.config.classpath + resolution.config.runtime,
+        )
+        TechnicalIrService.configure(
+            resolution.config.output.takeIf { resolution.config.technicalIr },
+            resolution.config.input,
+        )
         SourceOutputService.configure(resolution.config.output)
 
         try {
             logger.info("Input JAR: {}", resolution.config.input)
-            logger.info("Java-like source output: {}", resolution.config.output.resolve(SourceOutputService.SOURCE_SUBDIRECTORY))
-            resolution.config.technicalIr?.let { logger.info("Technical IR output: {}", it) }
+            logger.info("Java-like source output: {}", resolution.config.output)
+            if (resolution.config.technicalIr) logger.info("Technical IR output: {}", resolution.config.output)
             resolution.warnings.forEach { logger.warn("{}{}", it, TechnicalIrService.rootHint()) }
 
             val jar = JarLoader().load(resolution.config)
@@ -96,10 +105,23 @@ class DeobscuraCommand : Callable<Int> {
                 logger.info("Runtime: {} (Java {})", resolution.config.runtime, resolution.config.runtimeVersion)
 
                 val classResolver = ClassResolver(jar, runtimeSource)
+                val rawImport = ClassImporter().importInput(jar)
+                val deobfuscation = Deobfuscator().analyze(rawImport, resolution.config.deobfuscation)
+                SourceOutputService.setDeobfuscation(deobfuscation)
+                TechnicalIrService.setDeobfuscation(deobfuscation)
+                if (resolution.config.deobfuscation) {
+                    logger.info(
+                        "Deobfuscation renamed {} package segment(s), {} field(s), and {} method(s).",
+                        deobfuscation.stats.renamedPackageSegments,
+                        deobfuscation.stats.renamedFields,
+                        deobfuscation.stats.renamedMethods,
+                    )
+                } else {
+                    logger.info("Deobfuscation disabled.")
+                }
+
                 val resolutionDiagnostics = ResolutionDiagnostics()
                 val resolutionResult = resolutionDiagnostics.inspect(jar, classResolver)
-                val rawImport = ClassImporter().importInput(jar)
-
                 ControlFlowDiagnostics().inspect(rawImport)
                 val hierarchy = ClassHierarchy(classResolver)
                 AnalysisDiagnostics(
