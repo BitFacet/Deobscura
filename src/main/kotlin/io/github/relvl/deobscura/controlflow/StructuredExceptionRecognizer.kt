@@ -73,6 +73,7 @@ internal class StructuredExceptionRecognizer {
                 return@forEach
             }
 
+            val synchronizedTrace = mutableListOf<String>()
             val synchronizedRecognition = SynchronizedExceptionRecognizer.recognize(
                 graph = graph,
                 topology = topology,
@@ -80,6 +81,7 @@ internal class StructuredExceptionRecognizer {
                 groupedHandlers = groupedHandlers,
                 allGroups = groupTopologies,
                 facts = facts,
+                rejectionTrace = synchronizedTrace,
             )
             if (synchronizedRecognition != null) {
                 regions += synchronizedRecognition.region
@@ -159,7 +161,9 @@ internal class StructuredExceptionRecognizer {
             } else {
                 rejections[key] = UnstructuredControlFlowReason.EXCEPTION_CATCH_ALL_UNSUPPORTED
                 legacyRejectionDetails[key] = buildString {
-                    append("modern-try-catch-finally=")
+                    append("synchronized=")
+                    append(synchronizedTrace.lastOrNull() ?: "not-attempted")
+                    append(", modern-try-catch-finally=")
                     append(modernTryCatchFinallyTrace.lastOrNull() ?: "not-attempted")
                     if (legacySubroutineNormalized) {
                         append(", legacy-try-catch-finally=")

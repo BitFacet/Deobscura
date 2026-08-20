@@ -67,13 +67,40 @@ internal object ExceptionResidualProfiler {
     }
 
     private fun classifyLegacyHandlerEntry(graph: ControlFlowGraph, entry: BasicBlockId): String {
-        val size = graph.instructions(graph.block(entry)).size
-        return when (size) {
-            0 -> "empty"
+        val instructions = graph.instructions(graph.block(entry))
+        if (instructions.isEmpty()) return "empty"
+
+        val store = instructions.firstOrNull() as? RawLocalInstruction
+        if (store?.operation == LocalOperation.STORE && store.type == JvmComputationalType.REFERENCE) {
+            if (instructions.size == 3 &&
+                (instructions[1] as? RawConstantInstruction)?.opcode?.mnemonic == "aconst_null" &&
+                (instructions[2] as? RawBranchInstruction)?.opcode?.mnemonic in setOf("goto", "goto_w")
+            ) {
+                return "legacy-jsr-entry"
+            }
+
+            val reload = instructions.getOrNull(instructions.lastIndex - 1) as? RawLocalInstruction
+            if (instructions.lastOrNull() is RawThrowInstruction &&
+                reload?.operation == LocalOperation.LOAD &&
+                reload.slot == store.slot
+            ) {
+                if (instructions.size == 3) return "linear-rethrow"
+                val monitorExit = instructions.getOrNull(instructions.lastIndex - 2) as? RawMonitorInstruction
+                val monitorLoad = instructions.getOrNull(instructions.lastIndex - 3) as? RawLocalInstruction
+                if (monitorExit?.opcode?.mnemonic == "monitorexit" &&
+                    monitorLoad?.operation == LocalOperation.LOAD
+                ) {
+                    return "monitor-rethrow"
+                }
+                return "store-prefix-rethrow"
+            }
+        }
+
+        return when (instructions.size) {
             1 -> "size-1"
             2 -> "size-2"
-            3 -> "size-3"
-            in 4..6 -> "size-4-6"
+            3 -> "size-3-other"
+            in 4..6 -> "size-4-6-other"
             else -> "size-7+"
         }
     }

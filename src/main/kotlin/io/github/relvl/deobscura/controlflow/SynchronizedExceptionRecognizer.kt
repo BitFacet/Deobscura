@@ -24,26 +24,27 @@ internal object SynchronizedExceptionRecognizer {
         groupedHandlers: Map<BasicBlockId?, List<RawExceptionHandler>>,
         allGroups: List<ExceptionGroupTopology>,
         facts: ControlFlowFacts,
+        rejectionTrace: MutableList<String>? = null,
     ): SynchronizedRecognition? {
         val group = topology.group
         if (group.handlers.size != 1 || group.handlers.single().catchType != null) {
-            return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts)
+            return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
         }
         if (groupedHandlers.size != 1) {
-            return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts)
+            return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
         }
 
         val instructions = graph.code.instructions
         val start = group.envelope.start
-        if (start < 2) return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts)
+        if (start < 2) return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
         val monitorEnterInstructionIndex = start - 1
         val monitorEnter = instructions.getOrNull(monitorEnterInstructionIndex) as? RawMonitorInstruction
-            ?: return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts)
+            ?: return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
         if (monitorEnter.opcode.mnemonic != "monitorenter") {
-            return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts)
+            return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
         }
         val monitorSlot = monitorSlotBeforeEnter(instructions, monitorEnterInstructionIndex)
-            ?: return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts)
+            ?: return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
 
         val handlerEntry = groupedHandlers.keys.single() ?: return null
         val handlerStart = graph.block(handlerEntry).startInstructionIndex
@@ -59,7 +60,7 @@ internal object SynchronizedExceptionRecognizer {
             normalExitIndices += index
         }
         if (normalExitIndices.isEmpty()) {
-            return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts)
+            return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
         }
 
         val handlerInstructionIndices = handlerStart..handlerShape.throwInstructionIndex
@@ -81,7 +82,7 @@ internal object SynchronizedExceptionRecognizer {
             // A nested catch may rejoin the synchronized body and therefore look like an external
             // normal predecessor to the strict single-range proof. The fragmented recognizer owns
             // the exception-aware closure needed for that shape.
-            return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts)
+            return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
         }
 
         val monitorEnterBlock = facts.instructionToBlock.getOrNull(monitorEnterInstructionIndex) ?: return null

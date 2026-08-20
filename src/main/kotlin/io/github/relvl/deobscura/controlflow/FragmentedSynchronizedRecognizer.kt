@@ -19,17 +19,32 @@ internal object FragmentedSynchronizedRecognizer {
         topology: ExceptionGroupTopology,
         allGroups: List<ExceptionGroupTopology>,
         facts: ControlFlowFacts,
+        rejectionTrace: MutableList<String>? = null,
     ): SynchronizedRecognition? {
         val instructions = graph.code.instructions
         val monitorDominators = exceptionAwareDominators(graph, facts) ?: return null
         val catchAllHandlers = topology.group.handlers.filter { it.catchType == null }
-        if (catchAllHandlers.size != 1) return null
+        if (catchAllHandlers.size != 1) {
+            rejectionTrace?.add("fragmented:catch-all-count=${catchAllHandlers.size}")
+            return null
+        }
         val anchorCatchAll = catchAllHandlers.single()
-        val anchorHandlerInstructionIndex = handlerInstructionIndex(anchorCatchAll, graph, facts) ?: return null
-        val anchorHandlerEntry = facts.instructionToBlock.getOrNull(anchorHandlerInstructionIndex) ?: return null
+        val anchorHandlerInstructionIndex = handlerInstructionIndex(anchorCatchAll, graph, facts) ?: run {
+            rejectionTrace?.add("fragmented:invalid-handler-entry")
+            return null
+        }
+        val anchorHandlerEntry = facts.instructionToBlock.getOrNull(anchorHandlerInstructionIndex) ?: run {
+            rejectionTrace?.add("fragmented:invalid-handler-block")
+            return null
+        }
         val anchorHandlerStart = graph.block(anchorHandlerEntry).startInstructionIndex
+        val monitorSlots = handlerMonitorSlots(instructions, anchorHandlerStart)
+        if (monitorSlots.isEmpty()) {
+            rejectionTrace?.add("fragmented:not-monitor-cleanup")
+            return null
+        }
 
-        for (monitorSlot in handlerMonitorSlots(instructions, anchorHandlerStart)) {
+        for (monitorSlot in monitorSlots) {
             if (recognizeHandlerShape(instructions, anchorHandlerStart, monitorSlot) == null) continue
             val protectedHeader = facts.instructionToBlock.getOrNull(topology.group.envelope.start) ?: continue
             val monitorEnterInstructionIndex = owningMonitorEnter(
@@ -38,7 +53,11 @@ internal object FragmentedSynchronizedRecognizer {
                 block = protectedHeader,
                 dominators = monitorDominators,
                 facts = facts,
-            ) ?: continue
+            )
+            if (monitorEnterInstructionIndex == null) {
+                rejectionTrace?.add("fragmented:no-owning-monitorenter")
+                continue
+            }
             val monitorEnterBlock = facts.instructionToBlock.getOrNull(monitorEnterInstructionIndex) ?: continue
 
             val cleanupCopiesByGroup = buildList {
@@ -61,7 +80,10 @@ internal object FragmentedSynchronizedRecognizer {
                     add(candidate to copy)
                 }
             }
-            if (cleanupCopiesByGroup.none { (candidate, _) -> candidate === topology }) continue
+            if (cleanupCopiesByGroup.none { (candidate, _) -> candidate === topology }) {
+                rejectionTrace?.add("fragmented:anchor-not-owned-by-monitor")
+                continue
+            }
 
             val handlerMonitorExits = cleanupCopiesByGroup.mapTo(hashSetOf()) { (_, copy) ->
                 copy.shape.monitorExitInstructionIndex
@@ -74,13 +96,19 @@ internal object FragmentedSynchronizedRecognizer {
                 dominators = monitorDominators,
                 facts = facts,
             )
-            if (normalExitIndices.isEmpty()) continue
+            if (normalExitIndices.isEmpty()) {
+                rejectionTrace?.add("fragmented:no-normal-monitorexit")
+                continue
+            }
             val lastNormalExit = normalExitIndices.maxOrNull() ?: continue
 
             val familyWithCopies = cleanupCopiesByGroup
                 .filter { (candidate, _) -> candidate.group.envelope.start <= lastNormalExit }
                 .sortedBy { (candidate, _) -> candidate.group.envelope.start }
-            if (familyWithCopies.isEmpty() || familyWithCopies.first().first !== topology) continue
+            if (familyWithCopies.isEmpty() || familyWithCopies.first().first !== topology) {
+                rejectionTrace?.add("fragmented:not-family-anchor")
+                continue
+            }
             val family = familyWithCopies.map { (candidate, _) -> candidate }
             val handlerCopies = familyWithCopies.map { (_, copy) -> copy }.distinctBy { copy -> copy.handlerStart }
 
@@ -117,14 +145,24 @@ internal object FragmentedSynchronizedRecognizer {
                 removeAll(handlerBlocks)
             }
             if (bodyBlocks.isEmpty()) continue
+            val nestedClosureTraceSize = rejectionTrace?.size ?: 0
             if (!closeOverNestedExceptionRegions(
                     owned = bodyBlocks,
                     groups = allGroups,
                     synchronizedHandlerBlocks = handlerBlocks,
                     facts = facts,
+                    rejectionTrace = rejectionTrace,
                 )
-            ) continue
-            if (hasExternalProtectedEntry(bodyEntry, bodyBlocks, facts)) continue
+            ) {
+                if ((rejectionTrace?.size ?: 0) == nestedClosureTraceSize) {
+                    rejectionTrace?.add("fragmented:nested-handler-closure")
+                }
+                continue
+            }
+            if (hasExternalProtectedEntry(bodyEntry, bodyBlocks, facts)) {
+                rejectionTrace?.add("fragmented:body-external-entry")
+                continue
+            }
 
             val protectedRanges = family.flatMap { candidate -> candidate.group.segments }
                 .map { segment -> StructuredProtectedRange(segment.range.start, segment.range.endExclusive) }
@@ -200,6 +238,7 @@ internal object FragmentedSynchronizedRecognizer {
         groups: List<ExceptionGroupTopology>,
         synchronizedHandlerBlocks: Set<BasicBlockId>,
         facts: ControlFlowFacts,
+        rejectionTrace: MutableList<String>? = null,
     ): Boolean = closeOverContainedExceptionRegions(
         owned = owned,
         groups = groups,
@@ -208,7 +247,7 @@ internal object FragmentedSynchronizedRecognizer {
         handlerEntriesFor = { candidate ->
             candidate.handlerEntries.filterTo(linkedSetOf()) { entry -> entry !in synchronizedHandlerBlocks }
         },
-        absorb = { _, entries, _ ->
+        absorb = { candidate, entries, _ ->
             val before = owned.size
             for (entry in entries) {
                 val nestedBlocks = collectRejoiningNestedHandlerBlocks(
@@ -216,6 +255,8 @@ internal object FragmentedSynchronizedRecognizer {
                     owned = owned,
                     synchronizedHandlerBlocks = synchronizedHandlerBlocks,
                     facts = facts,
+                    rejectionTrace = rejectionTrace,
+                    context = "range=${candidate.group.envelope.start}..<${candidate.group.envelope.endExclusive} entry=$entry",
                 ) ?: return@closeOverContainedExceptionRegions ExceptionOwnershipExpansion.REJECTED
                 owned.addAll(nestedBlocks)
             }
@@ -233,6 +274,8 @@ internal object FragmentedSynchronizedRecognizer {
         owned: Set<BasicBlockId>,
         synchronizedHandlerBlocks: Set<BasicBlockId>,
         facts: ControlFlowFacts,
+        rejectionTrace: MutableList<String>? = null,
+        context: String = "entry=$entry",
     ): Set<BasicBlockId>? {
         val result = linkedSetOf<BasicBlockId>()
         val pending = ArrayDeque<BasicBlockId>()
@@ -246,17 +289,29 @@ internal object FragmentedSynchronizedRecognizer {
                 continue
             }
             if (block in synchronizedHandlerBlocks || !result.add(block)) continue
-            if (block in facts.explicitTerminalBlocks) return null
+            if (block in facts.explicitTerminalBlocks) {
+                rejectionTrace?.add("fragmented:nested-terminal $context block=$block")
+                return null
+            }
 
             for (edge in facts.outgoing[block].orEmpty()) {
                 when (edge.to) {
                     in owned -> rejoinsOwnedFlow = true
-                    in synchronizedHandlerBlocks -> return null
+                    in synchronizedHandlerBlocks -> {
+                        rejectionTrace?.add(
+                            "fragmented:nested-enters-cleanup $context block=$block target=${edge.to} kind=${edge.kind}",
+                        )
+                        return null
+                    }
                     else -> pending += edge.to
                 }
             }
         }
-        return result.takeIf { rejoinsOwnedFlow }
+        if (!rejoinsOwnedFlow) {
+            rejectionTrace?.add("fragmented:nested-no-rejoin $context blocks=${result.size}")
+            return null
+        }
+        return result
     }
 
     private fun handlerMonitorSlots(instructions: List<RawInstruction>, handlerStart: Int): Set<Int> {
