@@ -63,6 +63,62 @@ class ControlFlowGraphBuilderTest {
     }
 
     @Test
+    fun `keeps typed exception handler before catch all`() {
+        val tryStart = RawLabelId(0)
+        val tryEnd = RawLabelId(1)
+        val typedHandler = RawLabelId(2)
+        val catchAllHandler = RawLabelId(3)
+        val code = code(
+            instructions = listOf(nop(), returnVoid(), returnVoid()),
+            labels = listOf(
+                RawLabel(tryStart, instructionIndex = 0, bytecodeOffset = 0),
+                RawLabel(tryEnd, instructionIndex = 1, bytecodeOffset = 1),
+                RawLabel(typedHandler, instructionIndex = 1, bytecodeOffset = 1),
+                RawLabel(catchAllHandler, instructionIndex = 2, bytecodeOffset = 2),
+            ),
+            handlers = listOf(
+                RawExceptionHandler(tryStart, tryEnd, typedHandler, "java/lang/RuntimeException"),
+                RawExceptionHandler(tryStart, tryEnd, catchAllHandler, null),
+            ),
+        )
+
+        val exceptionEdges = builder.build(code).edges.filter { it.kind == ControlFlowEdgeKind.EXCEPTION }
+
+        assertEquals(2, exceptionEdges.size)
+        assertEquals(
+            listOf("java/lang/RuntimeException", null),
+            exceptionEdges.map { it.catchType },
+        )
+    }
+
+    @Test
+    fun `does not add exception handlers shadowed by catch all`() {
+        val tryStart = RawLabelId(0)
+        val tryEnd = RawLabelId(1)
+        val catchAllHandler = RawLabelId(2)
+        val shadowedHandler = RawLabelId(3)
+        val code = code(
+            instructions = listOf(nop(), returnVoid(), returnVoid()),
+            labels = listOf(
+                RawLabel(tryStart, instructionIndex = 0, bytecodeOffset = 0),
+                RawLabel(tryEnd, instructionIndex = 1, bytecodeOffset = 1),
+                RawLabel(catchAllHandler, instructionIndex = 1, bytecodeOffset = 1),
+                RawLabel(shadowedHandler, instructionIndex = 2, bytecodeOffset = 2),
+            ),
+            handlers = listOf(
+                RawExceptionHandler(tryStart, tryEnd, catchAllHandler, null),
+                RawExceptionHandler(tryStart, tryEnd, shadowedHandler, "java/lang/Throwable"),
+            ),
+        )
+
+        val exceptionEdges = builder.build(code).edges.filter { it.kind == ControlFlowEdgeKind.EXCEPTION }
+
+        assertEquals(1, exceptionEdges.size)
+        assertEquals(BasicBlockId(1), exceptionEdges.single().to)
+        assertEquals(null, exceptionEdges.single().catchType)
+    }
+
+    @Test
     fun `counts unreachable blocks`() {
         val target = RawLabelId(0)
         val graph = builder.build(

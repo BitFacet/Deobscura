@@ -146,24 +146,26 @@ class ControlFlowGraphBuilder {
             }
         }
 
-        code.exceptionHandlers.forEach { handler ->
-            val tryStart = requireLabelPosition(labelPositions, handler.tryStart, "exception try start")
-            val tryEnd = requireLabelPosition(labelPositions, handler.tryEnd, "exception try end")
-            val handlerBlock = targetBlock(handler.handler)
+        mutableBlocks.forEach { protectedBlock ->
+            for (handler in code.exceptionHandlers) {
+                val tryStart = requireLabelPosition(labelPositions, handler.tryStart, "exception try start")
+                val tryEnd = requireLabelPosition(labelPositions, handler.tryEnd, "exception try end")
+                if (protectedBlock.start >= tryEnd || protectedBlock.endExclusive <= tryStart) continue
 
-            mutableBlocks
-                .asSequence()
-                .filter { it.start < tryEnd && it.endExclusive > tryStart }
-                .forEach { protectedBlock ->
-                    addEdge(
-                        ControlFlowEdge(
-                            from = protectedBlock.id,
-                            to = handlerBlock,
-                            kind = ControlFlowEdgeKind.EXCEPTION,
-                            catchType = handler.catchType,
-                        ),
-                    )
-                }
+                addEdge(
+                    ControlFlowEdge(
+                        from = protectedBlock.id,
+                        to = targetBlock(handler.handler),
+                        kind = ControlFlowEdgeKind.EXCEPTION,
+                        catchType = handler.catchType,
+                    ),
+                )
+
+                // JVM exception handlers are searched in class-file order. A catch-all handler
+                // matches every throwable, so later entries cannot receive an exception thrown
+                // from this protected block. Keeping such edges would invent impossible control flow.
+                if (handler.catchType == null) break
+            }
         }
 
         val predecessors = mutableBlocks.associate { it.id to linkedSetOf<BasicBlockId>() }
