@@ -9,6 +9,7 @@ import io.github.relvl.deobscura.config.ConfigLoadResult
 import io.github.relvl.deobscura.config.ConfigRepository
 import io.github.relvl.deobscura.config.ConfigResolver
 import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
+import io.github.relvl.deobscura.source.SourceOutputService
 import io.github.relvl.deobscura.jar.JarLoader
 import io.github.relvl.deobscura.raw.ClassImporter
 import io.github.relvl.deobscura.resolution.ClassHierarchy
@@ -81,9 +82,11 @@ class DeobscuraCommand : Callable<Int> {
 
         val resolution = ConfigResolver(workingDirectory).resolve(loaded.config)
         TechnicalIrService.configure(resolution.config.technicalIr, resolution.config.input)
+        SourceOutputService.configure(resolution.config.output)
 
         try {
             logger.info("Input JAR: {}", resolution.config.input)
+            logger.info("Java-like source output: {}", resolution.config.output.resolve(SourceOutputService.SOURCE_SUBDIRECTORY))
             resolution.config.technicalIr?.let { logger.info("Technical IR output: {}", it) }
             resolution.warnings.forEach { logger.warn("{}{}", it, TechnicalIrService.rootHint()) }
 
@@ -103,12 +106,14 @@ class DeobscuraCommand : Callable<Int> {
                     methodAnalyzer = MethodAnalyzer(frameAnalyzer = FrameAnalyzer(hierarchy)),
                 ).inspect(rawImport)
                 TechnicalIrService.writeAll()
+                SourceOutputService.writeAll()
                 logger.info("Hierarchy analysis loaded {} class definition(s) lazily.", hierarchy.loadedClassCount)
                 resolutionDiagnostics.logAnalysisImpact(classResolver, resolutionResult)
             }
             return EXIT_SUCCESS
         } finally {
             TechnicalIrService.reset()
+            SourceOutputService.reset()
         }
     }
 

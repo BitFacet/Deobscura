@@ -7,6 +7,7 @@ import io.github.relvl.deobscura.expression.ExpressionIrInconsistencyException
 import io.github.relvl.deobscura.raw.RawClass
 import io.github.relvl.deobscura.raw.RawImportResult
 import io.github.relvl.deobscura.raw.RawMethod
+import io.github.relvl.deobscura.source.SourceOutputService
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.util.concurrent.Callable
@@ -34,6 +35,7 @@ class AnalysisDiagnostics(
         val workerCount = analysisWorkerCount(processorCount)
 
         classes.forEach(TechnicalIrService::captureClass)
+        classes.forEach(SourceOutputService::captureClass)
         progress.start(workerCount, processorCount)
 
         val threadNumber = AtomicInteger()
@@ -94,6 +96,7 @@ class AnalysisDiagnostics(
             val methodName = "${result.rawClass.internalName}.${method.name}${method.descriptor}"
             val analysis = methodResult.analysis
             if (analysis != null) {
+                SourceOutputService.captureMethod(result.rawClass.internalName, analysis)
                 analysis.structuredControlFlow.unstructured
                     .filter { it.kind == UnstructuredControlFlowKind.SWITCH }
                     .forEach { diagnostic ->

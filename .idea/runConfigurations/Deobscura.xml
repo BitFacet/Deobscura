@@ -3,7 +3,7 @@
     <option name="MAIN_CLASS_NAME" value="io.github.relvl.deobscura.MainKt" />
     <module name="Deobscura.main" />
     <shortenClasspath name="NONE" />
-    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/workspace" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/../WurmDeobscured" />
     <method v="2">
       <option name="Make" enabled="true" />
       <option name="RunConfigurationTask" enabled="true" run_configuration_name="Tests" run_configuration_type="GradleRunConfiguration" />
