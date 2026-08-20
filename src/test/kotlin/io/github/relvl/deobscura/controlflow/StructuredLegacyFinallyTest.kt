@@ -138,6 +138,97 @@ class StructuredLegacyFinallyTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // Pseudocode: try { if (flag) return A; else return B; } finally { CLEANUP }  // JSR-era copies
+    @Test
+    fun `recognizes legacy finally copied before distinct terminal exits`() {
+        val tryBlock = BasicBlockId(0)
+        val callLeft = BasicBlockId(1)
+        val normalLeft = BasicBlockId(2)
+        val returnLeft = BasicBlockId(3)
+        val callRight = BasicBlockId(4)
+        val normalRight = BasicBlockId(5)
+        val returnRight = BasicBlockId(6)
+        val catchAll = BasicBlockId(7)
+        val exceptionalFinally = BasicBlockId(8)
+        val rethrow = BasicBlockId(9)
+        val edges = listOf(
+            edge(tryBlock, callLeft, ControlFlowEdgeKind.CONDITIONAL),
+            edge(tryBlock, callRight, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(tryBlock, catchAll, null),
+            edge(callLeft, normalLeft, ControlFlowEdgeKind.JUMP),
+            edge(normalLeft, returnLeft, ControlFlowEdgeKind.JUMP),
+            edge(callRight, normalRight, ControlFlowEdgeKind.JUMP),
+            edge(normalRight, returnRight, ControlFlowEdgeKind.JUMP),
+            edge(catchAll, exceptionalFinally, ControlFlowEdgeKind.JUMP),
+            edge(exceptionalFinally, rethrow, ControlFlowEdgeKind.FALLTHROUGH),
+        )
+        val instructions = listOf(
+            RawBranchInstruction(JvmOpcode("ifeq"), RawLabelId(6)),
+            RawConstantInstruction(JvmOpcode("aconst_null"), JvmComputationalType.REFERENCE, ConstantDescs.NULL),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(3)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(5)),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawConstantInstruction(JvmOpcode("aconst_null"), JvmComputationalType.REFERENCE, ConstantDescs.NULL),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(8)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(10)),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 1),
+            RawConstantInstruction(JvmOpcode("aconst_null"), JvmComputationalType.REFERENCE, ConstantDescs.NULL),
+            RawBranchInstruction(JvmOpcode("goto"), RawLabelId(14)),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 1),
+            RawThrowInstruction(JvmOpcode("athrow")),
+        )
+        val blocks = listOf(
+            BasicBlock(tryBlock, 0, 1, emptyList(), emptyList()),
+            BasicBlock(callLeft, 1, 3, emptyList(), emptyList()),
+            BasicBlock(normalLeft, 3, 5, emptyList(), emptyList()),
+            BasicBlock(returnLeft, 5, 6, emptyList(), emptyList()),
+            BasicBlock(callRight, 6, 8, emptyList(), emptyList()),
+            BasicBlock(normalRight, 8, 10, emptyList(), emptyList()),
+            BasicBlock(returnRight, 10, 11, emptyList(), emptyList()),
+            BasicBlock(catchAll, 11, 14, emptyList(), emptyList()),
+            BasicBlock(exceptionalFinally, 14, 15, emptyList(), emptyList()),
+            BasicBlock(rethrow, 15, 17, emptyList(), emptyList()),
+        )
+        val labels = List(18) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                instructions,
+                labels,
+                listOf(exceptionHandler(0, 1, 11, null)),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            tryBlock,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(blocks.mapTo(linkedSetOf()) { it.id }, edges, tryBlock),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(5, null),
+                    ExpressionStatement.Return(10, null),
+                    ExpressionStatement.Throw(16, ValueId(0)),
+                ),
+            ),
+            legacySubroutineNormalized = true,
+        )
+
+        val region = result.regions.filterIsInstance<StructuredRegion.TryFinally>().single()
+        assertEquals(setOf(tryBlock), region.tryBlocks)
+        assertEquals(setOf(normalLeft, normalRight), region.normalCopyBlocks)
+        assertEquals(null, region.continuation)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
     // Pseudocode: try { ... } catch (E e) { ... } finally { CLEANUP }  // copied cleanup joins via gotos
     @Test
     fun `recognizes legacy try catch finally copies through converging goto trampolines`() {

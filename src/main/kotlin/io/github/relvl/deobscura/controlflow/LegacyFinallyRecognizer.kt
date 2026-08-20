@@ -27,7 +27,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
         val handlerBlocks: Set<BasicBlockId>,
         val bodyInstructionRanges: List<IntRange>,
         val normalCopies: List<FinallyBodyMatch>,
-        val continuation: BasicBlockId,
+        val continuation: BasicBlockId?,
     )
 
     /**
@@ -126,14 +126,18 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
         val continuations = normalCopies.mapTo(linkedSetOf()) { match ->
             normalizeLegacyFinallyContinuation(requireNotNull(match.continuation), graph, facts, provenance)
         }
-        if (continuations.size != 1) return rejectLegacy(rejectionTrace, "continuation-count=${continuations.size}")
+        val continuation = when {
+            continuations.size == 1 -> continuations.single()
+            continuations.all { candidate -> hasOnlyTerminalNormalExits(candidate, graph, facts) } -> null
+            else -> return rejectLegacy(rejectionTrace, "continuation-count=${continuations.size}")
+        }
 
         return LegacyFinallyShape(
             handlerEntry = handlerEntry,
             handlerBlocks = handlerBlocks,
             bodyInstructionRanges = instructionRanges(bodyBlocks, graph),
             normalCopies = normalCopies,
-            continuation = continuations.single(),
+            continuation = continuation,
         )
     }
 
@@ -503,6 +507,38 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
             current = next
         }
         return current
+    }
+
+    /** Multiple JSR return sites can be distinct terminal source exits after one finally. */
+    private fun hasOnlyTerminalNormalExits(
+        start: BasicBlockId,
+        graph: ControlFlowGraph,
+        facts: ControlFlowFacts,
+    ): Boolean {
+        val visiting = linkedSetOf<BasicBlockId>()
+        val proven = linkedSetOf<BasicBlockId>()
+
+        fun prove(block: BasicBlockId): Boolean {
+            if (block in proven) return true
+            if (!visiting.add(block)) return false
+            val normalTargets = facts.outgoing[block].orEmpty()
+                .filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION }
+                .map { edge -> edge.to }
+                .distinct()
+            val result = if (normalTargets.isEmpty()) {
+                when (graph.instructions(graph.block(block)).lastOrNull()) {
+                    is RawReturnInstruction, is RawThrowInstruction -> true
+                    else -> false
+                }
+            } else {
+                normalTargets.all(::prove)
+            }
+            visiting.remove(block)
+            if (result) proven += block
+            return result
+        }
+
+        return prove(start)
     }
 
     private fun hasLegacyFinallyCallSite(
