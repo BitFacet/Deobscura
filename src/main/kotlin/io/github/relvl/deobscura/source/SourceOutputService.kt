@@ -2,6 +2,7 @@ package io.github.relvl.deobscura.source
 
 import io.github.relvl.deobscura.analysis.MethodAnalysis
 import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
+import io.github.relvl.deobscura.resolution.MethodOverrideAnalysis
 import io.github.relvl.deobscura.raw.RawClass
 import org.slf4j.LoggerFactory
 import java.nio.charset.StandardCharsets
@@ -15,6 +16,7 @@ object SourceOutputService {
     private val classes = linkedMapOf<String, SourceClassSnapshot>()
     private var root: Path? = null
     private var deobfuscation: DeobfuscationPlan = DeobfuscationPlan()
+    private var methodOverrides: MethodOverrideAnalysis = MethodOverrideAnalysis.EMPTY
 
     val enabled: Boolean
         get() = root != null
@@ -27,6 +29,10 @@ object SourceOutputService {
 
     fun setDeobfuscation(plan: DeobfuscationPlan) {
         deobfuscation = plan
+    }
+
+    fun setMethodOverrides(analysis: MethodOverrideAnalysis) {
+        methodOverrides = analysis
     }
 
     fun captureClass(rawClass: RawClass) {
@@ -45,7 +51,7 @@ object SourceOutputService {
         val outputDirectory = root ?: return
         val startedAt = System.nanoTime()
         val snapshots = classes.values.toList()
-        val renderer = JavaLikeSourceRenderer(deobfuscation)
+        val renderer = JavaLikeSourceRenderer(deobfuscation, methodOverrides)
         logger.info("Writing Java-like source for {} class(es) to {}...", snapshots.size, outputDirectory)
 
         snapshots.forEach { snapshot ->
@@ -67,6 +73,7 @@ object SourceOutputService {
         classes.clear()
         root = null
         deobfuscation = DeobfuscationPlan()
+        methodOverrides = MethodOverrideAnalysis.EMPTY
     }
 
     private fun sourceFile(root: Path, internalName: String): Path {

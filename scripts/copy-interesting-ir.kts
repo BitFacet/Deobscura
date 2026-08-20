@@ -4,8 +4,39 @@ import java.nio.file.StandardCopyOption
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
-val interestingIr = listOf(
-    "org/lwjgl/system/libffi/FFICIF.ir",
+val interestingFiles = listOf(
+    "com/wurmonline/client/renderer/gui/nxNUICZucW.ir",
+    "com/wurmonline/client/renderer/gui/nxNUICZucW.java",
+    "com/wurmonline/client/renderer/gui/eu0bDYoN0J.ir",
+    "com/wurmonline/client/renderer/gui/eu0bDYoN0J.java",
+    "com/wurmonline/client/renderer/gui/txg1j8dsgN.ir",
+    "com/wurmonline/client/renderer/gui/txg1j8dsgN.java",
+    "com/wurmonline/client/renderer/gui/TAQgJjbDW.ir",
+    "com/wurmonline/client/renderer/gui/TAQgJjbDW.java",
+    "com/wurmonline/client/renderer/gui/F4WVf7ErMq.ir",
+    "com/wurmonline/client/renderer/gui/F4WVf7ErMq.java",
+    "com/wurmonline/client/renderer/gui/TzLAhOL5vv.ir",
+    "com/wurmonline/client/renderer/gui/TzLAhOL5vv.java",
+    "com/wurmonline/client/renderer/gui/i79JMME6SY.ir",
+    "com/wurmonline/client/renderer/gui/i79JMME6SY.java",
+
+    "com/sun/javafx/geom/BaseBounds.ir",
+    "com/sun/javafx/geom/BaseBounds.java",
+    "com/sun/javafx/geom/RectBounds.ir",
+    "com/sun/javafx/geom/RectBounds.java",
+    "com/sun/javafx/geom/BoxBounds.ir",
+    "com/sun/javafx/geom/BoxBounds.java",
+
+    "com/sun/javafx/geom/transform/BaseTransform.ir",
+    "com/sun/javafx/geom/transform/BaseTransform.java",
+    "com/sun/javafx/geom/transform/AffineBase.ir",
+    "com/sun/javafx/geom/transform/AffineBase.java",
+    "com/sun/javafx/geom/transform/Affine3D.ir",
+    "com/sun/javafx/geom/transform/Affine3D.java",
+    "com/sun/javafx/geom/transform/Translate2D.ir",
+    "com/sun/javafx/geom/transform/Translate2D.java",
+    "com/sun/javafx/geom/transform/Identity.ir",
+    "com/sun/javafx/geom/transform/Identity.java",
 )
 
 fun findProjectRoot(start: Path): Path {
@@ -18,17 +49,17 @@ fun findProjectRoot(start: Path): Path {
 }
 
 val projectRoot = findProjectRoot(Path.of(System.getProperty("user.dir")))
-val irRoot = projectRoot.resolve("workspace/src/technical-ir")
-val targetDir = projectRoot.resolve("workspace/demo-ir")
-val targetZip = projectRoot.resolve("workspace/demo-ir.zip")
+val irRoot = projectRoot.resolve("workspace/src")
+val targetDir = projectRoot.resolve("workspace/demo")
+val targetZip = projectRoot.resolve("workspace/demo.zip")
 
-require(Files.isDirectory(irRoot)) { "Technical IR directory does not exist: $irRoot" }
+require(Files.isDirectory(irRoot)) { "directory does not exist: $irRoot" }
 Files.createDirectories(targetDir)
 
-interestingIr.forEach { relativePath ->
+interestingFiles.forEach { relativePath ->
     val source = irRoot.resolve(relativePath).normalize()
     require(source.startsWith(irRoot) && Files.isRegularFile(source)) {
-        "IR file '$relativePath' was not found under $irRoot"
+        "file '$relativePath' was not found under $irRoot"
     }
 
     val target = targetDir.resolve(source.fileName.toString())

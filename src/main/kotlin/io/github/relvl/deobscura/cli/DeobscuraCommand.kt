@@ -10,6 +10,7 @@ import io.github.relvl.deobscura.config.ConfigRepository
 import io.github.relvl.deobscura.config.ConfigResolver
 import io.github.relvl.deobscura.diagnostics.ir.TechnicalIrService
 import io.github.relvl.deobscura.deobfuscation.Deobfuscator
+import io.github.relvl.deobscura.resolution.MethodOverrideAnalyzer
 import io.github.relvl.deobscura.source.SourceOutputService
 import io.github.relvl.deobscura.output.OutputDirectoryService
 import io.github.relvl.deobscura.jar.JarLoader
@@ -106,8 +107,17 @@ class DeobscuraCommand : Callable<Int> {
 
                 val classResolver = ClassResolver(jar, runtimeSource)
                 val rawImport = ClassImporter().importInput(jar)
-                val deobfuscation = Deobfuscator().analyze(rawImport, resolution.config.deobfuscation)
+                val hierarchy = ClassHierarchy(classResolver)
+                val methodOverrides = MethodOverrideAnalyzer(classResolver, hierarchy).analyze(rawImport)
+                logger.info(
+                    "Method hierarchy identified {} virtual family(ies), {} overriding method(s), and {} family(ies) pinned to external APIs.",
+                    methodOverrides.stats.virtualFamilies,
+                    methodOverrides.stats.overridingMethods,
+                    methodOverrides.stats.externalApiFamilies,
+                )
+                val deobfuscation = Deobfuscator().analyze(rawImport, resolution.config.deobfuscation, methodOverrides)
                 SourceOutputService.setDeobfuscation(deobfuscation)
+                SourceOutputService.setMethodOverrides(methodOverrides)
                 TechnicalIrService.setDeobfuscation(deobfuscation)
                 if (resolution.config.deobfuscation) {
                     logger.info(
@@ -123,7 +133,6 @@ class DeobscuraCommand : Callable<Int> {
                 val resolutionDiagnostics = ResolutionDiagnostics()
                 val resolutionResult = resolutionDiagnostics.inspect(jar, classResolver)
                 ControlFlowDiagnostics().inspect(rawImport)
-                val hierarchy = ClassHierarchy(classResolver)
                 AnalysisDiagnostics(
                     methodAnalyzer = MethodAnalyzer(frameAnalyzer = FrameAnalyzer(hierarchy)),
                 ).inspect(rawImport)

@@ -1,6 +1,7 @@
 package io.github.relvl.deobscura.source
 
 import io.github.relvl.deobscura.analysis.MethodAnalyzer
+import io.github.relvl.deobscura.resolution.MethodOverrideAnalyzer
 import io.github.relvl.deobscura.raw.*
 import kotlin.test.Test
 import kotlin.test.assertContains
@@ -45,6 +46,44 @@ class JavaLikeSourceRendererTest {
         assertContains(rendered, "public class Sample {")
         assertContains(rendered, "public void run() {")
         assertContains(rendered, "return;")
+    }
+
+    @Test
+    fun `renders override annotation from hierarchy facts`() {
+        val baseMethod = RawMethod(
+            name = "run",
+            descriptor = "()V",
+            type = JvmMethodDescriptor.parse("()V"),
+            accessFlags = ACC_PUBLIC,
+            exceptions = emptyList(),
+            code = null,
+        )
+        val base = RawClass(
+            internalName = "example/Base",
+            majorVersion = 65,
+            minorVersion = 0,
+            accessFlags = ACC_PUBLIC,
+            superName = "java/lang/Object",
+            interfaces = emptyList(),
+            fields = emptyList(),
+            methods = listOf(baseMethod),
+        )
+        val child = base.copy(internalName = "example/Child", superName = base.internalName)
+        val rawImport = RawImportResult(
+            classes = listOf(base, child).associateBy { it.internalName },
+            fieldCount = 0,
+            methodCount = 2,
+            methodsWithCode = 0,
+            instructionCount = 0,
+            unknownInstructionCount = 0,
+            parseFailureCount = 0,
+            warnings = emptyList(),
+        )
+        val overrides = MethodOverrideAnalyzer(emptyMap()).analyze(rawImport)
+
+        val rendered = JavaLikeSourceRenderer(methodOverrides = overrides).renderClass(child, emptyMap())
+
+        assertContains(rendered, "@Override\n    public void run();")
     }
 
     private companion object {

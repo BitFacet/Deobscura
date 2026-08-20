@@ -7,6 +7,7 @@ import io.github.relvl.deobscura.cfg.ControlFlowEdge
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.controlflow.*
 import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
+import io.github.relvl.deobscura.resolution.MethodOverrideAnalysis
 import io.github.relvl.deobscura.expression.ComparisonOperator
 import io.github.relvl.deobscura.expression.ExpressionNode
 import io.github.relvl.deobscura.expression.ExpressionStatement
@@ -20,6 +21,7 @@ import io.github.relvl.deobscura.raw.*
  */
 class JavaLikeSourceRenderer(
     private val deobfuscation: DeobfuscationPlan = DeobfuscationPlan(),
+    private val methodOverrides: MethodOverrideAnalysis = MethodOverrideAnalysis.EMPTY,
 ) {
     private val expressionRenderer = SourceExpressionRenderer(deobfuscation)
     fun renderClass(rawClass: RawClass, analyses: Map<SourceMethodKey, MethodAnalysis>): String = buildString {
@@ -66,6 +68,12 @@ class JavaLikeSourceRenderer(
             if (analysis == null) appendLine("    /* analysis unavailable */") else renderBody(analysis, 1, this)
             appendLine("}")
             return@buildString
+        }
+
+        if (method.name != "<init>" && method.accessFlags and ACC_BRIDGE == 0 &&
+            methodOverrides.overridesSuperMethod(methodOwnerInternalName, method.name, method.descriptor)
+        ) {
+            appendLine("@Override")
         }
 
         append(memberModifiers(method.accessFlags))
@@ -434,6 +442,7 @@ class JavaLikeSourceRenderer(
         const val ACC_PROTECTED = 0x0004
         const val ACC_STATIC = 0x0008
         const val ACC_FINAL = 0x0010
+        const val ACC_BRIDGE = 0x0040
         const val ACC_SYNCHRONIZED = 0x0020
         const val ACC_NATIVE = 0x0100
         const val ACC_INTERFACE = 0x0200

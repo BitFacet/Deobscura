@@ -1,6 +1,8 @@
 package io.github.relvl.deobscura.deobfuscation
 
 import io.github.relvl.deobscura.raw.RawClass
+import io.github.relvl.deobscura.resolution.MethodOverrideAnalysis
+import io.github.relvl.deobscura.resolution.MethodOverrideKey
 
 /**
  * Stable source-facing renames derived from the complete application model.
@@ -23,7 +25,11 @@ data class DeobfuscationPlan(
         methodNames[MethodKey(ownerInternalName, name, descriptor)] ?: name
 
     companion object {
-        fun build(classes: Collection<RawClass>, enabled: Boolean): DeobfuscationPlan {
+        fun build(
+            classes: Collection<RawClass>,
+            enabled: Boolean,
+            methodOverrides: MethodOverrideAnalysis = MethodOverrideAnalysis.EMPTY,
+        ): DeobfuscationPlan {
             if (!enabled) return DeobfuscationPlan()
 
             val packageRenames = buildPackageRenames(classes)
@@ -33,9 +39,12 @@ data class DeobfuscationPlan(
 
             classes.forEach { rawClass ->
                 buildFieldRenames(rawClass, fieldNames)
-                buildMethodRenames(rawClass, methodNames)
             }
+            buildMethodRenames(classes, methodOverrides, methodNames)
 
+            val renamedMethodDeclarations = classes.sumOf { rawClass ->
+                rawClass.methods.count { method -> MethodKey(rawClass.internalName, method.name, method.descriptor) in methodNames }
+            }
             return DeobfuscationPlan(
                 packageRenames = packageRenames,
                 fieldNames = fieldNames,
@@ -43,7 +52,7 @@ data class DeobfuscationPlan(
                 stats = DeobfuscationStats(
                     renamedPackageSegments = packageRenames.size,
                     renamedFields = fieldNames.size,
-                    renamedMethods = methodNames.size,
+                    renamedMethods = renamedMethodDeclarations,
                 ),
             )
         }
@@ -107,19 +116,80 @@ data class DeobfuscationPlan(
             }
         }
 
-        private fun buildMethodRenames(rawClass: RawClass, output: MutableMap<MethodKey, String>) {
-            val methods = rawClass.methods.filterNot { it.name.startsWith("<") }
-            methods.groupBy { parameterDescriptor(it.descriptor) }.forEach { (_, sameParameters) ->
-                val used = sameParameters.mapTo(linkedSetOf()) { it.name }
-                sameParameters.groupBy { it.name }.values.filter { it.size > 1 }.forEach { duplicates ->
-                    var index = 1
-                    duplicates.forEach { method ->
-                        val renamed = allocateIndexed(method.name, index, used)
-                        index = renamed.substringAfterLast('_').toInt() + 1
-                        used += renamed
-                        output[MethodKey(rawClass.internalName, method.name, method.descriptor)] = renamed
+        private fun buildMethodRenames(
+            classes: Collection<RawClass>,
+            methodOverrides: MethodOverrideAnalysis,
+            output: MutableMap<MethodKey, String>,
+        ) {
+            val classesByName = classes.associateBy { it.internalName }
+            val assignedFamilies = linkedMapOf<MethodOverrideKey, String>()
+
+            classes.sortedBy { it.internalName }.forEach { rawClass ->
+                val methods = rawClass.methods.filterNot { it.name.startsWith("<") }
+                methods.groupBy { parameterDescriptor(it.descriptor) }.forEach { (_, sameParameters) ->
+                    sameParameters.groupBy { it.name }.values.filter { it.size > 1 }.forEach collision@{ duplicates ->
+                        val units = duplicates.map { method ->
+                            val key = MethodOverrideKey(rawClass.internalName, method.name, method.descriptor)
+                            methodOverrides.familyOf(key) ?: key
+                        }.distinct()
+                        if (units.size <= 1) return@collision
+
+                        val used = sameParameters.mapTo(linkedSetOf()) { it.name }
+                        var index = 1
+                        units.forEach unitLoop@{ unit ->
+                            if (methodOverrides.isPinned(unit)) return@unitLoop
+                            val existing = assignedFamilies[unit]
+                            if (existing != null) {
+                                used += existing
+                                return@unitLoop
+                            }
+                            val base = duplicates.first().name
+                            var renamed: String
+                            do {
+                                renamed = "${base}_${index++}"
+                            } while (renamed in used || !isFamilyNameAvailable(unit, renamed, classesByName, methodOverrides, assignedFamilies))
+                            assignedFamilies[unit] = renamed
+                            used += renamed
+                        }
                     }
                 }
+            }
+
+            assignedFamilies.forEach { (unit, renamed) ->
+                val members = methodOverrides.familyMembers(unit).ifEmpty { setOf(unit) }
+                members.forEach { member -> output[MethodKey(member.ownerInternalName, member.name, member.descriptor)] = renamed }
+            }
+
+            // Symbolic owners may name a subclass/interface that inherits the actual declaration.
+            classes.forEach { rawClass ->
+                rawClass.methods.forEach { method ->
+                    method.code?.instructions.orEmpty().filterIsInstance<io.github.relvl.deobscura.raw.RawInvokeInstruction>().forEach invokeLoop@{ invoke ->
+                        val family = methodOverrides.familyOfReference(invoke.owner, invoke.name, invoke.descriptor) ?: return@invokeLoop
+                        val renamed = assignedFamilies[family] ?: return@invokeLoop
+                        output[MethodKey(invoke.owner, invoke.name, invoke.descriptor)] = renamed
+                    }
+                }
+            }
+        }
+
+        private fun isFamilyNameAvailable(
+            family: MethodOverrideKey,
+            candidate: String,
+            classesByName: Map<String, RawClass>,
+            methodOverrides: MethodOverrideAnalysis,
+            assignedFamilies: Map<MethodOverrideKey, String>,
+        ): Boolean {
+            val members = methodOverrides.familyMembers(family).ifEmpty { setOf(family) }
+            return members.all { member ->
+                val owner = classesByName[member.ownerInternalName] ?: return@all true
+                val params = parameterDescriptor(member.descriptor)
+                owner.methods.filterNot { it.name.startsWith("<") }
+                    .filter { parameterDescriptor(it.descriptor) == params }
+                    .none { other ->
+                        val otherKey = MethodOverrideKey(owner.internalName, other.name, other.descriptor)
+                        val otherFamily = methodOverrides.familyOf(otherKey) ?: otherKey
+                        otherFamily != family && (assignedFamilies[otherFamily] ?: other.name) == candidate
+                    }
             }
         }
 
