@@ -30,6 +30,14 @@ internal class SourceExpressionRenderer(
     fun renderValue(id: ValueId, expression: ExpressionAnalysis, expectedType: JvmType): String =
         if (expectedType == JvmType.BooleanType) renderBooleanValue(id, expression) else renderValue(id, expression)
 
+    fun renderConditionalDefinition(
+        value: ExpressionValue,
+        condition: String,
+        thenValue: ValueId,
+        elseValue: ValueId,
+        expression: ExpressionAnalysis,
+    ): String = "var v${value.id.value} = $condition ? ${renderConditionalOperand(thenValue, expression)} : ${renderConditionalOperand(elseValue, expression)}"
+
     fun renderCondition(condition: BranchCondition, expression: ExpressionAnalysis): String {
         renderThreeWayComparison(condition, expression)?.let { return it }
 
@@ -178,6 +186,14 @@ internal class SourceExpressionRenderer(
             ComparisonOperator.EQ, ComparisonOperator.NE -> return null
         }
         return "!($left ${opposite.symbol} $right)"
+    }
+
+    private fun renderConditionalOperand(id: ValueId, expression: ExpressionAnalysis): String {
+        val value = expression.values[id] ?: return "v${id.value}"
+        return when (value.node) {
+            is ExpressionNode.Constant, is ExpressionNode.Root -> renderNode(value.node, expression)
+            else -> renderValue(id, expression, PRECEDENCE_CONDITIONAL)
+        }
     }
 
     private fun renderBooleanValue(id: ValueId, expression: ExpressionAnalysis): String {

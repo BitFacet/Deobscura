@@ -10,6 +10,8 @@ import io.github.relvl.deobscura.expression.ExpressionBuilder
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizer
 import io.github.relvl.deobscura.raw.RawMethod
+import io.github.relvl.deobscura.source.SourceLocalAnalysis
+import io.github.relvl.deobscura.source.SourceLocalAnalyzer
 import io.github.relvl.deobscura.source.SourceStructureAnalysis
 import io.github.relvl.deobscura.source.SourceStructureBuilder
 
@@ -24,6 +26,7 @@ class MethodAnalyzer(
     private val structuredControlFlowAnalyzer: StructuredControlFlowAnalyzer = StructuredControlFlowAnalyzer(),
     private val legacySubroutineNormalizer: LegacySubroutineNormalizer = LegacySubroutineNormalizer(),
     private val sourceStructureBuilder: SourceStructureBuilder = SourceStructureBuilder(),
+    private val sourceLocalAnalyzer: SourceLocalAnalyzer = SourceLocalAnalyzer(),
 ) {
     fun analyze(ownerInternalName: String, method: RawMethod): MethodAnalysis =
         analyze(ownerInternalName, method, null)
@@ -142,6 +145,14 @@ class MethodAnalyzer(
         }
         trace?.sourceStructure = sourceStructure
 
+        val sourceLocals = sourceLocalAnalyzer.analyze(
+            graph = graph,
+            ssa = optimization.analysis,
+            expression = expression,
+            structure = structuredControlFlow,
+        )
+        trace?.sourceLocals = sourceLocals
+
         return MethodAnalysis(
             method = normalizedMethod,
             graph = graph,
@@ -152,6 +163,7 @@ class MethodAnalyzer(
             expression = expression,
             structuredControlFlow = structuredControlFlow,
             sourceStructure = sourceStructure,
+            sourceLocals = sourceLocals,
             normalization = normalization,
         )
     }
@@ -186,6 +198,7 @@ data class MethodAnalysis(
     val expression: ExpressionAnalysis,
     val structuredControlFlow: StructuredControlFlowAnalysis,
     val sourceStructure: SourceStructureAnalysis,
+    val sourceLocals: SourceLocalAnalysis,
     val normalization: LegacySubroutineNormalizationResult,
 ) {
     val ssa: SsaAnalysis

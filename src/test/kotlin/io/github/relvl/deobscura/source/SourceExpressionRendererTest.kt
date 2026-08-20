@@ -356,6 +356,47 @@ class SourceExpressionRendererTest {
     }
 
     @Test
+    fun `renders source conditional definition from constant phi inputs`() {
+        val thenId = ValueId(1)
+        val elseId = ValueId(2)
+        val phiId = ValueId(3)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                thenId to ExpressionValue(
+                    thenId,
+                    JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT),
+                    ExpressionNode.Constant(constantDesc(1)),
+                ),
+                elseId to ExpressionValue(
+                    elseId,
+                    JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT),
+                    ExpressionNode.Constant(constantDesc(0)),
+                ),
+                phiId to ExpressionValue(
+                    phiId,
+                    JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT),
+                    ExpressionNode.Phi(
+                        io.github.relvl.deobscura.cfg.BasicBlockId(3),
+                        io.github.relvl.deobscura.analysis.SsaPhiLocation.Local(1),
+                        emptyList(),
+                    ),
+                ),
+            ),
+            statements = emptyList(),
+        )
+
+        val rendered = SourceExpressionRenderer().renderConditionalDefinition(
+            expression.values.getValue(phiId),
+            "arg0",
+            thenId,
+            elseId,
+            expression,
+        )
+
+        assertEquals("var v3 = arg0 ? 1 : 0", rendered)
+    }
+
+    @Test
     fun `renders bootstrap constants from concat recipe`() {
         val argumentId = ValueId(1)
         val resultId = ValueId(2)

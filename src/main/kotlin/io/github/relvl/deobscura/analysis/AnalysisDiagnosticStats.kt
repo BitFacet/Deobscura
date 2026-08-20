@@ -19,6 +19,7 @@ internal class AnalysisDiagnosticStats {
     val expression = ExpressionDiagnosticStats()
     val structuredControlFlow = StructuredControlFlowDiagnosticStats()
     val sourceStructure = SourceStructureDiagnosticStats()
+    val sourceLocals = SourceLocalDiagnosticStats()
     var preparationFailureCount = 0
 
     fun startMethod() {
@@ -28,6 +29,7 @@ internal class AnalysisDiagnosticStats {
         expression.methodCount++
         structuredControlFlow.methodCount++
         sourceStructure.methodCount++
+        sourceLocals.methodCount++
     }
 
     fun record(methodName: String, analysis: MethodAnalysis) {
@@ -38,6 +40,7 @@ internal class AnalysisDiagnosticStats {
         expression.record(analysis.expression)
         structuredControlFlow.record(methodName, analysis.structuredControlFlow)
         sourceStructure.record(analysis.sourceStructure)
+        sourceLocals.record(analysis.sourceLocals)
     }
 
     fun recordProgress(progress: MethodAnalysisProgress) {
@@ -58,6 +61,27 @@ internal class AnalysisDiagnosticStats {
         expression.log(logger)
         structuredControlFlow.log(logger)
         sourceStructure.log(logger)
+        sourceLocals.log(logger)
+    }
+}
+
+internal class SourceLocalDiagnosticStats {
+    var methodCount = 0
+    private var analyzedMethodCount = 0
+    private var conditionalValueCount = 0L
+    private var consumedIfCount = 0L
+
+    fun record(analysis: io.github.relvl.deobscura.source.SourceLocalAnalysis) {
+        analyzedMethodCount++
+        conditionalValueCount += analysis.conditionalValues.size
+        consumedIfCount += analysis.consumedIfHeaders.size
+    }
+
+    fun log(logger: Logger) {
+        logger.info(
+            "Source locals analyzed {}/{} method(s): {} conditional phi value(s), {} materialization if(s) removed.",
+            analyzedMethodCount, methodCount, conditionalValueCount, consumedIfCount,
+        )
     }
 }
 

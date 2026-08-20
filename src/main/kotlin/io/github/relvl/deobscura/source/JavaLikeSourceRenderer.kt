@@ -205,6 +205,7 @@ class JavaLikeSourceRenderer(
         when (region) {
             is StructuredRegion.If -> {
                 renderPhysicalBlock(region.header, context, bindings, indent, out, includeControl = false)
+                if (region.header in context.analysis.sourceLocals.consumedIfHeaders) return
                 appendIndented(out, indent, "if (${renderCondition(region.condition, context.analysis, bindings)}) {")
                 renderPart(node, SourceRegionPartKind.THEN, 0, context, bindings, indent + 1, out, tailPosition)
                 region.thenExit?.let { renderArmExit(it, indent + 1, out) }
@@ -355,17 +356,33 @@ class JavaLikeSourceRenderer(
         if (fallback) appendIndented(out, indent, "B${block.value}:")
         val contentIndent = indent + if (fallback) 1 else 0
         context.phisByBlock[block].orEmpty().forEach { value ->
-            appendIndented(out, contentIndent, expressionRenderer(bindings).renderDefinition(value, context.analysis.expression) + ";")
+            val conditional = context.analysis.sourceLocals.conditionalValues[value.id]
+            val rendered = if (conditional == null) {
+                expressionRenderer(bindings).renderDefinition(value, context.analysis.expression)
+            } else {
+                val condition = renderCondition(conditional.condition, context.analysis, bindings)
+                expressionRenderer(bindings).renderConditionalDefinition(
+                    value,
+                    condition,
+                    conditional.thenValue,
+                    conditional.elseValue,
+                    context.analysis.expression,
+                )
+            }
+            appendIndented(out, contentIndent, "$rendered;")
         }
         val events = context.eventsByBlock[block].orEmpty()
             .filter { event -> instructionRanges.isEmpty() || instructionRanges.any { event.instructionIndex in it } }
         events.forEachIndexed eventLoop@{ index, event ->
             when (event) {
-                is BlockEvent.Value -> appendIndented(
-                    out,
-                    contentIndent,
-                    expressionRenderer(bindings).renderDefinition(event.value, context.analysis.expression) + ";",
-                )
+                is BlockEvent.Value -> {
+                    if (event.value.id in context.analysis.sourceLocals.suppressedDefinitions) return@eventLoop
+                    appendIndented(
+                        out,
+                        contentIndent,
+                        expressionRenderer(bindings).renderDefinition(event.value, context.analysis.expression) + ";",
+                    )
+                }
                 is BlockEvent.Statement -> {
                     if (!includeControl && event.statement.isStructuralControl()) return@eventLoop
                     if (suppressMonitor && event.statement is ExpressionStatement.Monitor) return@eventLoop

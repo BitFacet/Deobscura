@@ -1,0 +1,164 @@
+package io.github.relvl.deobscura.source
+
+import io.github.relvl.deobscura.analysis.*
+import io.github.relvl.deobscura.cfg.BasicBlock
+import io.github.relvl.deobscura.cfg.BasicBlockId
+import io.github.relvl.deobscura.cfg.ControlFlowGraph
+import io.github.relvl.deobscura.controlflow.StructuredCondition
+import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
+import io.github.relvl.deobscura.controlflow.StructuredRegion
+import io.github.relvl.deobscura.expression.*
+import io.github.relvl.deobscura.raw.JvmComputationalType
+import io.github.relvl.deobscura.raw.RawCode
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+class SourceLocalAnalyzerTest {
+    @Test
+    fun `projects constant materialization diamond into conditional phi`() {
+        val header = BasicBlockId(0)
+        val thenBlock = BasicBlockId(1)
+        val elseBlock = BasicBlockId(2)
+        val continuation = BasicBlockId(3)
+        val conditionValue = ValueId(1)
+        val thenValue = ValueId(2)
+        val elseValue = ValueId(3)
+        val phiValue = ValueId(4)
+        val condition = StructuredCondition.Atomic(BranchCondition(ComparisonOperator.NE, conditionValue, BranchOperand.Zero))
+        val region = StructuredRegion.If(
+            header = header,
+            condition = condition,
+            thenEntry = thenBlock,
+            thenBlocks = setOf(thenBlock),
+            elseEntry = elseBlock,
+            elseBlocks = setOf(elseBlock),
+            continuation = continuation,
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                conditionValue to ExpressionValue(
+                    conditionValue,
+                    JvmValueType.Computational(JvmComputationalType.BOOLEAN),
+                    ExpressionNode.Root(ValueOrigin.Parameter(0)),
+                ),
+                thenValue to ExpressionValue(
+                    thenValue,
+                    JvmValueType.Computational(JvmComputationalType.INT),
+                    ExpressionNode.Constant(constantDesc(1)),
+                    listOf(1),
+                ),
+                elseValue to ExpressionValue(
+                    elseValue,
+                    JvmValueType.Computational(JvmComputationalType.INT),
+                    ExpressionNode.Constant(constantDesc(0)),
+                    listOf(2),
+                ),
+                phiValue to ExpressionValue(
+                    phiValue,
+                    JvmValueType.Computational(JvmComputationalType.INT),
+                    ExpressionNode.Phi(
+                        continuation,
+                        SsaPhiLocation.Local(1),
+                        listOf(SsaPhiInput(thenValue, thenBlock), SsaPhiInput(elseValue, elseBlock)),
+                    ),
+                ),
+            ),
+            statements = listOf(
+                ExpressionStatement.Branch(1, null),
+                ExpressionStatement.Branch(2, null),
+            ),
+        )
+        val ssa = SsaAnalysis(
+            values = mapOf(
+                conditionValue to SsaValueDefinition.Root(conditionValue, JvmValueType.Computational(JvmComputationalType.BOOLEAN), ValueOrigin.Parameter(0)),
+                thenValue to SsaValueDefinition.Instruction(thenValue, JvmValueType.Computational(JvmComputationalType.INT), 1),
+                elseValue to SsaValueDefinition.Instruction(elseValue, JvmValueType.Computational(JvmComputationalType.INT), 2),
+                phiValue to SsaValueDefinition.Phi(
+                    phiValue,
+                    JvmValueType.Computational(JvmComputationalType.INT),
+                    continuation,
+                    SsaPhiLocation.Local(1),
+                    listOf(SsaPhiInput(thenValue, thenBlock), SsaPhiInput(elseValue, elseBlock)),
+                ),
+            ),
+            operations = emptyList(),
+            phiNodes = emptyList(),
+            uses = mapOf(
+                thenValue to listOf(SsaValueUse.Phi(phiValue, thenBlock, 0)),
+                elseValue to listOf(SsaValueUse.Phi(phiValue, elseBlock, 1)),
+            ),
+            eliminatedLocalInstructionCount = 0,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph = graph(header.value, thenBlock.value, elseBlock.value, continuation.value),
+            ssa = ssa,
+            expression = expression,
+            structure = StructuredControlFlowAnalysis(
+                regions = listOf(region),
+                conditionalBranchCount = 1,
+                switchCount = 0,
+            ),
+        )
+
+        assertEquals(SourceConditionalValue(condition, thenValue, elseValue), analysis.conditionalValues[phiValue])
+        assertEquals(setOf(thenValue, elseValue), analysis.suppressedDefinitions)
+        assertEquals(setOf(header), analysis.consumedIfHeaders)
+    }
+
+    @Test
+    fun `keeps diamond when an arm has semantic work`() {
+        val header = BasicBlockId(0)
+        val thenBlock = BasicBlockId(1)
+        val elseBlock = BasicBlockId(2)
+        val continuation = BasicBlockId(3)
+        val thenValue = ValueId(2)
+        val elseValue = ValueId(3)
+        val phiValue = ValueId(4)
+        val conditionValue = ValueId(1)
+        val region = StructuredRegion.If(
+            header,
+            StructuredCondition.Atomic(BranchCondition(ComparisonOperator.NE, conditionValue, BranchOperand.Zero)),
+            thenBlock,
+            setOf(thenBlock),
+            elseBlock,
+            setOf(elseBlock),
+            continuation,
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                conditionValue to ExpressionValue(conditionValue, JvmValueType.Computational(JvmComputationalType.BOOLEAN), ExpressionNode.Root(ValueOrigin.Parameter(0))),
+                thenValue to ExpressionValue(thenValue, JvmValueType.Computational(JvmComputationalType.INT), ExpressionNode.Constant(constantDesc(1)), listOf(1)),
+                elseValue to ExpressionValue(elseValue, JvmValueType.Computational(JvmComputationalType.INT), ExpressionNode.Constant(constantDesc(0)), listOf(2)),
+                phiValue to ExpressionValue(phiValue, JvmValueType.Computational(JvmComputationalType.INT), ExpressionNode.Phi(continuation, SsaPhiLocation.Local(1), listOf(SsaPhiInput(thenValue, thenBlock), SsaPhiInput(elseValue, elseBlock)))),
+            ),
+            statements = listOf(ExpressionStatement.Return(1, null)),
+        )
+        val ssa = SsaAnalysis(
+            values = emptyMap(), operations = emptyList(), phiNodes = emptyList(),
+            uses = mapOf(
+                thenValue to listOf(SsaValueUse.Phi(phiValue, thenBlock, 0)),
+                elseValue to listOf(SsaValueUse.Phi(phiValue, elseBlock, 1)),
+            ),
+            eliminatedLocalInstructionCount = 0,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph(header.value, thenBlock.value, elseBlock.value, continuation.value), ssa, expression,
+            StructuredControlFlowAnalysis(listOf(region), 1, 0),
+        )
+
+        assertTrue(analysis.conditionalValues.isEmpty())
+        assertTrue(analysis.consumedIfHeaders.isEmpty())
+    }
+
+    private fun graph(vararg ids: Int): ControlFlowGraph = ControlFlowGraph(
+        code = RawCode(0, 0, 0, emptyList(), emptyList(), emptyList(), emptyList()),
+        blocks = ids.map { id -> BasicBlock(BasicBlockId(id), id, id + 1, emptyList(), emptyList()) },
+        edges = emptyList(),
+        entryBlock = ids.firstOrNull()?.let(::BasicBlockId),
+    )
+
+    private fun constantDesc(value: Any): java.lang.constant.ConstantDesc = value as java.lang.constant.ConstantDesc
+}
