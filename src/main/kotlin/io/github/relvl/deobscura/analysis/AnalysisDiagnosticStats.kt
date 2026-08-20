@@ -18,6 +18,7 @@ internal class AnalysisDiagnosticStats {
     val ssa = SsaDiagnosticStats()
     val expression = ExpressionDiagnosticStats()
     val structuredControlFlow = StructuredControlFlowDiagnosticStats()
+    val sourceStructure = SourceStructureDiagnosticStats()
     var preparationFailureCount = 0
 
     fun startMethod() {
@@ -26,6 +27,7 @@ internal class AnalysisDiagnosticStats {
         ssa.methodCount++
         expression.methodCount++
         structuredControlFlow.methodCount++
+        sourceStructure.methodCount++
     }
 
     fun record(methodName: String, analysis: MethodAnalysis) {
@@ -35,6 +37,7 @@ internal class AnalysisDiagnosticStats {
         ssa.record(methodName, analysis.graph, analysis.initialSsa, analysis.optimization)
         expression.record(analysis.expression)
         structuredControlFlow.record(methodName, analysis.structuredControlFlow)
+        sourceStructure.record(analysis.sourceStructure)
     }
 
     fun recordProgress(progress: MethodAnalysisProgress) {
@@ -54,6 +57,31 @@ internal class AnalysisDiagnosticStats {
         ssa.log(logger)
         expression.log(logger)
         structuredControlFlow.log(logger)
+        sourceStructure.log(logger)
+    }
+}
+
+internal class SourceStructureDiagnosticStats {
+    var methodCount = 0
+    private var analyzedMethodCount = 0
+    private var issueMethodCount = 0
+    private var issueCount = 0L
+    private var fallbackBlockCount = 0L
+    var failureCount = 0
+
+    fun record(analysis: io.github.relvl.deobscura.source.SourceStructureAnalysis) {
+        analyzedMethodCount++
+        if (analysis.issues.isNotEmpty()) issueMethodCount++
+        issueCount += analysis.issues.size
+        fallbackBlockCount += analysis.issues.sumOf { it.blocks.size.toLong() }
+    }
+
+    fun log(logger: Logger) {
+        logger.info(
+            "Source structure projected {}/{} method(s): {} projection issue(s) in {} method(s), {} fallback block(s).",
+            analyzedMethodCount, methodCount, issueCount, issueMethodCount, fallbackBlockCount,
+        )
+        logger.info("Source-structure projection completed with {} failure(s).", failureCount)
     }
 }
 

@@ -119,6 +119,15 @@ class AnalysisDiagnostics(
                             TechnicalIrService.methodHint(result.rawClass.internalName, method.name, method.descriptor),
                         )
                     }
+                analysis.sourceStructure.issues.forEach { issue ->
+                    logger.warn(
+                        "Source-structure projection retained unresolved ownership in '{}': {} block(s) {}.{}",
+                        methodName,
+                        issue.blocks.size,
+                        issue.blocks.sortedBy { it.value }.joinToString(prefix = "[", postfix = "]") { "B${it.value}" },
+                        TechnicalIrService.methodHint(result.rawClass.internalName, method.name, method.descriptor),
+                    )
+                }
                 stats.record(methodName, analysis)
                 return@forEach
             }
@@ -232,6 +241,11 @@ class AnalysisDiagnostics(
                 } else {
                     logger.warn("Failed structured control-flow analysis for '{}': {}.{}", methodName, cause.message, ir)
                 }
+            }
+
+            MethodAnalysisStage.SOURCE_STRUCTURE -> {
+                stats.sourceStructure.failureCount++
+                logger.warn("Failed source-structure projection for '{}': {}.{}", methodName, cause.message, ir)
             }
         }
     }
