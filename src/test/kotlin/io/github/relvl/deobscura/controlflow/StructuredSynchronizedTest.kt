@@ -9,6 +9,7 @@ import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.expression.ExpressionAnalysis
 import io.github.relvl.deobscura.expression.ExpressionStatement
 import io.github.relvl.deobscura.raw.*
+import org.junit.jupiter.api.Assertions.assertFalse
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -403,6 +404,200 @@ class StructuredSynchronizedTest {
         assertEquals(listOf(6), region.normalMonitorExitInstructionIndices)
         assertEquals(2, result.exceptionRegionCount)
         assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    // Pseudocode: synchronized (m) { try { A } catch (E e) { throw e } B }
+    @Test
+    fun `recognizes fragmented synchronized body containing a terminal throwing typed catch`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val b3 = BasicBlockId(3)
+        val nestedHandler = BasicBlockId(4)
+        val h1 = BasicBlockId(5)
+        val h2 = BasicBlockId(6)
+        val edges = listOf(
+            edge(b0, b1, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(b1, b2, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b1, nestedHandler, "java/lang/Exception"),
+            exceptionEdge(b1, h1, null),
+            edge(b2, b3, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b2, h2, null),
+        )
+        val instructions = listOf(
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 2),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorenter")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawThrowInstruction(JvmOpcode("athrow")),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 3),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 3),
+            RawThrowInstruction(JvmOpcode("athrow")),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 4),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 4),
+            RawThrowInstruction(JvmOpcode("athrow")),
+        )
+        val blocks = listOf(
+            BasicBlock(b0, 0, 3, emptyList(), emptyList()),
+            BasicBlock(b1, 3, 4, emptyList(), emptyList()),
+            BasicBlock(b2, 4, 5, emptyList(), emptyList()),
+            BasicBlock(b3, 5, 8, emptyList(), emptyList()),
+            BasicBlock(nestedHandler, 8, 9, emptyList(), emptyList()),
+            BasicBlock(h1, 9, 14, emptyList(), emptyList()),
+            BasicBlock(h2, 14, 19, emptyList(), emptyList()),
+        )
+        val labels = List(20) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                instructions,
+                labels,
+                listOf(
+                    exceptionHandler(3, 4, 8, "java/lang/Exception"),
+                    exceptionHandler(3, 4, 9, null),
+                    exceptionHandler(4, 5, 14, null),
+                ),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            b0,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(b0, b1, b2, b3, nestedHandler, h1, h2), edges, b0),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(7, null),
+                    ExpressionStatement.Throw(8, ValueId(0)),
+                    ExpressionStatement.Throw(13, ValueId(1)),
+                    ExpressionStatement.Throw(18, ValueId(2)),
+                ),
+            ),
+            legacySubroutineNormalized = true,
+        )
+
+        val region = assertIs<StructuredRegion.Synchronized>(result.regions.single())
+        assertEquals(b0, region.header)
+        assertEquals(b1, region.bodyEntry)
+        assertEquals(setOf(b1, b2, b3, nestedHandler), region.bodyBlocks)
+        assertEquals(setOf(h1, h2), region.handlerBlocks)
+        assertEquals(2, region.monitorSlot)
+        assertEquals(2, region.monitorEnterInstructionIndex)
+        assertEquals(listOf(6), region.normalMonitorExitInstructionIndices)
+        assertEquals(2, result.exceptionRegionCount)
+        assertEquals(0, result.unstructuredExceptionRegionCount)
+    }
+
+    // Pseudocode: try { synchronized (m) { A; B; } } catch (E e) { return; }
+    // The enclosing catch shares the first physical synchronized fragment after exception-table splitting.
+    @Test
+    fun `ignores enclosing typed handler sharing a fragmented synchronized range`() {
+        val pre = BasicBlockId(0)
+        val enter = BasicBlockId(1)
+        val b1 = BasicBlockId(2)
+        val b2 = BasicBlockId(3)
+        val b3 = BasicBlockId(4)
+        val outerHandler = BasicBlockId(5)
+        val h1 = BasicBlockId(6)
+        val h2 = BasicBlockId(7)
+        val edges = listOf(
+            edge(pre, enter, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(pre, outerHandler, "java/lang/Exception"),
+            edge(enter, b1, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(b1, b2, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b1, outerHandler, "java/lang/Exception"),
+            exceptionEdge(b1, h1, null),
+            edge(b2, b3, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(b2, h2, null),
+        )
+        val instructions = listOf(
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 2),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorenter")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawNopInstruction(JvmOpcode("nop")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawReturnInstruction(JvmOpcode("return"), JvmComputationalType.VOID),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 3),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 3),
+            RawThrowInstruction(JvmOpcode("athrow")),
+            RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 4),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+            RawMonitorInstruction(JvmOpcode("monitorexit")),
+            RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 4),
+            RawThrowInstruction(JvmOpcode("athrow")),
+        )
+        val blocks = listOf(
+            BasicBlock(pre, 0, 1, emptyList(), emptyList()),
+            BasicBlock(enter, 1, 4, emptyList(), emptyList()),
+            BasicBlock(b1, 4, 5, emptyList(), emptyList()),
+            BasicBlock(b2, 5, 6, emptyList(), emptyList()),
+            BasicBlock(b3, 6, 9, emptyList(), emptyList()),
+            BasicBlock(outerHandler, 9, 10, emptyList(), emptyList()),
+            BasicBlock(h1, 10, 15, emptyList(), emptyList()),
+            BasicBlock(h2, 15, 20, emptyList(), emptyList()),
+        )
+        val labels = List(21) { index -> RawLabel(RawLabelId(index), index, index.coerceAtMost(instructions.size)) }
+        val graph = ControlFlowGraph(
+            RawCode(
+                null,
+                null,
+                null,
+                instructions,
+                labels,
+                listOf(
+                    exceptionHandler(0, 1, 9, "java/lang/Exception"),
+                    exceptionHandler(4, 5, 10, null),
+                    exceptionHandler(4, 5, 9, "java/lang/Exception"),
+                    exceptionHandler(5, 6, 15, null),
+                ),
+                emptyList(),
+            ),
+            blocks,
+            edges,
+            pre,
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(setOf(pre, enter, b1, b2, b3, outerHandler, h1, h2), edges, pre),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    ExpressionStatement.Return(8, null),
+                    ExpressionStatement.Return(9, null),
+                    ExpressionStatement.Throw(14, ValueId(0)),
+                    ExpressionStatement.Throw(19, ValueId(1)),
+                ),
+            ),
+            legacySubroutineNormalized = true,
+        )
+
+        val region = result.regions.filterIsInstance<StructuredRegion.Synchronized>().single()
+        assertEquals(enter, region.header)
+        assertEquals(b1, region.bodyEntry)
+        assertEquals(setOf(b1, b2, b3), region.bodyBlocks)
+        assertEquals(setOf(h1, h2), region.handlerBlocks)
+        assertEquals(2, region.monitorSlot)
+        assertEquals(3, region.monitorEnterInstructionIndex)
+        assertEquals(listOf(7), region.normalMonitorExitInstructionIndices)
+        assertFalse(outerHandler in region.bodyBlocks)
     }
 
     // Pseudocode: synchronized (m) { try { A } catch (E e) { H } B }  // one catch-all plus self-protected cleanup

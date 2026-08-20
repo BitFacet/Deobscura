@@ -150,6 +150,11 @@ internal object FragmentedSynchronizedRecognizer {
                     owned = bodyBlocks,
                     groups = allGroups,
                     synchronizedHandlerBlocks = handlerBlocks,
+                    instructions = instructions,
+                    monitorSlot = monitorSlot,
+                    monitorEnterInstructionIndex = monitorEnterInstructionIndex,
+                    dominators = monitorDominators,
+                    graph = graph,
                     facts = facts,
                     rejectionTrace = rejectionTrace,
                 )
@@ -237,6 +242,11 @@ internal object FragmentedSynchronizedRecognizer {
         owned: MutableSet<BasicBlockId>,
         groups: List<ExceptionGroupTopology>,
         synchronizedHandlerBlocks: Set<BasicBlockId>,
+        instructions: List<RawInstruction>,
+        monitorSlot: Int,
+        monitorEnterInstructionIndex: Int,
+        dominators: Map<BasicBlockId, Set<BasicBlockId>>,
+        graph: ControlFlowGraph,
         facts: ControlFlowFacts,
         rejectionTrace: MutableList<String>? = null,
     ): Boolean = closeOverContainedExceptionRegions(
@@ -245,7 +255,16 @@ internal object FragmentedSynchronizedRecognizer {
         excludeGroup = { false },
         revisitContainedGroups = false,
         handlerEntriesFor = { candidate ->
-            candidate.handlerEntries.filterTo(linkedSetOf()) { entry -> entry !in synchronizedHandlerBlocks }
+            reachableNestedHandlerEntries(
+                candidate = candidate,
+                synchronizedHandlerBlocks = synchronizedHandlerBlocks,
+                instructions = instructions,
+                monitorSlot = monitorSlot,
+                monitorEnterInstructionIndex = monitorEnterInstructionIndex,
+                dominators = dominators,
+                graph = graph,
+                facts = facts,
+            )
         },
         absorb = { candidate, entries, _ ->
             val before = owned.size
@@ -254,6 +273,7 @@ internal object FragmentedSynchronizedRecognizer {
                     entry = entry,
                     owned = owned,
                     synchronizedHandlerBlocks = synchronizedHandlerBlocks,
+                    graph = graph,
                     facts = facts,
                     rejectionTrace = rejectionTrace,
                     context = "range=${candidate.group.envelope.start}..<${candidate.group.envelope.endExclusive} entry=$entry",
@@ -265,6 +285,37 @@ internal object FragmentedSynchronizedRecognizer {
     )
 
     /**
+     * Returns only exception handlers that are reachable for this physical protected range. JVM
+     * handler lookup stops at the first matching catch-all, so legacy JSR normalization may leave
+     * typed handlers after a monitor-cleanup catch-all that cannot actually receive exceptions from
+     * this range. Genuine nested catches remain before the enclosing monitor cleanup.
+     */
+    private fun reachableNestedHandlerEntries(
+        candidate: ExceptionGroupTopology,
+        synchronizedHandlerBlocks: Set<BasicBlockId>,
+        instructions: List<RawInstruction>,
+        monitorSlot: Int,
+        monitorEnterInstructionIndex: Int,
+        dominators: Map<BasicBlockId, Set<BasicBlockId>>,
+        graph: ControlFlowGraph,
+        facts: ControlFlowFacts,
+    ): Set<BasicBlockId> {
+        val result = linkedSetOf<BasicBlockId>()
+        for (handler in candidate.group.handlers) {
+            val handlerIndex = handlerInstructionIndex(handler, graph, facts)
+            val entry = handlerIndex?.let { index -> facts.instructionToBlock.getOrNull(index) }
+            if (entry != null &&
+                entry !in synchronizedHandlerBlocks &&
+                owningMonitorEnter(instructions, monitorSlot, entry, dominators, facts) == monitorEnterInstructionIndex
+            ) {
+                result += entry
+            }
+            if (handler.catchType == null) break
+        }
+        return result
+    }
+
+    /**
      * Collects a contained handler until it rejoins already-owned synchronized flow. Exception
      * handlers are not normally dominated by monitorenter in the normal CFG, so applying the normal
      * monitor-dominance test here would reject every genuine rejoining catch.
@@ -273,6 +324,7 @@ internal object FragmentedSynchronizedRecognizer {
         entry: BasicBlockId,
         owned: Set<BasicBlockId>,
         synchronizedHandlerBlocks: Set<BasicBlockId>,
+        graph: ControlFlowGraph,
         facts: ControlFlowFacts,
         rejectionTrace: MutableList<String>? = null,
         context: String = "entry=$entry",
@@ -280,6 +332,7 @@ internal object FragmentedSynchronizedRecognizer {
         val result = linkedSetOf<BasicBlockId>()
         val pending = ArrayDeque<BasicBlockId>()
         var rejoinsOwnedFlow = false
+        var terminatesByThrow = false
         pending += entry
 
         while (pending.isNotEmpty()) {
@@ -290,6 +343,11 @@ internal object FragmentedSynchronizedRecognizer {
             }
             if (block in synchronizedHandlerBlocks || !result.add(block)) continue
             if (block in facts.explicitTerminalBlocks) {
+                val terminalInstruction = graph.instructions(graph.block(block)).lastOrNull()
+                if (terminalInstruction is RawThrowInstruction) {
+                    terminatesByThrow = true
+                    continue
+                }
                 rejectionTrace?.add("fragmented:nested-terminal $context block=$block")
                 return null
             }
@@ -307,7 +365,7 @@ internal object FragmentedSynchronizedRecognizer {
                 }
             }
         }
-        if (!rejoinsOwnedFlow) {
+        if (!rejoinsOwnedFlow && !terminatesByThrow) {
             rejectionTrace?.add("fragmented:nested-no-rejoin $context blocks=${result.size}")
             return null
         }
