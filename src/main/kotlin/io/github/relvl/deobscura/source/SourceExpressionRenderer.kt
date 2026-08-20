@@ -31,6 +31,8 @@ internal class SourceExpressionRenderer(
         if (expectedType == JvmType.BooleanType) renderBooleanValue(id, expression) else renderValue(id, expression)
 
     fun renderCondition(condition: BranchCondition, expression: ExpressionAnalysis): String {
+        renderThreeWayComparison(condition, expression)?.let { return it }
+
         val left = expression.values[condition.left]
         val isBoolean = condition.left in expression.materialization.booleanValues ||
             left?.type == io.github.relvl.deobscura.analysis.JvmValueType.Computational(
@@ -133,6 +135,47 @@ internal class SourceExpressionRenderer(
         val precedence = precedence(value.node)
         val rendered = renderInlineNode(value.node, expression, precedence)
         return if (precedence < parentPrecedence) "($rendered)" else rendered
+    }
+
+    private fun renderThreeWayComparison(
+        condition: BranchCondition,
+        expression: ExpressionAnalysis,
+    ): String? {
+        if (condition.right != BranchOperand.Zero) return null
+        val compare = (expression.values[condition.left]?.node as? ExpressionNode.ThreeWayCompare) ?: return null
+        val left = renderValue(compare.left, expression, PRECEDENCE_RELATIONAL)
+        val right = renderValue(compare.right, expression, PRECEDENCE_RELATIONAL + 1)
+
+        val directOperator = when (compare.nanResult) {
+            null -> condition.operator
+            -1 -> when (condition.operator) {
+                ComparisonOperator.EQ,
+                ComparisonOperator.NE,
+                ComparisonOperator.GT,
+                ComparisonOperator.GE -> condition.operator
+                ComparisonOperator.LT -> null
+                ComparisonOperator.LE -> null
+            }
+            1 -> when (condition.operator) {
+                ComparisonOperator.EQ,
+                ComparisonOperator.NE,
+                ComparisonOperator.LT,
+                ComparisonOperator.LE -> condition.operator
+                ComparisonOperator.GT -> null
+                ComparisonOperator.GE -> null
+            }
+            else -> return null
+        }
+        if (directOperator != null) return "$left ${directOperator.symbol} $right"
+
+        val opposite = when (condition.operator) {
+            ComparisonOperator.LT -> ComparisonOperator.GE
+            ComparisonOperator.LE -> ComparisonOperator.GT
+            ComparisonOperator.GT -> ComparisonOperator.LE
+            ComparisonOperator.GE -> ComparisonOperator.LT
+            ComparisonOperator.EQ, ComparisonOperator.NE -> return null
+        }
+        return "!($left ${opposite.symbol} $right)"
     }
 
     private fun renderBooleanValue(id: ValueId, expression: ExpressionAnalysis): String {

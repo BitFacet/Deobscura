@@ -4,6 +4,9 @@ import io.github.relvl.deobscura.analysis.JvmValueType
 import io.github.relvl.deobscura.analysis.ValueId
 import io.github.relvl.deobscura.analysis.ValueOrigin
 import io.github.relvl.deobscura.expression.ExpressionAnalysis
+import io.github.relvl.deobscura.expression.ComparisonOperator
+import io.github.relvl.deobscura.expression.BranchOperand
+import io.github.relvl.deobscura.expression.BranchCondition
 import io.github.relvl.deobscura.expression.ExpressionNode
 import io.github.relvl.deobscura.expression.ExpressionStatement
 import io.github.relvl.deobscura.expression.FieldSymbol
@@ -248,6 +251,59 @@ class SourceExpressionRendererTest {
         val rendered = SourceExpressionRenderer().renderStatement(statement, expression)
 
         assertEquals("v1[v2] = v3 != 0", rendered)
+    }
+
+    @Test
+    fun `renders integer three-way comparison as direct Java comparison`() {
+        assertEquals("v1 <= v2", renderThreeWayCondition(nanResult = null, ComparisonOperator.LE))
+    }
+
+    @Test
+    fun `preserves fcmpl NaN semantics with negated opposite comparison`() {
+        assertEquals("!(v1 > v2)", renderThreeWayCondition(nanResult = -1, ComparisonOperator.LE))
+    }
+
+    @Test
+    fun `preserves fcmpg NaN semantics with negated opposite comparison`() {
+        assertEquals("!(v1 < v2)", renderThreeWayCondition(nanResult = 1, ComparisonOperator.GE))
+    }
+
+    @Test
+    fun `uses direct floating comparison when NaN bias already matches Java`() {
+        assertEquals("v1 >= v2", renderThreeWayCondition(nanResult = -1, ComparisonOperator.GE))
+        assertEquals("v1 <= v2", renderThreeWayCondition(nanResult = 1, ComparisonOperator.LE))
+        assertEquals("v1 == v2", renderThreeWayCondition(nanResult = -1, ComparisonOperator.EQ))
+        assertEquals("v1 != v2", renderThreeWayCondition(nanResult = 1, ComparisonOperator.NE))
+    }
+
+    private fun renderThreeWayCondition(nanResult: Int?, operator: ComparisonOperator): String {
+        val leftId = ValueId(1)
+        val rightId = ValueId(2)
+        val compareId = ValueId(3)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                leftId to ExpressionValue(
+                    id = leftId,
+                    type = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.FLOAT),
+                    node = ExpressionNode.Root(ValueOrigin.Instruction(1)),
+                ),
+                rightId to ExpressionValue(
+                    id = rightId,
+                    type = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.FLOAT),
+                    node = ExpressionNode.Root(ValueOrigin.Instruction(2)),
+                ),
+                compareId to ExpressionValue(
+                    id = compareId,
+                    type = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT),
+                    node = ExpressionNode.ThreeWayCompare(leftId, rightId, nanResult),
+                ),
+            ),
+            statements = emptyList(),
+        )
+        return SourceExpressionRenderer().renderCondition(
+            BranchCondition(operator, compareId, BranchOperand.Zero),
+            expression,
+        )
     }
 
     private fun constantDesc(value: Any): java.lang.constant.ConstantDesc = value as java.lang.constant.ConstantDesc
