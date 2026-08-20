@@ -410,7 +410,11 @@ class JavaLikeSourceRenderer(
                 "switch (${expressionRenderer(bindings).renderValue(statement.selector, context.analysis.expression)}) -> [$cases]"
             }
 
-            else -> expressionRenderer(bindings).renderStatement(statement, context.analysis.expression)
+            else -> expressionRenderer(bindings).renderStatement(
+                statement,
+                context.analysis.expression,
+                context.method.raw.type.returnType,
+            )
         }
     }
 

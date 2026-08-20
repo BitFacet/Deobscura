@@ -5,38 +5,8 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 val interestingFiles = listOf(
-    "com/wurmonline/client/renderer/gui/nxNUICZucW.ir",
-    "com/wurmonline/client/renderer/gui/nxNUICZucW.java",
-    "com/wurmonline/client/renderer/gui/eu0bDYoN0J.ir",
-    "com/wurmonline/client/renderer/gui/eu0bDYoN0J.java",
-    "com/wurmonline/client/renderer/gui/txg1j8dsgN.ir",
-    "com/wurmonline/client/renderer/gui/txg1j8dsgN.java",
-    "com/wurmonline/client/renderer/gui/TAQgJjbDW.ir",
-    "com/wurmonline/client/renderer/gui/TAQgJjbDW.java",
-    "com/wurmonline/client/renderer/gui/F4WVf7ErMq.ir",
-    "com/wurmonline/client/renderer/gui/F4WVf7ErMq.java",
-    "com/wurmonline/client/renderer/gui/TzLAhOL5vv.ir",
-    "com/wurmonline/client/renderer/gui/TzLAhOL5vv.java",
-    "com/wurmonline/client/renderer/gui/i79JMME6SY.ir",
-    "com/wurmonline/client/renderer/gui/i79JMME6SY.java",
-
-    "com/sun/javafx/geom/BaseBounds.ir",
-    "com/sun/javafx/geom/BaseBounds.java",
-    "com/sun/javafx/geom/RectBounds.ir",
-    "com/sun/javafx/geom/RectBounds.java",
-    "com/sun/javafx/geom/BoxBounds.ir",
-    "com/sun/javafx/geom/BoxBounds.java",
-
-    "com/sun/javafx/geom/transform/BaseTransform.ir",
-    "com/sun/javafx/geom/transform/BaseTransform.java",
-    "com/sun/javafx/geom/transform/AffineBase.ir",
-    "com/sun/javafx/geom/transform/AffineBase.java",
-    "com/sun/javafx/geom/transform/Affine3D.ir",
-    "com/sun/javafx/geom/transform/Affine3D.java",
-    "com/sun/javafx/geom/transform/Translate2D.ir",
-    "com/sun/javafx/geom/transform/Translate2D.java",
-    "com/sun/javafx/geom/transform/Identity.ir",
-    "com/sun/javafx/geom/transform/Identity.java",
+    "package_class/ZM4cSqt3bl.java",
+    "package_class/ZM4cSqt3bl.ir",
 )
 
 fun findProjectRoot(start: Path): Path {

@@ -1,9 +1,12 @@
 package io.github.relvl.deobscura.source
 
 import io.github.relvl.deobscura.analysis.ValueId
+import io.github.relvl.deobscura.analysis.JvmValueType
 import io.github.relvl.deobscura.analysis.ValueOrigin
 import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
 import io.github.relvl.deobscura.expression.*
+import io.github.relvl.deobscura.raw.JvmComputationalType
+import io.github.relvl.deobscura.raw.JvmReferenceType
 import io.github.relvl.deobscura.raw.JvmType
 import java.lang.constant.ConstantDescs
 
@@ -23,6 +26,9 @@ internal class SourceExpressionRenderer(
 
     fun renderValue(id: ValueId, expression: ExpressionAnalysis): String =
         renderValue(id, expression, PRECEDENCE_LOWEST)
+
+    fun renderValue(id: ValueId, expression: ExpressionAnalysis, expectedType: JvmType): String =
+        if (expectedType == JvmType.BooleanType) renderBooleanValue(id, expression) else renderValue(id, expression)
 
     fun renderCondition(condition: BranchCondition, expression: ExpressionAnalysis): String {
         val left = expression.values[condition.left]
@@ -49,7 +55,11 @@ internal class SourceExpressionRenderer(
             }
     }
 
-    fun renderStatement(statement: ExpressionStatement, expression: ExpressionAnalysis): String = when (statement) {
+    fun renderStatement(
+        statement: ExpressionStatement,
+        expression: ExpressionAnalysis,
+        methodReturnType: JvmType? = null,
+    ): String = when (statement) {
         is ExpressionStatement.FieldWrite -> {
             val fieldName = deobfuscation.fieldName(
                 statement.field.ownerInternalName,
@@ -58,14 +68,21 @@ internal class SourceExpressionRenderer(
             )
             val target = statement.receiver?.let { "${renderValue(it, expression)}.$fieldName" }
                 ?: "${sourceName(statement.field.ownerInternalName)}.$fieldName"
-            "$target = ${renderValue(statement.value, expression)}"
+            "$target = ${renderValue(statement.value, expression, statement.field.type)}"
         }
-        is ExpressionStatement.ArrayWrite ->
-            "${renderValue(statement.array, expression)}[${renderValue(statement.index, expression)}] = ${renderValue(statement.value, expression)}"
+        is ExpressionStatement.ArrayWrite -> {
+            val componentType = arrayComponentType(statement.array, expression)
+            val value = componentType?.let { renderValue(statement.value, expression, it) }
+                ?: renderValue(statement.value, expression)
+            "${renderValue(statement.array, expression)}[${renderValue(statement.index, expression)}] = $value"
+        }
         is ExpressionStatement.Call -> renderCall(statement.method, statement.receiver, statement.arguments, expression)
         is ExpressionStatement.DynamicCall ->
-            "/* invokedynamic ${statement.callSite.name} */ (${statement.arguments.joinToString { renderValue(it, expression) }})"
-        is ExpressionStatement.Return -> statement.value?.let { "return ${renderValue(it, expression)}" } ?: "return"
+            "/* invokedynamic ${statement.callSite.name} */ (${renderArguments(statement.arguments, statement.callSite.type.parameterTypes, expression)})"
+        is ExpressionStatement.Return -> statement.value?.let { value ->
+            val rendered = methodReturnType?.let { renderValue(value, expression, it) } ?: renderValue(value, expression)
+            "return $rendered"
+        } ?: "return"
         is ExpressionStatement.Throw -> "throw ${renderValue(statement.value, expression)}"
         is ExpressionStatement.Monitor ->
             "/* ${if (statement.operation == MonitorOperation.ENTER) "monitor-enter" else "monitor-exit"} ${renderValue(statement.value, expression)} */"
@@ -98,10 +115,10 @@ internal class SourceExpressionRenderer(
         is ExpressionNode.ArrayLength -> "${renderValue(node.array, expression)}.length"
         is ExpressionNode.Call -> renderCall(node.method, node.receiver, node.arguments, expression)
         is ExpressionNode.DynamicCall ->
-            "/* invokedynamic ${node.callSite.name} */ (${node.arguments.joinToString { renderValue(it, expression) }})"
+            "/* invokedynamic ${node.callSite.name} */ (${renderArguments(node.arguments, node.callSite.type.parameterTypes, expression)})"
         is ExpressionNode.NewObject -> "new ${sourceName(node.internalName)} /* uninitialized */"
         is ExpressionNode.ConstructObject ->
-            "new ${sourceName(node.internalName)}(${node.arguments.joinToString { renderValue(it, expression) }})"
+            "new ${sourceName(node.internalName)}(${renderArguments(node.arguments, node.constructor.type.parameterTypes, expression)})"
         is ExpressionNode.NewArray -> renderNewArray(node, expression)
         is ExpressionNode.Cast -> "(${formatType(node.targetType)}) ${renderValue(node.operand, expression)}"
         is ExpressionNode.InstanceOf -> "${renderValue(node.operand, expression)} instanceof ${formatType(node.targetType)}"
@@ -117,6 +134,31 @@ internal class SourceExpressionRenderer(
         val rendered = renderInlineNode(value.node, expression, precedence)
         return if (precedence < parentPrecedence) "($rendered)" else rendered
     }
+
+    private fun renderBooleanValue(id: ValueId, expression: ExpressionAnalysis): String {
+        val value = expression.values[id] ?: return "v${id.value} != 0"
+        val constant = (value.node as? ExpressionNode.Constant)?.value
+        if (constant?.equals(0) == true) return "false"
+        if (constant?.equals(1) == true) return "true"
+        if (value.type == JvmValueType.Computational(JvmComputationalType.BOOLEAN)) {
+            return renderValue(id, expression)
+        }
+        return "${renderValue(id, expression, PRECEDENCE_EQUALITY)} != 0"
+    }
+
+    private fun arrayComponentType(array: ValueId, expression: ExpressionAnalysis): JvmType? {
+        val reference = (expression.values[array]?.type as? JvmValueType.Reference)?.referenceType
+        val arrayType = (reference as? JvmReferenceType.Exact)?.type as? JvmType.ArrayType
+        return arrayType?.componentType
+    }
+
+    private fun renderArguments(
+        arguments: List<ValueId>,
+        parameterTypes: List<JvmType>,
+        expression: ExpressionAnalysis,
+    ): String = arguments.mapIndexed { index, argument ->
+        parameterTypes.getOrNull(index)?.let { renderValue(argument, expression, it) } ?: renderValue(argument, expression)
+    }.joinToString()
 
     private fun renderInlineNode(node: ExpressionNode, expression: ExpressionAnalysis, ownPrecedence: Int): String = when (node) {
         is ExpressionNode.Constant -> formatConstant(node.value)
@@ -160,7 +202,7 @@ internal class SourceExpressionRenderer(
         arguments: List<ValueId>,
         expression: ExpressionAnalysis,
     ): String {
-        val renderedArguments = arguments.joinToString { renderValue(it, expression) }
+        val renderedArguments = renderArguments(arguments, method.type.parameterTypes, expression)
         if (method.invocationKind == InvocationKind.SPECIAL && method.name == "<init>" && receiver != null) {
             val receiverOrigin = (expression.values[receiver]?.node as? ExpressionNode.Root)?.origin
             if (receiverOrigin is ValueOrigin.This) {
