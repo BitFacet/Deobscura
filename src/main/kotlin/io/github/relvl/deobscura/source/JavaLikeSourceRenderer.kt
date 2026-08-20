@@ -52,19 +52,46 @@ class JavaLikeSourceRenderer(
         }
         if (rawClass.fields.isNotEmpty() && rawClass.methods.isNotEmpty()) appendLine()
 
+        val trivialNoArgConstructor = rawClass.methods
+            .firstOrNull { it.name == "<init>" && it.descriptor == "()V" }
+            ?.takeIf { it.isTrivialConstructor(rawClass) }
+
         rawClass.methods.forEachIndexed { index, method ->
             val analysis = analyses[SourceMethodKey(method.name, method.descriptor)]
-            appendLine(renderMethod(rawClass.internalName, simpleName, method, analysis).trimEnd().prependIndent("    "))
+            appendLine(
+                renderMethod(
+                    rawClass.internalName,
+                    simpleName,
+                    method,
+                    analysis,
+                    trivialNoArgConstructor != null,
+                ).trimEnd().prependIndent("    "),
+            )
             if (index != rawClass.methods.lastIndex) appendLine()
         }
 
         appendLine("}")
     }
 
-    private fun renderMethod(methodOwnerInternalName: String, ownerSimpleName: String, method: RawMethod, analysis: MethodAnalysis?): String = buildString {
+    private fun renderMethod(
+        methodOwnerInternalName: String,
+        ownerSimpleName: String,
+        method: RawMethod,
+        analysis: MethodAnalysis?,
+        hasTrivialNoArgConstructor: Boolean,
+    ): String = buildString {
         if (method.name == "<clinit>") {
             appendLine("static {")
-            if (analysis == null) appendLine("    /* analysis unavailable */") else renderBody(analysis, 1, this)
+            if (analysis == null) {
+                appendLine("    /* analysis unavailable */")
+            } else {
+                renderBody(
+                    analysis,
+                    1,
+                    this,
+                    RenderMethodContext(methodOwnerInternalName, method, hasTrivialNoArgConstructor),
+                )
+            }
             appendLine("}")
             return@buildString
         }
@@ -99,14 +126,31 @@ class JavaLikeSourceRenderer(
             appendLine("}")
         } else {
             appendLine(" {")
-            renderBody(analysis, 1, this)
+            renderBody(
+                analysis,
+                1,
+                this,
+                RenderMethodContext(methodOwnerInternalName, method, hasTrivialNoArgConstructor),
+            )
             appendLine("}")
         }
     }
 
-    private fun renderBody(analysis: MethodAnalysis, indent: Int, out: StringBuilder) {
-        val context = RenderContext(analysis)
-        renderSourceBlock(analysis.sourceStructure.root, context, SourceValueBindings.EMPTY, indent, out)
+    private fun renderBody(
+        analysis: MethodAnalysis,
+        indent: Int,
+        out: StringBuilder,
+        method: RenderMethodContext,
+    ) {
+        val context = RenderContext(analysis, method)
+        renderSourceBlock(
+            analysis.sourceStructure.root,
+            context,
+            SourceValueBindings.EMPTY,
+            indent,
+            out,
+            tailPosition = method.allowsImplicitReturn,
+        )
         if (analysis.sourceStructure.issues.isNotEmpty()) {
             appendIndented(out, indent, "/* source projection debt: ${analysis.sourceStructure.issues.size} issue(s) */")
         }
@@ -120,10 +164,22 @@ class JavaLikeSourceRenderer(
         out: StringBuilder,
         instructionRanges: List<IntRange> = emptyList(),
         suppressMonitor: Boolean = false,
+        tailPosition: Boolean = false,
     ) {
-        block.nodes.forEach { node ->
+        block.nodes.forEachIndexed { index, node ->
+            val nodeTailPosition = tailPosition && index == block.nodes.lastIndex
             when (node) {
-                is SourceNode.BasicBlock -> renderPhysicalBlock(node.block, context, bindings, indent, out, fallback = false, instructionRanges = instructionRanges, suppressMonitor = suppressMonitor)
+                is SourceNode.BasicBlock -> renderPhysicalBlock(
+                    node.block,
+                    context,
+                    bindings,
+                    indent,
+                    out,
+                    fallback = false,
+                    instructionRanges = instructionRanges,
+                    suppressMonitor = suppressMonitor,
+                    tailPosition = nodeTailPosition,
+                )
                 is SourceNode.Unstructured -> {
                     appendIndented(out, indent, "/* unresolved control flow: ${node.diagnostics.joinToString { it.reason.diagnosticName }} */")
                     renderPhysicalBlock(node.block, context, bindings, indent, out, fallback = true, instructionRanges = instructionRanges, suppressMonitor = suppressMonitor)
@@ -132,23 +188,38 @@ class JavaLikeSourceRenderer(
                     appendIndented(out, indent, "/* projection fallback: ${node.reason.name.lowercase().replace('_', '-')} */")
                     renderPhysicalBlock(node.block, context, bindings, indent, out, fallback = true, instructionRanges = instructionRanges, suppressMonitor = suppressMonitor)
                 }
-                is SourceNode.Structured -> renderStructured(node, context, bindings, indent, out)
+                is SourceNode.Structured -> renderStructured(node, context, bindings, indent, out, nodeTailPosition)
             }
         }
     }
 
-    private fun renderStructured(node: SourceNode.Structured, context: RenderContext, bindings: SourceValueBindings, indent: Int, out: StringBuilder) {
+    private fun renderStructured(
+        node: SourceNode.Structured,
+        context: RenderContext,
+        bindings: SourceValueBindings,
+        indent: Int,
+        out: StringBuilder,
+        tailPosition: Boolean,
+    ) {
         val region = node.region
         when (region) {
             is StructuredRegion.If -> {
                 renderPhysicalBlock(region.header, context, bindings, indent, out, includeControl = false)
                 appendIndented(out, indent, "if (${renderCondition(region.condition, context.analysis, bindings)}) {")
-                renderPart(node, SourceRegionPartKind.THEN, 0, context, bindings, indent + 1, out)
+                renderPart(node, SourceRegionPartKind.THEN, 0, context, bindings, indent + 1, out, tailPosition)
                 region.thenExit?.let { renderArmExit(it, indent + 1, out) }
                 val elsePart = node.parts.firstOrNull { it.kind == SourceRegionPartKind.ELSE }
                 if (elsePart != null) {
                     appendIndented(out, indent, "} else {")
-                    renderSourceBlock(elsePart.body, context, bindings, indent + 1, out, elsePart.instructionRanges)
+                    renderSourceBlock(
+                        elsePart.body,
+                        context,
+                        bindings,
+                        indent + 1,
+                        out,
+                        elsePart.instructionRanges,
+                        tailPosition = tailPosition,
+                    )
                     region.elseExit?.let { renderArmExit(it, indent + 1, out) }
                 }
                 appendIndented(out, indent, "}")
@@ -179,7 +250,7 @@ class JavaLikeSourceRenderer(
 
             is StructuredRegion.TryCatch -> {
                 appendIndented(out, indent, "try {")
-                renderPart(node, SourceRegionPartKind.TRY_BODY, 0, context, bindings, indent + 1, out)
+                renderPart(node, SourceRegionPartKind.TRY_BODY, 0, context, bindings, indent + 1, out, tailPosition)
                 region.catches.forEachIndexed { index, catch ->
                     val parameterName = "e$index"
                     val catchBindings = bindings.withExceptionParameter(
@@ -187,7 +258,16 @@ class JavaLikeSourceRenderer(
                         parameterName,
                     )
                     appendIndented(out, indent, "} catch (${catch.catchTypes.joinToString(" | ") { sourceName(it) }} $parameterName) {")
-                    renderPart(node, SourceRegionPartKind.CATCH_BODY, index, context, catchBindings, indent + 1, out)
+                    renderPart(
+                        node,
+                        SourceRegionPartKind.CATCH_BODY,
+                        index,
+                        context,
+                        catchBindings,
+                        indent + 1,
+                        out,
+                        tailPosition,
+                    )
                 }
                 appendIndented(out, indent, "}")
             }
@@ -220,7 +300,16 @@ class JavaLikeSourceRenderer(
             is StructuredRegion.Synchronized -> {
                 renderPhysicalBlock(region.header, context, bindings, indent, out, includeControl = false)
                 appendIndented(out, indent, "synchronized (/* monitor local[${region.monitorSlot}] */) {")
-                renderPart(node, SourceRegionPartKind.SYNCHRONIZED_BODY, 0, context, bindings, indent + 1, out)
+                renderPart(
+                    node,
+                    SourceRegionPartKind.SYNCHRONIZED_BODY,
+                    0,
+                    context,
+                    bindings,
+                    indent + 1,
+                    out,
+                    tailPosition,
+                )
                 appendIndented(out, indent, "}")
             }
         }
@@ -234,9 +323,21 @@ class JavaLikeSourceRenderer(
         bindings: SourceValueBindings,
         indent: Int,
         out: StringBuilder,
+        tailPosition: Boolean = false,
     ) {
         node.parts.firstOrNull { it.kind == kind && it.ordinal == ordinal }
-            ?.let { renderSourceBlock(it.body, context, bindings, indent, out, it.instructionRanges, kind == SourceRegionPartKind.SYNCHRONIZED_BODY) }
+            ?.let {
+                renderSourceBlock(
+                    it.body,
+                    context,
+                    bindings,
+                    indent,
+                    out,
+                    it.instructionRanges,
+                    kind == SourceRegionPartKind.SYNCHRONIZED_BODY,
+                    tailPosition,
+                )
+            }
     }
 
     private fun renderPhysicalBlock(
@@ -249,15 +350,16 @@ class JavaLikeSourceRenderer(
         includeControl: Boolean = true,
         instructionRanges: List<IntRange> = emptyList(),
         suppressMonitor: Boolean = false,
+        tailPosition: Boolean = false,
     ) {
         if (fallback) appendIndented(out, indent, "B${block.value}:")
         val contentIndent = indent + if (fallback) 1 else 0
         context.phisByBlock[block].orEmpty().forEach { value ->
             appendIndented(out, contentIndent, expressionRenderer(bindings).renderDefinition(value, context.analysis.expression) + ";")
         }
-        context.eventsByBlock[block].orEmpty()
+        val events = context.eventsByBlock[block].orEmpty()
             .filter { event -> instructionRanges.isEmpty() || instructionRanges.any { event.instructionIndex in it } }
-            .forEach { event ->
+        events.forEachIndexed eventLoop@{ index, event ->
             when (event) {
                 is BlockEvent.Value -> appendIndented(
                     out,
@@ -265,8 +367,15 @@ class JavaLikeSourceRenderer(
                     expressionRenderer(bindings).renderDefinition(event.value, context.analysis.expression) + ";",
                 )
                 is BlockEvent.Statement -> {
-                    if (!includeControl && event.statement.isStructuralControl()) return@forEach
-                    if (suppressMonitor && event.statement is ExpressionStatement.Monitor) return@forEach
+                    if (!includeControl && event.statement.isStructuralControl()) return@eventLoop
+                    if (suppressMonitor && event.statement is ExpressionStatement.Monitor) return@eventLoop
+                    if (event.statement.isRedundantConstructorInvocation(context)) return@eventLoop
+                    if (
+                        tailPosition &&
+                        index == events.lastIndex &&
+                        event.statement is ExpressionStatement.Return &&
+                        event.statement.value == null
+                    ) return@eventLoop
                     val rendered = renderStatement(event.statement, block, context, bindings)
                     appendIndented(out, contentIndent, rendered + ";")
                 }
@@ -362,6 +471,40 @@ class JavaLikeSourceRenderer(
     private fun ExpressionStatement.isStructuralControl(): Boolean =
         this is ExpressionStatement.Branch || this is ExpressionStatement.Switch || this is ExpressionStatement.Monitor
 
+    private fun ExpressionStatement.isRedundantConstructorInvocation(context: RenderContext): Boolean {
+        val call = this as? ExpressionStatement.Call ?: return false
+        if (call.method.invocationKind != io.github.relvl.deobscura.expression.InvocationKind.SPECIAL || call.method.name != "<init>") {
+            return false
+        }
+        if (call.arguments.isNotEmpty() || call.method.descriptor != "()V") return false
+        val receiverOrigin = call.receiver
+            ?.let { context.analysis.expression.values[it]?.node as? ExpressionNode.Root }
+            ?.origin
+        if (receiverOrigin !is io.github.relvl.deobscura.analysis.ValueOrigin.This) return false
+
+        return if (call.method.ownerInternalName == context.method.ownerInternalName) {
+            context.method.hasTrivialNoArgConstructor && context.method.raw.descriptor != "()V"
+        } else {
+            true
+        }
+    }
+
+    private fun RawMethod.isTrivialConstructor(owner: RawClass): Boolean {
+        val instructions = code?.instructions?.filterNot { it is RawNopInstruction } ?: return false
+        if (instructions.size != 3) return false
+        val loadThis = instructions[0] as? RawLocalInstruction ?: return false
+        val superCall = instructions[1] as? RawInvokeInstruction ?: return false
+        val returnInstruction = instructions[2] as? RawReturnInstruction ?: return false
+        return loadThis.operation == LocalOperation.LOAD &&
+            loadThis.slot == 0 &&
+            loadThis.type == JvmComputationalType.REFERENCE &&
+            superCall.opcode.mnemonic == "invokespecial" &&
+            superCall.owner == owner.superName &&
+            superCall.name == "<init>" &&
+            superCall.descriptor == "()V" &&
+            returnInstruction.type == JvmComputationalType.VOID
+    }
+
     private fun appendIndented(out: StringBuilder, indent: Int, line: String) {
         repeat(indent) { out.append("    ") }
         out.appendLine(line)
@@ -409,7 +552,19 @@ class JavaLikeSourceRenderer(
 
     private fun sourceName(internalName: String): String = deobfuscation.classInternalName(internalName).replace('/', '.')
 
-    private class RenderContext(val analysis: MethodAnalysis) {
+    private data class RenderMethodContext(
+        val ownerInternalName: String,
+        val raw: RawMethod,
+        val hasTrivialNoArgConstructor: Boolean,
+    ) {
+        val allowsImplicitReturn: Boolean
+            get() = raw.name == "<init>" || raw.name == "<clinit>" || raw.type.returnType == JvmType.VoidType
+    }
+
+    private class RenderContext(
+        val analysis: MethodAnalysis,
+        val method: RenderMethodContext,
+    ) {
         val outgoingByBlock: Map<BasicBlockId, List<ControlFlowEdge>> = analysis.optimization.controlFlow.edges.groupBy { it.from }
         val phisByBlock: Map<BasicBlockId, List<ExpressionValue>> = analysis.expression.values.values
             .filter { it.node is ExpressionNode.Phi }

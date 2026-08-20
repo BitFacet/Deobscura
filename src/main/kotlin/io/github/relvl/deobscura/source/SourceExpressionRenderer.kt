@@ -1,9 +1,11 @@
 package io.github.relvl.deobscura.source
 
 import io.github.relvl.deobscura.analysis.ValueId
+import io.github.relvl.deobscura.analysis.ValueOrigin
 import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
 import io.github.relvl.deobscura.expression.*
 import io.github.relvl.deobscura.raw.JvmType
+import java.lang.constant.ConstantDescs
 
 /** Minimal source-facing rendering for Expression IR. Names remain deliberately technical. */
 internal class SourceExpressionRenderer(
@@ -158,9 +160,21 @@ internal class SourceExpressionRenderer(
         arguments: List<ValueId>,
         expression: ExpressionAnalysis,
     ): String {
+        val renderedArguments = arguments.joinToString { renderValue(it, expression) }
+        if (method.invocationKind == InvocationKind.SPECIAL && method.name == "<init>" && receiver != null) {
+            val receiverOrigin = (expression.values[receiver]?.node as? ExpressionNode.Root)?.origin
+            if (receiverOrigin is ValueOrigin.This) {
+                return if (method.ownerInternalName == receiverOrigin.ownerInternalName) {
+                    "this($renderedArguments)"
+                } else {
+                    "super($renderedArguments)"
+                }
+            }
+        }
+
         val target = receiver?.let { renderValue(it, expression) } ?: sourceName(method.ownerInternalName)
         val methodName = deobfuscation.methodName(method.ownerInternalName, method.name, method.descriptor)
-        return "$target.$methodName(${arguments.joinToString { renderValue(it, expression) }})"
+        return "$target.$methodName($renderedArguments)"
     }
 
     private fun renderNewArray(node: ExpressionNode.NewArray, expression: ExpressionAnalysis): String {
@@ -193,18 +207,21 @@ internal class SourceExpressionRenderer(
         is JvmType.ArrayType -> "${formatType(type.componentType)}[]"
     }
 
-    private fun formatConstant(value: Any): String = when (value) {
-        is String -> buildString {
-            append('"')
-            value.forEach { appendJavaCharacter(it, quote = '"') }
-            append('"')
+    private fun formatConstant(value: Any): String {
+        if (value == ConstantDescs.NULL) return "null"
+        return when (value) {
+            is String -> buildString {
+                append('"')
+                value.forEach { appendJavaCharacter(it, quote = '"') }
+                append('"')
+            }
+            is Char -> buildString {
+                append('\'')
+                appendJavaCharacter(value, quote = '\'')
+                append('\'')
+            }
+            else -> value.toString()
         }
-        is Char -> buildString {
-            append('\'')
-            appendJavaCharacter(value, quote = '\'')
-            append('\'')
-        }
-        else -> value.toString()
     }
 
     private fun StringBuilder.appendJavaCharacter(value: Char, quote: Char) {
