@@ -385,6 +385,14 @@ class JavaLikeSourceRenderer(
             when (event) {
                 is BlockEvent.Value -> {
                     if (event.value.id in context.analysis.sourceLocals.suppressedDefinitions || event.value.id in context.loopConditionInlineValues) return@eventLoop
+                    if (event.value.id in context.analysis.expression.materialization.discardedResultValues) {
+                        appendIndented(
+                            out,
+                            contentIndent,
+                            expressionRenderer(effectiveBindings).renderDiscardedResult(event.value, context.analysis.expression) + ";",
+                        )
+                        return@eventLoop
+                    }
                     if (event.value.id in context.hoistedValues) {
                         appendIndented(
                             out,

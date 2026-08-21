@@ -22,9 +22,24 @@ internal class SourceExpressionRenderer(
         }
     }
 
+    fun renderDiscardedResult(value: ExpressionValue, expression: ExpressionAnalysis): String =
+        renderNode(value.node, expression)
+
     fun renderValue(id: ValueId, expression: ExpressionAnalysis): String = renderValue(id, expression, PRECEDENCE_LOWEST)
 
-    fun renderValue(id: ValueId, expression: ExpressionAnalysis, expectedType: JvmType): String = if (expectedType == JvmType.BooleanType) renderBooleanValue(id, expression) else renderValue(id, expression)
+    fun renderValue(id: ValueId, expression: ExpressionAnalysis, expectedType: JvmType): String {
+        if (expectedType == JvmType.BooleanType) return renderBooleanValue(id, expression)
+        if (!expectedType.isPrimitiveValueType()) return renderValue(id, expression)
+
+        val actualType = expression.values[id]?.type
+        if (actualType == JvmValueType.of(expectedType)) return renderValue(id, expression)
+
+        // JVM invocation descriptors distinguish the exact primitive overload, while several source
+        // primitive types share the same operand-stack representation. Preserve the descriptor in
+        // Java source explicitly; this is required for byte/short/char and also prevents overload
+        // resolution from selecting a different widening overload.
+        return "(${formatType(expectedType)}) ${renderValue(id, expression, PRECEDENCE_UNARY)}"
+    }
 
     fun renderConditionalDefinition(value: ExpressionValue, condition: String, thenValue: ValueId, elseValue: ValueId, expression: ExpressionAnalysis): String =
         "var v${value.id.value} = $condition ? ${renderConditionalOperand(thenValue, expression)} : ${renderConditionalOperand(elseValue, expression)}"
@@ -387,6 +402,12 @@ internal class SourceExpressionRenderer(
     private fun formatValueType(type: JvmValueType): String = type.formatTypeName(deobfuscation::sourceClassName, nullTypeName = "Object", unknownReferenceName = "Object")
 
     private fun formatType(type: JvmType): String = type.formatTypeName(deobfuscation::sourceClassName)
+
+    private fun JvmType.isPrimitiveValueType(): Boolean = when (this) {
+        JvmType.BooleanType, JvmType.ByteType, JvmType.CharType, JvmType.ShortType, JvmType.IntType,
+        JvmType.LongType, JvmType.FloatType, JvmType.DoubleType -> true
+        JvmType.VoidType, is JvmType.ObjectType, is JvmType.ArrayType -> false
+    }
 
     private fun formatConstant(value: Any): String {
         if (value == ConstantDescs.NULL) return "null"

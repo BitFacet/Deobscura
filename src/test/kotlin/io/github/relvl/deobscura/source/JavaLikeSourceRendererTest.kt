@@ -52,6 +52,47 @@ class JavaLikeSourceRendererTest {
     }
 
     @Test
+    fun `renders unused value returning call as statement expression`() {
+        val method = RawMethod(
+            name = "run",
+            descriptor = "()V",
+            type = JvmMethodDescriptor.parse("()V"),
+            accessFlags = ACC_PUBLIC or ACC_STATIC,
+            exceptions = emptyList(),
+            code = RawCode(
+                maxStack = 1,
+                maxLocals = 0,
+                bytecodeLength = 3,
+                instructions = listOf(
+                    RawInvokeInstruction(
+                        JvmOpcode("invokestatic"),
+                        "example/Factory",
+                        "make",
+                        "()Ljava/lang/Object;",
+                        JvmMethodDescriptor.parse("()Ljava/lang/Object;"),
+                        false,
+                    ),
+                    RawStackInstruction(JvmOpcode("pop")),
+                    voidReturn(),
+                ),
+                labels = emptyList(),
+                exceptionHandlers = emptyList(),
+                lineNumbers = emptyList(),
+            ),
+        )
+        val rawClass = sampleClass(listOf(method))
+        val analysis = MethodAnalyzer().analyze(rawClass.internalName, method)
+
+        val rendered = JavaLikeSourceRenderer().renderClass(
+            rawClass,
+            mapOf(SourceMethodKey(method.name, method.descriptor) to analysis),
+        )
+
+        assertContains(rendered, "example.Factory.make();")
+        assertFalse(Regex("""var v\d+ = example\.Factory\.make\(\);""").containsMatchIn(rendered), rendered)
+    }
+
+    @Test
     fun `omits semantically empty constructor chain and trailing return`() {
         val noArg = constructor(
             descriptor = "()V",

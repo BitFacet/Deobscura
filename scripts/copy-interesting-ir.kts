@@ -7,8 +7,8 @@ import java.util.zip.ZipOutputStream
 val interestingFiles = listOf(
     "package_class/ZM4cSqt3bl.java",
     "package_class/ZM4cSqt3bl.ir",
-    "org/cef/browser/CefDropTargetListener.java",
-    "org/cef/browser/CefDropTargetListener.ir"
+    "package_class/GkJmVtjv0Y.java",
+    "package_class/GkJmVtjv0Y.ir",
 )
 val zip = interestingFiles.size > 10
 

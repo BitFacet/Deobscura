@@ -190,7 +190,7 @@ class SourceExpressionRendererTest {
     }
 
     @Test
-    fun `keeps zero and one numeric for byte method arguments`() {
+    fun `casts int carrier to byte method argument`() {
         val valueId = ValueId(1)
         val value = ExpressionValue(
             id = valueId,
@@ -213,7 +213,71 @@ class SourceExpressionRendererTest {
 
         val rendered = SourceExpressionRenderer().renderStatement(statement, expression)
 
-        assertEquals("sample.Target.put(v1)", rendered)
+        assertEquals("sample.Target.put((byte) v1)", rendered)
+    }
+
+    @Test
+    fun `casts inline integer constant to byte method argument`() {
+        val receiverId = ValueId(0)
+        val valueId = ValueId(1)
+        val receiver = ExpressionValue(
+            id = receiverId,
+            type = JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType("java/nio/ByteBuffer"))),
+            node = ExpressionNode.Root(ValueOrigin.Instruction(0)),
+        )
+        val value = ExpressionValue(
+            id = valueId,
+            type = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT),
+            node = ExpressionNode.Constant(constantDesc(-91)),
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(receiverId to receiver, valueId to value),
+            statements = emptyList(),
+            materialization = ExpressionMaterialization(inlineValues = setOf(valueId)),
+        )
+        val statement = ExpressionStatement.Call(
+            instructionIndex = 2,
+            method = MethodSymbol(
+                ownerInternalName = "java/nio/ByteBuffer",
+                name = "put",
+                descriptor = "(B)Ljava/nio/ByteBuffer;",
+                type = JvmMethodDescriptor(listOf(JvmType.ByteType), JvmType.ObjectType("java/nio/ByteBuffer")),
+                invocationKind = InvocationKind.VIRTUAL,
+            ),
+            receiver = receiverId,
+            arguments = listOf(valueId),
+        )
+
+        val rendered = SourceExpressionRenderer().renderStatement(statement, expression)
+
+        assertEquals("v0.put((byte) -91)", rendered)
+    }
+
+    @Test
+    fun `casts byte carrier to int to preserve invocation descriptor`() {
+        val valueId = ValueId(1)
+        val value = ExpressionValue(
+            id = valueId,
+            type = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.BYTE),
+            node = ExpressionNode.Root(ValueOrigin.Instruction(1)),
+        )
+        val expression = ExpressionAnalysis(values = mapOf(valueId to value), statements = emptyList())
+        val statement = ExpressionStatement.Call(
+            instructionIndex = 2,
+            method = MethodSymbol(
+                ownerInternalName = "sample/Target",
+                name = "accept",
+                descriptor = "(I)V",
+                type = JvmMethodDescriptor(listOf(JvmType.IntType), JvmType.VoidType),
+                invocationKind = InvocationKind.STATIC,
+            ),
+            receiver = null,
+            arguments = listOf(valueId),
+        )
+
+        val rendered = SourceExpressionRenderer().renderStatement(statement, expression)
+
+        assertEquals("sample.Target.accept((int) v1)", rendered)
     }
 
     @Test
