@@ -343,6 +343,100 @@ class JavaLikeSourceRendererTest {
     }
 
     @Test
+    fun `renders diagnostic fallback with explicit exception flow and boundary labels`() {
+        val tryStart = RawLabelId(0)
+        val tryEnd = RawLabelId(1)
+        val handler = RawLabelId(2)
+        val continuation = RawLabelId(3)
+        val method = RawMethod(
+            name = "fallback",
+            descriptor = "()V",
+            type = JvmMethodDescriptor.parse("()V"),
+            accessFlags = ACC_PUBLIC or ACC_STATIC,
+            exceptions = emptyList(),
+            code = RawCode(
+                maxStack = 1,
+                maxLocals = 1,
+                bytecodeLength = 7,
+                instructions = listOf(
+                    RawInvokeInstruction(
+                        JvmOpcode("invokestatic"),
+                        "example/Factory",
+                        "risk",
+                        "()V",
+                        JvmMethodDescriptor.parse("()V"),
+                        false,
+                    ),
+                    RawBranchInstruction(JvmOpcode("goto"), continuation),
+                    RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 0),
+                    RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 0),
+                    RawInvokeInstruction(
+                        JvmOpcode("invokevirtual"),
+                        "java/lang/Exception",
+                        "printStackTrace",
+                        "()V",
+                        JvmMethodDescriptor.parse("()V"),
+                        false,
+                    ),
+                    RawBranchInstruction(JvmOpcode("goto"), continuation),
+                    voidReturn(),
+                ),
+                labels = listOf(
+                    RawLabel(tryStart, 0, 0),
+                    RawLabel(tryEnd, 2, 2),
+                    RawLabel(handler, 2, 2),
+                    RawLabel(continuation, 6, 6),
+                ),
+                exceptionHandlers = listOf(RawExceptionHandler(tryStart, tryEnd, handler, "java/lang/Exception")),
+                lineNumbers = emptyList(),
+            ),
+        )
+        val rawClass = sampleClass(listOf(method))
+        val analyzed = MethodAnalyzer().analyze(rawClass.internalName, method)
+        val tryBlock = analyzed.graph.blocks.single { it.startInstructionIndex == 0 }
+        val handlerBlock = analyzed.graph.blocks.single { it.startInstructionIndex == 2 }
+        val continuationBlock = analyzed.graph.blocks.single { it.startInstructionIndex == 6 }
+        val fallbackBlocks = setOf(tryBlock.id, handlerBlock.id)
+        val analysis = analyzed.copy(
+            sourceStructure = SourceStructureAnalysis(
+                root = SourceBlock(
+                    ownedBlocks = fallbackBlocks + continuationBlock.id,
+                    nodes = listOf(
+                        SourceNode.ProjectionFallback(
+                            tryBlock.id,
+                            SourceProjectionIssueReason.UNACCOUNTED_REACHABLE_BLOCK,
+                            SourceProvenance(setOf(tryBlock.id)),
+                        ),
+                        SourceNode.ProjectionFallback(
+                            handlerBlock.id,
+                            SourceProjectionIssueReason.UNACCOUNTED_REACHABLE_BLOCK,
+                            SourceProvenance(setOf(handlerBlock.id)),
+                        ),
+                        SourceNode.BasicBlock(
+                            continuationBlock.id,
+                            SourceProvenance(setOf(continuationBlock.id)),
+                        ),
+                    ),
+                ),
+                accountedBlocks = fallbackBlocks + continuationBlock.id,
+                consumptions = emptyList(),
+                issues = listOf(SourceProjectionIssue(SourceProjectionIssueReason.UNACCOUNTED_REACHABLE_BLOCK, fallbackBlocks)),
+            ),
+        )
+
+        val rendered = JavaLikeSourceRenderer().renderClass(
+            rawClass,
+            mapOf(SourceMethodKey(method.name, method.descriptor) to analysis),
+        )
+
+        assertContains(rendered, "/* exception java.lang.Exception -> B${handlerBlock.id.value} */")
+        assertContains(rendered, "java.lang.Exception v")
+        assertContains(rendered, "= /* caught exception */;")
+        assertContains(rendered, "B${continuationBlock.id.value}:")
+        assertFalse(rendered.contains("caught.printStackTrace()"), rendered)
+    }
+
+    @Test
     fun `renders loop local assignment on phi predecessor instead of value definition`() {
         val outerLoop = RawLabelId(0)
         val innerLoop = RawLabelId(1)

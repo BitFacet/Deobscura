@@ -32,6 +32,12 @@ class StructuredControlFlowRenderer(
 
         structure.regions.forEach { region ->
             when (region) {
+                is StructuredRegion.Assert -> {
+                    append("    assert B${region.header.value} condition=(${renderCondition(region.condition, expression)})")
+                    region.message?.let { append(" message=v${it.value}") }
+                    appendLine(" continuation=B${region.continuation.value}")
+                }
+
                 is StructuredRegion.If -> {
                     val condition = renderCondition(region.condition, expression)
                     append("    if B${region.header.value} condition=($condition)")

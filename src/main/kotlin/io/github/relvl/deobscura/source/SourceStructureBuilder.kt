@@ -29,6 +29,7 @@ class SourceStructureBuilder {
         }
 
         fun sourceParts(region: StructuredRegion): List<PartSpec> = when (region) {
+            is StructuredRegion.Assert -> emptyList()
             is StructuredRegion.If -> buildList {
                 if (region.thenBlocks.isNotEmpty()) add(PartSpec(SourceRegionPartKind.THEN, region.thenBlocks))
                 if (region.elseBlocks.isNotEmpty()) add(PartSpec(SourceRegionPartKind.ELSE, region.elseBlocks))
@@ -249,6 +250,7 @@ class SourceStructureBuilder {
         is StructuredRegion.Synchronized -> 4
         is StructuredRegion.While -> 3
         is StructuredRegion.Switch -> 2
+        is StructuredRegion.Assert -> 1
         is StructuredRegion.If -> 1
     }
 

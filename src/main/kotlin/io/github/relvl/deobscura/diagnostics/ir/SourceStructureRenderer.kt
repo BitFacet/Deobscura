@@ -56,6 +56,7 @@ class SourceStructureRenderer {
     }
 
     private fun renderRegion(region: StructuredRegion): String = when (region) {
+        is StructuredRegion.Assert -> "assert B${region.header.value}"
         is StructuredRegion.If -> "if B${region.header.value}"
         is StructuredRegion.While -> "while B${region.header.value}"
         is StructuredRegion.Switch -> "switch B${region.header.value}"

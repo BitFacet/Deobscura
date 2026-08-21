@@ -125,6 +125,7 @@ internal class StructuredControlFlowDiagnosticStats {
     private var structuredMethodCount = 0
     private var conditionalBranchCount = 0L
     private var ifRegionCount = 0L
+    private var assertRegionCount = 0L
     private var whileRegionCount = 0L
     private var switchRegionCount = 0L
     private var exceptionRegionCount = 0L
@@ -172,6 +173,7 @@ internal class StructuredControlFlowDiagnosticStats {
             exceptionResidualFamilies.record(methodName, diagnostic)
         }
         val ifs = analysis.regions.count { it is StructuredRegion.If }
+        val asserts = analysis.regions.count { it is StructuredRegion.Assert }
         val whiles = analysis.regions.count { it is StructuredRegion.While }
         val switches = analysis.regions.count { it is StructuredRegion.Switch }
         val tryCatches = analysis.regions.count { it is StructuredRegion.TryCatch }
@@ -180,6 +182,7 @@ internal class StructuredControlFlowDiagnosticStats {
         val synchronizeds = analysis.regions.count { it is StructuredRegion.Synchronized }
         val exceptions = tryCatches + tryCatchFinallys + tryFinallys + synchronizeds
         ifRegionCount += ifs
+        assertRegionCount += asserts
         whileRegionCount += whiles
         switchRegionCount += switches
         structuredExceptionRegionCount += analysis.exceptionRegionCount - analysis.unstructuredExceptionRegionCount
@@ -192,15 +195,16 @@ internal class StructuredControlFlowDiagnosticStats {
             it.kind == UnstructuredControlFlowKind.SWITCH
         }
         unstructuredExceptionRegionCount += analysis.unstructuredExceptionRegionCount
-        if (ifs + whiles + switches + exceptions + analysis.booleanConditionFolds.size + analysis.shortCircuitConditionFolds.size > 0) structuredMethodCount++
+        if (ifs + asserts + whiles + switches + exceptions + analysis.booleanConditionFolds.size + analysis.shortCircuitConditionFolds.size > 0) structuredMethodCount++
     }
 
     fun log(logger: Logger) {
         logger.info(
-            "Structured control flow for {}/{} method(s): {} if region(s), {} natural while loop(s), {} switch region(s), {} try/catch region(s), {} try/catch/finally region(s), {} try/finally region(s), {} synchronized region(s) in {} method(s).",
+            "Structured control flow for {}/{} method(s): {} if region(s), {} assert region(s), {} natural while loop(s), {} switch region(s), {} try/catch region(s), {} try/catch/finally region(s), {} try/finally region(s), {} synchronized region(s) in {} method(s).",
             analyzedMethodCount,
             methodCount,
             ifRegionCount,
+            assertRegionCount,
             whileRegionCount,
             switchRegionCount,
             tryCatchRegionCount,
@@ -211,7 +215,7 @@ internal class StructuredControlFlowDiagnosticStats {
         )
         logger.info(
             "Control-flow structuring classified {}/{} conditional branch header(s); {} remain block-based. Structured {}/{} switch(es); {} remain block-based. Structured {}/{} exception region(s); {} remain block-based.",
-            ifRegionCount + whileRegionCount + booleanConditionFoldCount + shortCircuitFoldedHeaderCount,
+            ifRegionCount + assertRegionCount * 2 + whileRegionCount + booleanConditionFoldCount + shortCircuitFoldedHeaderCount,
             conditionalBranchCount,
             unstructuredConditionalCount,
             switchRegionCount,

@@ -195,6 +195,21 @@ sealed interface StructuredRegion {
     val header: BasicBlockId
     val coveredBlocks: Set<BasicBlockId>
 
+    data class Assert(
+        override val header: BasicBlockId,
+        val condition: StructuredCondition,
+        val message: ValueId?,
+        val checkHeader: BasicBlockId,
+        val failureBlocks: Set<BasicBlockId>,
+        val continuation: BasicBlockId,
+    ) : StructuredRegion {
+        override val coveredBlocks: Set<BasicBlockId> = linkedSetOf<BasicBlockId>().apply {
+            add(header)
+            add(checkHeader)
+            addAll(failureBlocks)
+        }
+    }
+
     data class If(
         override val header: BasicBlockId,
         val condition: StructuredCondition,

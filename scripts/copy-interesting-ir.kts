@@ -7,7 +7,10 @@ import java.util.zip.ZipOutputStream
 val interestingFiles = listOf(
     "package_class/ZM4cSqt3bl.java",
     "package_class/ZM4cSqt3bl.ir",
+    "org/cef/browser/CefDropTargetListener.java",
+    "org/cef/browser/CefDropTargetListener.ir"
 )
+val zip = interestingFiles.size > 10
 
 fun findProjectRoot(start: Path): Path {
     var current: Path? = start.toAbsolutePath().normalize()
@@ -37,18 +40,19 @@ interestingFiles.forEach { relativePath ->
     println("Copied $relativePath -> $target")
 }
 
-
-ZipOutputStream(Files.newOutputStream(targetZip)).use { zip ->
-    Files.list(targetDir).use { files ->
-        files
-            .filter(Files::isRegularFile)
-            .sorted()
-            .forEach { file ->
-                zip.putNextEntry(ZipEntry(file.fileName.toString()))
-                Files.copy(file, zip)
-                zip.closeEntry()
-            }
+if (zip) {
+    ZipOutputStream(Files.newOutputStream(targetZip)).use { zip ->
+        Files.list(targetDir).use { files ->
+            files
+                .filter(Files::isRegularFile)
+                .sorted()
+                .forEach { file ->
+                    zip.putNextEntry(ZipEntry(file.fileName.toString()))
+                    Files.copy(file, zip)
+                    zip.closeEntry()
+                }
+        }
     }
-}
 
-println("Created archive: $targetZip")
+    println("Created archive: $targetZip")
+}

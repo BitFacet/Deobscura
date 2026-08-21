@@ -14,6 +14,7 @@ class StructuredControlFlowAnalyzer {
     private val loopRecognizer = StructuredLoopRecognizer()
     private val switchRecognizer = StructuredSwitchRecognizer()
     private val conditionalRecognizer = StructuredConditionalRecognizer()
+    private val assertRecognizer = StructuredAssertRecognizer()
     private val exceptionRecognizer = StructuredExceptionRecognizer()
 
     fun analyze(
@@ -36,7 +37,15 @@ class StructuredControlFlowAnalyzer {
         val foldedConditions = folds.associate { it.consumerHeader to it.condition }
         val branches =
             originalBranches.asSequence().filter { (header, _) -> header !in foldedProducerHeaders }.associate { (header, branch) -> header to (foldedConditions[header]?.let { branch.copy(condition = it) } ?: branch) }
-        val loopRecognition = loopRecognizer.recognize(facts, branches)
+        val assertRecognition = assertRecognizer.recognize(
+            facts = facts,
+            branches = branches,
+            expression = expression,
+        )
+        val loopRecognition = loopRecognizer.recognize(
+            facts,
+            branches.filterKeys { it !in assertRecognition.consumedHeaders },
+        )
         val loopHeaders = loopRecognition.regions.mapTo(hashSetOf()) { it.header }
         val shortCircuitFolds = findShortCircuitConditionFolds(
             expression = expression,
@@ -44,7 +53,7 @@ class StructuredControlFlowAnalyzer {
             outgoing = outgoing,
             predecessors = predecessors,
             instructionToBlock = instructionToBlock,
-            excludedHeaders = loopHeaders,
+            excludedHeaders = loopHeaders + assertRecognition.consumedHeaders,
         )
         val shortCircuitByRoot = shortCircuitFolds.associateBy { it.rootHeader }
         val shortCircuitFoldedHeaders = shortCircuitFolds.flatMapTo(hashSetOf()) { it.foldedHeaders }
@@ -63,27 +72,28 @@ class StructuredControlFlowAnalyzer {
         val ifRecognition = conditionalRecognizer.recognize(
             facts = facts,
             branches = branches,
-            excludedHeaders = loopHeaders + shortCircuitFoldedHeaders,
+            excludedHeaders = loopHeaders + shortCircuitFoldedHeaders + assertRecognition.consumedHeaders,
             loopContexts = loopContexts.values.toList(),
             shortCircuitByRoot = shortCircuitByRoot,
         )
-
-        val regions = (loopRecognition.regions + switchRecognition.regions + ifRecognition.regions + exceptionRecognition.regions).sortedWith(
+        val regions = (loopRecognition.regions + switchRecognition.regions + ifRecognition.regions + assertRecognition.regions + exceptionRecognition.regions).sortedWith(
             compareBy<StructuredRegion> { it.header.value }.thenBy {
                 when (it) {
                     is StructuredRegion.While -> 0
-                    is StructuredRegion.TryCatch -> 1
-                    is StructuredRegion.TryCatchFinally -> 2
-                    is StructuredRegion.TryFinally -> 3
-                    is StructuredRegion.Synchronized -> 4
-                    is StructuredRegion.Switch -> 5
-                    is StructuredRegion.If -> 6
+                    is StructuredRegion.Assert -> 1
+                    is StructuredRegion.TryCatch -> 2
+                    is StructuredRegion.TryCatchFinally -> 3
+                    is StructuredRegion.TryFinally -> 4
+                    is StructuredRegion.Synchronized -> 5
+                    is StructuredRegion.Switch -> 6
+                    is StructuredRegion.If -> 7
                 }
             },
         )
         val recognizedConditionalHeaders = linkedSetOf<BasicBlockId>().apply {
             addAll(loopRecognition.regions.map { it.header })
             addAll(ifRecognition.regions.map { it.header })
+            addAll(assertRecognition.consumedHeaders)
             addAll(foldedProducerHeaders)
             addAll(shortCircuitFoldedHeaders)
         }

@@ -7,6 +7,7 @@ import io.github.relvl.deobscura.cfg.ControlFlowEdge
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.controlflow.*
 import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
+import io.github.relvl.deobscura.expression.BranchOperand
 import io.github.relvl.deobscura.expression.ComparisonOperator
 import io.github.relvl.deobscura.expression.ExpressionNode
 import io.github.relvl.deobscura.expression.ExpressionStatement
@@ -200,6 +201,14 @@ class JavaLikeSourceRenderer(
         tailPosition: Boolean,
     ) {
         when (val region = node.region) {
+            is StructuredRegion.Assert -> {
+                val inlineValues = assertionConditionValues(region.condition).toMutableSet().apply { region.message?.let { add(it) } }
+                val assertBindings = bindings.withInlineValues(inlineValues)
+                val condition = renderCondition(region.condition, context.analysis, assertBindings)
+                val message = region.message?.let { " : ${expressionRenderer(assertBindings).renderValue(it, context.analysis.expression)}" }.orEmpty()
+                appendIndented(out, indent, "assert $condition$message;")
+            }
+
             is StructuredRegion.If -> {
                 renderPhysicalBlock(region.header, context, bindings, indent, out, includeControl = false)
                 if (region.header in context.analysis.sourceLocals.consumedIfHeaders) return
@@ -350,16 +359,18 @@ class JavaLikeSourceRenderer(
         suppressMonitor: Boolean = false,
         tailPosition: Boolean = false,
     ) {
-        if (fallback) appendIndented(out, indent, "B${block.value}:")
-        val contentIndent = indent + if (fallback) 1 else 0
+        val diagnosticLabel = fallback || block in context.fallbackLabelTargets
+        if (diagnosticLabel) appendIndented(out, indent, "B${block.value}:")
+        val contentIndent = indent + if (diagnosticLabel) 1 else 0
+        val effectiveBindings = if (fallback) renderFallbackExceptionRoots(block, context, bindings, contentIndent, out) else bindings
         context.phisByBlock[block].orEmpty().forEach phiLoop@{ value ->
             if (value.id in context.analysis.sourceLocals.conditionalAssignments || value.id in context.analysis.sourceLocals.twoArmAssignments || value.id in context.analysis.sourceLocals.loopAssignments || value.id in context.familyPhiValues) return@phiLoop
             val conditional = context.analysis.sourceLocals.conditionalValues[value.id]
             val rendered = if (conditional == null) {
-                expressionRenderer(bindings).renderDefinition(value, context.analysis.expression)
+                expressionRenderer(effectiveBindings).renderDefinition(value, context.analysis.expression)
             } else {
-                val condition = renderCondition(conditional.condition, context.analysis, bindings)
-                expressionRenderer(bindings).renderConditionalDefinition(
+                val condition = renderCondition(conditional.condition, context.analysis, effectiveBindings)
+                expressionRenderer(effectiveBindings).renderConditionalDefinition(
                     value,
                     condition,
                     conditional.thenValue,
@@ -378,7 +389,7 @@ class JavaLikeSourceRenderer(
                         appendIndented(
                             out,
                             contentIndent,
-                            expressionRenderer(bindings).renderLocalDefinitionAssignment(
+                            expressionRenderer(effectiveBindings).renderLocalDefinitionAssignment(
                                 event.value,
                                 context.analysis.expression,
                             ) + ";",
@@ -391,7 +402,7 @@ class JavaLikeSourceRenderer(
                         appendIndented(
                             out,
                             contentIndent,
-                            expressionRenderer(bindings).renderLocalDeclaration(
+                            expressionRenderer(effectiveBindings).renderLocalDeclaration(
                                 target,
                                 declaration.second,
                                 context.analysis.expression,
@@ -405,7 +416,7 @@ class JavaLikeSourceRenderer(
                         appendIndented(
                             out,
                             contentIndent,
-                            expressionRenderer(bindings).renderLocalAssignment(
+                            expressionRenderer(effectiveBindings).renderLocalAssignment(
                                 assignment,
                                 event.value.id,
                                 target.type,
@@ -417,7 +428,7 @@ class JavaLikeSourceRenderer(
                     appendIndented(
                         out,
                         contentIndent,
-                        expressionRenderer(bindings).renderDefinition(event.value, context.analysis.expression) + ";",
+                        expressionRenderer(effectiveBindings).renderDefinition(event.value, context.analysis.expression) + ";",
                     )
                 }
 
@@ -426,7 +437,7 @@ class JavaLikeSourceRenderer(
                     if (suppressMonitor && event.statement is ExpressionStatement.Monitor) return@eventLoop
                     if (event.statement.isRedundantConstructorInvocation(context)) return@eventLoop
                     if (tailPosition && index == events.lastIndex && event.statement is ExpressionStatement.Return && event.statement.value == null) return@eventLoop
-                    val rendered = renderStatement(event.statement, block, context, bindings)
+                    val rendered = renderStatement(event.statement, block, context, effectiveBindings)
                     appendIndented(out, contentIndent, rendered + ";")
                 }
             }
@@ -436,7 +447,7 @@ class JavaLikeSourceRenderer(
             appendIndented(
                 out,
                 contentIndent,
-                expressionRenderer(bindings).renderMaterializedLocalAssignment(
+                expressionRenderer(effectiveBindings).renderMaterializedLocalAssignment(
                     targetId,
                     valueId,
                     target.type,
@@ -444,7 +455,36 @@ class JavaLikeSourceRenderer(
                 ) + ";",
             )
         }
-        if (fallback) renderFallbackTransfers(block, context, indent + 1, out)
+        if (fallback) {
+            renderFallbackExceptionEdges(block, context, contentIndent, out)
+            renderFallbackTransfers(block, context, contentIndent, out)
+        }
+    }
+
+    private fun renderFallbackExceptionRoots(
+        block: BasicBlockId,
+        context: RenderContext,
+        bindings: SourceValueBindings,
+        indent: Int,
+        out: StringBuilder,
+    ): SourceValueBindings {
+        var result = bindings
+        context.exceptionRootsByBlock[block].orEmpty().forEach { (value, origin) ->
+            val name = "v${value.id.value}"
+            val type = origin.catchType?.let(deobfuscation::sourceClassName) ?: "java.lang.Throwable"
+            appendIndented(out, indent, "$type $name = /* caught exception */;")
+            result = result.withExceptionParameter(origin.handlerInstructionIndex, name)
+        }
+        return result
+    }
+
+    private fun renderFallbackExceptionEdges(block: BasicBlockId, context: RenderContext, indent: Int, out: StringBuilder) {
+        context.outgoingByBlock[block].orEmpty()
+            .filter { it.kind == ControlFlowEdgeKind.EXCEPTION }
+            .forEach { edge ->
+                val type = edge.catchType?.let(deobfuscation::sourceClassName) ?: "<any>"
+                appendIndented(out, indent, "/* exception $type -> B${edge.to.value} */")
+            }
     }
 
     private fun renderStatement(statement: ExpressionStatement, block: BasicBlockId, context: RenderContext, bindings: SourceValueBindings): String {
@@ -453,16 +493,17 @@ class JavaLikeSourceRenderer(
             is ExpressionStatement.Branch -> {
                 val condition = statement.condition
                 if (condition == null) {
-                    outgoing.joinToString(" ") { "goto B${it.to.value}" }
+                    outgoing.filter { it.kind != ControlFlowEdgeKind.EXCEPTION }.joinToString(" ") { "goto B${it.to.value}" }
                 } else {
                     val taken = outgoing.firstOrNull { it.kind == ControlFlowEdgeKind.CONDITIONAL }?.to
-                    val fallthrough = outgoing.firstOrNull { it.kind == ControlFlowEdgeKind.FALLTHROUGH }?.to
+                    val untaken = outgoing.firstOrNull { it.kind == ControlFlowEdgeKind.FALLTHROUGH }?.to
+                        ?: outgoing.firstOrNull { it.kind == ControlFlowEdgeKind.JUMP }?.to
                     buildString {
                         append("if (")
                         append(expressionRenderer(bindings).renderCondition(condition, context.analysis.expression))
                         append(")")
                         taken?.let { append(" goto B${it.value}") }
-                        fallthrough?.let { append(" else goto B${it.value}") }
+                        untaken?.let { append(" else goto B${it.value}") }
                     }
                 }
             }
@@ -484,7 +525,8 @@ class JavaLikeSourceRenderer(
         val outgoing = context.outgoingByBlock[block].orEmpty()
         val terminalControl = context.eventsByBlock[block].orEmpty().lastOrNull()?.let { it as? BlockEvent.Statement }?.statement
         if (terminalControl is ExpressionStatement.Branch || terminalControl is ExpressionStatement.Switch) return
-        outgoing.filter { it.to in context.analysis.optimization.controlFlow.blocks }.forEach { edge -> appendIndented(out, indent, "goto B${edge.to.value};") }
+        outgoing.filter { it.kind != ControlFlowEdgeKind.EXCEPTION && it.to in context.analysis.optimization.controlFlow.blocks }
+            .forEach { edge -> appendIndented(out, indent, "goto B${edge.to.value};") }
     }
 
     private fun renderArmExit(exit: StructuredArmExit, indent: Int, out: StringBuilder) {
@@ -518,6 +560,15 @@ class JavaLikeSourceRenderer(
             val rendered = renderCondition(term, analysis, bindings)
             if (term is StructuredCondition.And) "($rendered)" else rendered
         }
+    }
+
+    private fun assertionConditionValues(condition: StructuredCondition): Set<ValueId> = when (condition) {
+        is StructuredCondition.Atomic -> buildSet {
+            add(condition.condition.left)
+            (condition.condition.right as? BranchOperand.Value)?.let { add(it.value) }
+        }
+        is StructuredCondition.And -> condition.terms.flatMapTo(linkedSetOf(), ::assertionConditionValues)
+        is StructuredCondition.Or -> condition.terms.flatMapTo(linkedSetOf(), ::assertionConditionValues)
     }
 
     private fun StructuredCondition.negated(): StructuredCondition = when (this) {
@@ -606,6 +657,18 @@ class JavaLikeSourceRenderer(
 
     private class RenderContext(val analysis: MethodAnalysis, val method: RenderMethodContext) {
         val outgoingByBlock: Map<BasicBlockId, List<ControlFlowEdge>> = analysis.optimization.controlFlow.edges.groupBy { it.from }
+        val fallbackBlocks: Set<BasicBlockId> = collectFallbackBlocks(analysis.sourceStructure.root)
+        val fallbackLabelTargets: Set<BasicBlockId> = fallbackBlocks.flatMapTo(linkedSetOf()) { block ->
+            outgoingByBlock[block].orEmpty().filter { it.kind != ControlFlowEdgeKind.EXCEPTION }.map { it.to }
+        }
+        val exceptionRootsByBlock: Map<BasicBlockId, List<Pair<ExpressionValue, io.github.relvl.deobscura.analysis.ValueOrigin.ExceptionHandler>>> =
+            analysis.expression.values.values.mapNotNull { value ->
+                val root = value.node as? ExpressionNode.Root ?: return@mapNotNull null
+                val origin = root.origin as? io.github.relvl.deobscura.analysis.ValueOrigin.ExceptionHandler ?: return@mapNotNull null
+                val block = analysis.graph.blocks.firstOrNull { origin.handlerInstructionIndex in it.startInstructionIndex until it.endInstructionIndexExclusive }?.id
+                    ?: return@mapNotNull null
+                block to (value to origin)
+            }.groupBy({ it.first }, { it.second })
         val phisByBlock: Map<BasicBlockId, List<ExpressionValue>> = analysis.expression.values.values.filter { it.node is ExpressionNode.Phi }.groupBy { (it.node as ExpressionNode.Phi).blockId }
         val eventsByBlock: Map<BasicBlockId, List<BlockEvent>> = buildEvents(analysis)
         val loopConditionInlineValuesByHeader: Map<BasicBlockId, Set<ValueId>> = buildLoopConditionInlineValues(analysis)
@@ -658,6 +721,20 @@ class JavaLikeSourceRenderer(
         )
 
         companion object {
+            private fun collectFallbackBlocks(root: SourceBlock): Set<BasicBlockId> = buildSet {
+                fun visit(block: SourceBlock) {
+                    block.nodes.forEach { node ->
+                        when (node) {
+                            is SourceNode.Unstructured -> add(node.block)
+                            is SourceNode.ProjectionFallback -> add(node.block)
+                            is SourceNode.Structured -> node.parts.forEach { visit(it.body) }
+                            is SourceNode.BasicBlock -> Unit
+                        }
+                    }
+                }
+                visit(root)
+            }
+
             /**
              * Values evaluated in a loop header must remain part of the repeated condition. The
              * generic materializer intentionally keeps effectful calls explicit before structuring;
