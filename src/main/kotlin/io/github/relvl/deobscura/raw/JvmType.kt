@@ -57,6 +57,11 @@ sealed interface JvmType {
     }
 }
 
+internal val JvmType.isReferenceType: Boolean
+    get() = this is JvmType.ObjectType || this is JvmType.ArrayType
+
+internal fun methodParameterDescriptor(descriptor: String): String = descriptor.substringBefore(')') + ')'
+
 data class JvmMethodDescriptor(
     val parameterTypes: List<JvmType>,
     val returnType: JvmType,
@@ -94,8 +99,7 @@ private class DescriptorCursor(private val descriptor: String) {
 
     fun peekChar(): Char? = descriptor.getOrNull(index)
 
-    fun readChar(): Char = descriptor.getOrNull(index++)
-        ?: throw IllegalArgumentException("Unexpected end of descriptor '$descriptor'.")
+    fun readChar(): Char = descriptor.getOrNull(index++) ?: throw IllegalArgumentException("Unexpected end of descriptor '$descriptor'.")
 
     fun readType(allowVoid: Boolean): JvmType {
         return when (val marker = readChar()) {
@@ -133,14 +137,14 @@ sealed interface JvmReferenceType {
 
     data class Exact(val type: JvmType) : JvmReferenceType {
         init {
-            require(type is JvmType.ObjectType || type is JvmType.ArrayType) {
+            require(type.isReferenceType) {
                 "Exact reference type requires an object or array type, got $type."
             }
         }
     }
 }
 
-fun JvmType.toReferenceType(): JvmReferenceType = when (this) {
-    is JvmType.ObjectType, is JvmType.ArrayType -> JvmReferenceType.Exact(this)
-    else -> error("$this is not a JVM reference type.")
+fun JvmType.toReferenceType(): JvmReferenceType {
+    if (!isReferenceType) error("$this is not a JVM reference type.")
+    return JvmReferenceType.Exact(this)
 }

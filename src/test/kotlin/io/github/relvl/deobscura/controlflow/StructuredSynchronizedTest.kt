@@ -466,8 +466,7 @@ class StructuredSynchronizedTest {
                 listOf(
                     exceptionHandler(3, 4, 8, "java/lang/Exception"),
                     exceptionHandler(3, 4, 9, null),
-                    exceptionHandler(4, 5, 14, null),
-                    // The nested throwing handler is itself protected by the already-proven monitor cleanup.
+                    exceptionHandler(4, 5, 14, null), // The nested throwing handler is itself protected by the already-proven monitor cleanup.
                     // A later typed entry is physically present but shadowed by the leading catch-all.
                     exceptionHandler(8, 9, 9, null),
                     exceptionHandler(8, 9, 14, "java/lang/Exception"),

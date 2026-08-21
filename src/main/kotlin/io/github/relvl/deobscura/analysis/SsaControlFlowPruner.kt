@@ -38,24 +38,15 @@ class SsaControlFlowPruner {
         var removedPhiInputCount = 0
         var conservativelyRetainedPhiCount = 0
 
-        val reachablePhiNodes = analysis.phiNodes
-            .asSequence()
-            .filter { it.blockId in reachableBlocks }
-            .map { phi ->
+        val reachablePhiNodes = analysis.phiNodes.asSequence().filter { it.blockId in reachableBlocks }.map { phi ->
                 if (!phi.isPredecessorAddressed) {
                     conservativelyRetainedPhiCount++
                     return@map phi
                 }
 
-                val survivingPredecessors = controlFlow.edges.asSequence()
-                    .filter { edge ->
-                        edge.to == phi.blockId &&
-                            edge.kind != ControlFlowEdgeKind.EXCEPTION &&
-                            edge !in eliminatedEdges &&
-                            edge.from in reachableBlocks
-                    }
-                    .map { it.from }
-                    .toSet()
+                val survivingPredecessors = controlFlow.edges.asSequence().filter { edge ->
+                        edge.to == phi.blockId && edge.kind != ControlFlowEdgeKind.EXCEPTION && edge !in eliminatedEdges && edge.from in reachableBlocks
+                    }.map { it.from }.toSet()
                 val inputs = phi.inputs.filter { it.predecessor in survivingPredecessors }
                 removedPhiInputCount += phi.inputs.size - inputs.size
                 if (inputs.isEmpty()) {
@@ -64,8 +55,7 @@ class SsaControlFlowPruner {
                     )
                 }
                 phi.copy(inputs = inputs)
-            }
-            .toList()
+            }.toList()
 
         val operationsByOutput = analysis.operations.mapNotNull { operation -> operation.output?.let { it to operation } }.toMap()
         val phisByOutput = analysis.phiNodes.associateBy { it.output }
@@ -74,10 +64,7 @@ class SsaControlFlowPruner {
         val reachableOperations = analysis.operations.filter { operation ->
             blockByInstruction[operation.instructionIndex] in reachableBlocks
         }
-        val keptOperationsByOutput = reachableOperations
-            .mapNotNull { operation -> operation.output?.let { it to operation } }
-            .toMap()
-            .toMutableMap()
+        val keptOperationsByOutput = reachableOperations.mapNotNull { operation -> operation.output?.let { it to operation } }.toMap().toMutableMap()
 
         // Exception-handler phis can still name frame-origin values produced in blocks that became
         // unreachable after normal-edge pruning. Preserve the minimal backwards value slice needed
@@ -136,8 +123,7 @@ class SsaControlFlowPruner {
             if (id !in retainedValueIds) return@forEach
             values[id] = when (definition) {
                 is SsaValueDefinition.Phi -> {
-                    val phi = keptPhiByOutput[id]
-                        ?: throw SsaInconsistencyException("Kept SSA value ${id.value} has no retained phi node.")
+                    val phi = keptPhiByOutput[id] ?: throw SsaInconsistencyException("Kept SSA value ${id.value} has no retained phi node.")
                     definition.copy(inputs = phi.inputs)
                 }
 

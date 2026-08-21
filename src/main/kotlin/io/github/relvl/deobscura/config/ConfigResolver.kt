@@ -62,9 +62,7 @@ class ConfigResolver(
             return listOf(path)
         }
 
-        val matches = expandGlob(entry)
-            .filter { Files.isRegularFile(it) && it.isJar() }
-            .sortedBy { it.toString() }
+        val matches = expandGlob(entry).filter { Files.isRegularFile(it) && it.isJar() }.sortedBy { it.toString() }
 
         if (matches.isEmpty()) {
             warnings += "Classpath glob did not match any JARs: $entry"
@@ -107,7 +105,6 @@ class ConfigResolver(
         return if (index < 0) this else substring(0, index)
     }
 
-
     private fun resolveRuntimeVersion(
         runtime: Path,
         explicitlyConfigured: Boolean,
@@ -119,11 +116,7 @@ class ConfigResolver(
 
         val releaseFile = runtime.resolve("release")
         if (Files.isRegularFile(releaseFile)) {
-            val javaVersion = Files.readAllLines(releaseFile)
-                .firstOrNull { it.startsWith("JAVA_VERSION=") }
-                ?.substringAfter('=')
-                ?.trim()
-                ?.removeSurrounding("\"")
+            val javaVersion = Files.readAllLines(releaseFile).firstOrNull { it.startsWith("JAVA_VERSION=") }?.substringAfter('=')?.trim()?.removeSurrounding("\"")
 
             if (!javaVersion.isNullOrBlank()) {
                 try {

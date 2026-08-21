@@ -585,7 +585,6 @@ class StructuredFinallyTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
-
     // Pseudocode: try { BODY } catch (IOException e) { throw WRAPPED } finally { try { CLEANUP } catch (IOException ignored) {} }
     @Test
     fun `ignores exceptional finally body covered by catch all peer range`() {
@@ -676,7 +675,6 @@ class StructuredFinallyTest {
         assertEquals(returnBlock, region.continuation)
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
-
 
     // Pseudocode: try { BODY; return } catch (Exception e) { CATCH; return } finally { CLEANUP }
     @Test
@@ -1030,7 +1028,6 @@ class StructuredFinallyTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
-
     // Pseudocode: try { CLEANUP } catch (IOException e) { CATCH; if (flag) CLEANUP; return } finally { if (flag) CLEANUP }
     @Test
     fun `recognizes mixed finally with guard elided on proven normal path`() {
@@ -1131,7 +1128,6 @@ class StructuredFinallyTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
-
     // Pseudocode: finally { try { CLOSE } catch (Throwable suppressed) { RECORD } ; AFTER }
     @Test
     fun `recognizes split finally around nested typed handler without claiming it`() {
@@ -1230,12 +1226,10 @@ class StructuredFinallyTest {
         assertEquals(listOf(1..2, 6..7), finallyRegion.normalCopyInstructionIndices)
         assertEquals(continuation, finallyRegion.continuation)
         assertTrue(result.regions.filterIsInstance<StructuredRegion.TryCatch>().any { region ->
-            normalNestedCatch in region.catches.flatMapTo(linkedSetOf()) { it.blocks } ||
-                handlerNestedCatch in region.catches.flatMapTo(linkedSetOf()) { it.blocks }
+            normalNestedCatch in region.catches.flatMapTo(linkedSetOf()) { it.blocks } || handlerNestedCatch in region.catches.flatMapTo(linkedSetOf()) { it.blocks }
         })
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
-
 
     // Pseudocode: finally { try { CLOSE } catch (IOException e) { RECORD } ; AFTER }
     // The exceptional rethrow block contains AFTER before reloading and throwing the saved exception.
@@ -1331,7 +1325,6 @@ class StructuredFinallyTest {
         assertEquals(continuation, finallyRegion.continuation)
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
-
 
     // Pseudocode: finally { BEFORE; AFTER }, with nested catch-all handlers physically emitted
     // between the copied cleanup blocks on both normal and exceptional paths.
@@ -1433,7 +1426,6 @@ class StructuredFinallyTest {
         // The two physical gap handlers remain owned by their own exception-table groups.
         assertEquals(2, result.unstructuredExceptionRegionCount)
     }
-
 
     // Same split-finally shape, but dead bytecode is physically laid out before one handler
     // island. Unreachable padding must not become part of the source-level gap proof.
@@ -1541,7 +1533,6 @@ class StructuredFinallyTest {
         // The two physical gap handlers remain owned by their own exception-table groups.
         assertEquals(2, result.unstructuredExceptionRegionCount)
     }
-
 
     // One source try/catch/finally may resume different normal flows after the same cleanup copy.
     @Test
@@ -1663,6 +1654,5 @@ class StructuredFinallyTest {
         assertEquals(null, region.continuation)
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
-
 
 }

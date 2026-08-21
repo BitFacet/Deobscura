@@ -102,9 +102,7 @@ internal object FragmentedSynchronizedRecognizer {
             }
             val lastNormalExit = normalExitIndices.maxOrNull() ?: continue
 
-            val familyWithCopies = cleanupCopiesByGroup
-                .filter { (candidate, _) -> candidate.group.envelope.start <= lastNormalExit }
-                .sortedBy { (candidate, _) -> candidate.group.envelope.start }
+            val familyWithCopies = cleanupCopiesByGroup.filter { (candidate, _) -> candidate.group.envelope.start <= lastNormalExit }.sortedBy { (candidate, _) -> candidate.group.envelope.start }
             if (familyWithCopies.isEmpty() || familyWithCopies.first().first !== topology) {
                 rejectionTrace?.add("fragmented:not-family-anchor")
                 continue
@@ -119,12 +117,9 @@ internal object FragmentedSynchronizedRecognizer {
             }
             if (handlerBlocks.isEmpty()) continue
 
-            val bodyEntry = facts.outgoing[monitorEnterBlock].orEmpty()
-                .asSequence()
-                .filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION && edge.to !in handlerBlocks }
-                .map { edge -> edge.to }
-                .distinct()
-                .singleOrNull() ?: continue
+            val bodyEntry =
+                facts.outgoing[monitorEnterBlock].orEmpty().asSequence().filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION && edge.to !in handlerBlocks }.map { edge -> edge.to }.distinct().singleOrNull()
+                    ?: continue
 
             val normalBodyBlocks = collectBodyBlocks(
                 header = bodyEntry,
@@ -169,44 +164,30 @@ internal object FragmentedSynchronizedRecognizer {
                 continue
             }
 
-            val protectedRanges = family.flatMap { candidate -> candidate.group.segments }
-                .map { segment -> StructuredProtectedRange(segment.range.start, segment.range.endExclusive) }
-                .distinct()
-                .sortedWith(
-                    compareBy<StructuredProtectedRange> { it.startInstructionIndex }
-                        .thenBy { it.endInstructionIndexExclusive },
+            val protectedRanges = family.flatMap { candidate -> candidate.group.segments }.map { segment -> StructuredProtectedRange(segment.range.start, segment.range.endExclusive) }.distinct().sortedWith(
+                    compareBy<StructuredProtectedRange> { it.startInstructionIndex }.thenBy { it.endInstructionIndexExclusive },
                 )
             if (protectedRanges.isEmpty()) continue
 
             val syntheticCleanupCompanions = allGroups.filter { candidate ->
-                candidate !in family &&
-                    handlerCopies.any { copy ->
-                        candidate.group.handlers.size == 1 &&
-                            candidate.group.handlers.single().catchType == null &&
-                            candidate.group.envelope.start == copy.handlerStart &&
-                            candidate.group.envelope.endExclusive == copy.shape.monitorExitInstructionIndex + 1 &&
-                            candidate.handlerEntries == setOf(copy.entry)
-                    }
+                candidate !in family && handlerCopies.any { copy ->
+                    candidate.group.handlers.size == 1 && candidate.group.handlers.single().catchType == null && candidate.group.envelope.start == copy.handlerStart && candidate.group.envelope.endExclusive == copy.shape.monitorExitInstructionIndex + 1 && candidate.handlerEntries == setOf(
+                        copy.entry
+                    )
+                }
             }
             if (handlerCopies.any { copy ->
                     syntheticCleanupCompanions.count { candidate ->
-                        candidate.group.envelope.start == copy.handlerStart &&
-                            candidate.group.envelope.endExclusive == copy.shape.monitorExitInstructionIndex + 1 &&
-                            candidate.handlerEntries == setOf(copy.entry)
+                        candidate.group.envelope.start == copy.handlerStart && candidate.group.envelope.endExclusive == copy.shape.monitorExitInstructionIndex + 1 && candidate.handlerEntries == setOf(copy.entry)
                     } > 1
-                }
-            ) continue
+                }) continue
             val shadowedCleanupCompanions = allGroups.filter { candidate ->
-                candidate !in family &&
-                    candidate !in syntheticCleanupCompanions &&
-                    candidate.protectedBlocks.isNotEmpty() &&
-                    candidate.protectedBlocks.all { block -> block in bodyBlocks } &&
-                    startsWithSynchronizedCleanup(
-                        candidate = candidate,
-                        synchronizedHandlerBlocks = handlerBlocks,
-                        graph = graph,
-                        facts = facts,
-                    )
+                candidate !in family && candidate !in syntheticCleanupCompanions && candidate.protectedBlocks.isNotEmpty() && candidate.protectedBlocks.all { block -> block in bodyBlocks } && startsWithSynchronizedCleanup(
+                    candidate = candidate,
+                    synchronizedHandlerBlocks = handlerBlocks,
+                    graph = graph,
+                    facts = facts,
+                )
             }
             val syntheticCleanupRanges = (syntheticCleanupCompanions + shadowedCleanupCompanions).flatMap { companion ->
                 companion.group.segments.map { segment ->
@@ -243,7 +224,6 @@ internal object FragmentedSynchronizedRecognizer {
         }
         return null
     }
-
 
     /**
      * A physical range already owned by the synchronized body may still carry legacy exception-table
@@ -334,10 +314,7 @@ internal object FragmentedSynchronizedRecognizer {
         for (handler in candidate.group.handlers) {
             val handlerIndex = handlerInstructionIndex(handler, graph, facts)
             val entry = handlerIndex?.let { index -> facts.instructionToBlock.getOrNull(index) }
-            if (entry != null &&
-                entry !in synchronizedHandlerBlocks &&
-                owningMonitorEnter(instructions, monitorSlot, entry, dominators, facts) == monitorEnterInstructionIndex
-            ) {
+            if (entry != null && entry !in synchronizedHandlerBlocks && owningMonitorEnter(instructions, monitorSlot, entry, dominators, facts) == monitorEnterInstructionIndex) {
                 result += entry
             }
             if (handler.catchType == null) break
@@ -429,13 +406,9 @@ internal object FragmentedSynchronizedRecognizer {
         val entry = graph.entryBlock?.takeIf { it in facts.blocks } ?: return null
         val edges = buildList {
             addAll(facts.normalEdges)
-            graph.edges.asSequence()
-                .filter { edge ->
-                    edge.kind == ControlFlowEdgeKind.EXCEPTION &&
-                        edge.from in facts.blocks &&
-                        edge.to in facts.blocks
-                }
-                .forEach(::add)
+            graph.edges.asSequence().filter { edge ->
+                    edge.kind == ControlFlowEdgeKind.EXCEPTION && edge.from in facts.blocks && edge.to in facts.blocks
+                }.forEach(::add)
         }
         val predecessors = edges.groupBy { it.to }.mapValues { (_, incoming) ->
             incoming.map { it.from }.distinct()
@@ -449,15 +422,13 @@ internal object FragmentedSynchronizedRecognizer {
         block: BasicBlockId,
         dominators: Map<BasicBlockId, Set<BasicBlockId>>,
         facts: ControlFlowFacts,
-    ): Int? = instructions.indices.asSequence()
-        .filter { index ->
+    ): Int? = instructions.indices.asSequence().filter { index ->
             val monitor = instructions[index] as? RawMonitorInstruction ?: return@filter false
             if (monitor.opcode.mnemonic != "monitorenter") return@filter false
             if (monitorSlotBeforeEnter(instructions, index) != monitorSlot) return@filter false
             val enterBlock = facts.instructionToBlock.getOrNull(index) ?: return@filter false
             enterBlock in dominators[block].orEmpty()
-        }
-        .maxOrNull()
+        }.maxOrNull()
 
     private fun findNormalMonitorExits(
         instructions: List<RawInstruction>,
@@ -466,17 +437,14 @@ internal object FragmentedSynchronizedRecognizer {
         handlerMonitorExitInstructionIndices: Set<Int>,
         dominators: Map<BasicBlockId, Set<BasicBlockId>>,
         facts: ControlFlowFacts,
-    ): List<Int> = instructions.indices.asSequence()
-        .filter { index -> index > monitorEnterInstructionIndex && index !in handlerMonitorExitInstructionIndices }
-        .filter { index ->
+    ): List<Int> = instructions.indices.asSequence().filter { index -> index > monitorEnterInstructionIndex && index !in handlerMonitorExitInstructionIndices }.filter { index ->
             val monitor = instructions[index] as? RawMonitorInstruction ?: return@filter false
             if (monitor.opcode.mnemonic != "monitorexit") return@filter false
             val load = instructions.getOrNull(index - 1) as? RawLocalInstruction ?: return@filter false
             if (load.operation != LocalOperation.LOAD || load.slot != monitorSlot) return@filter false
             val block = facts.instructionToBlock.getOrNull(index) ?: return@filter false
             owningMonitorEnter(instructions, monitorSlot, block, dominators, facts) == monitorEnterInstructionIndex
-        }
-        .toList()
+        }.toList()
 
     private fun collectBodyBlocks(
         header: BasicBlockId,
@@ -503,10 +471,7 @@ internal object FragmentedSynchronizedRecognizer {
             result += block
             if (block in normalExitBlocks) continue
 
-            facts.outgoing[block].orEmpty()
-                .asSequence()
-                .filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION && edge.to !in handlerBlocks }
-                .mapTo(pending) { edge -> edge.to }
+            facts.outgoing[block].orEmpty().asSequence().filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION && edge.to !in handlerBlocks }.mapTo(pending) { edge -> edge.to }
         }
         return result
     }
@@ -515,9 +480,7 @@ internal object FragmentedSynchronizedRecognizer {
         handler: RawExceptionHandler,
         graph: ControlFlowGraph,
         facts: ControlFlowFacts,
-    ): Int? = graph.code.labels.firstOrNull { label -> label.id == handler.handler }
-        ?.instructionIndex
-        ?.takeIf { index -> facts.instructionToBlock.getOrNull(index) != null }
+    ): Int? = graph.code.labels.firstOrNull { label -> label.id == handler.handler }?.instructionIndex?.takeIf { index -> facts.instructionToBlock.getOrNull(index) != null }
 
     private data class MonitorCleanupCopy(
         val entry: BasicBlockId,

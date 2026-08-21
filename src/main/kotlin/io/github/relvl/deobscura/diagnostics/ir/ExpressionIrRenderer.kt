@@ -4,8 +4,8 @@ import io.github.relvl.deobscura.analysis.*
 import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.expression.*
-import io.github.relvl.deobscura.raw.JvmReferenceType
 import io.github.relvl.deobscura.raw.JvmType
+import io.github.relvl.deobscura.raw.formatTypeName
 
 /** Source-like diagnostic rendering of Expression IR while control flow is still block-based. */
 class ExpressionIrRenderer {
@@ -13,21 +13,16 @@ class ExpressionIrRenderer {
         val expression = analysis.expression
         val finalFlow = analysis.optimization.controlFlow
         val instructionToBlock = instructionToBlock(analysis)
-        val phisByBlock = expression.values.values
-            .filter { it.node is ExpressionNode.Phi }
-            .groupBy { (it.node as ExpressionNode.Phi).blockId }
+        val phisByBlock = expression.values.values.filter { it.node is ExpressionNode.Phi }.groupBy { (it.node as ExpressionNode.Phi).blockId }
         val eventsByBlock = buildMap<BasicBlockId?, MutableList<RenderEvent>> {
-            expression.values.values
-                .filter { it.instructionIndices.isNotEmpty() && it.id !in expression.materialization.inlineValues }
-                .forEach { value ->
-                    // A folded constructor is source-level materialized at invokespecial <init>,
+            expression.values.values.filter { it.instructionIndices.isNotEmpty() && it.id !in expression.materialization.inlineValues }
+                .forEach { value -> // A folded constructor is source-level materialized at invokespecial <init>,
                     // after its argument values have been evaluated.
                     val index = value.instructionIndices.last()
                     getOrPut(instructionToBlock[index]) { mutableListOf() } += RenderEvent.Value(index, value)
                 }
             expression.statements.forEach { statement ->
-                getOrPut(instructionToBlock[statement.instructionIndex]) { mutableListOf() } +=
-                    RenderEvent.Statement(statement.instructionIndex, statement)
+                getOrPut(instructionToBlock[statement.instructionIndex]) { mutableListOf() } += RenderEvent.Statement(statement.instructionIndex, statement)
             }
         }
         val outgoingByBlock = finalFlow.edges.groupBy { it.from }
@@ -37,9 +32,7 @@ class ExpressionIrRenderer {
             phisByBlock[block].orEmpty().sortedBy { it.id.value }.forEach { value ->
                 appendLine("      ${renderDefinition(value, expression)}")
             }
-            eventsByBlock[block].orEmpty()
-                .sortedWith(compareBy<RenderEvent> { it.instructionIndex }.thenBy { it.order })
-                .forEach { event ->
+            eventsByBlock[block].orEmpty().sortedWith(compareBy<RenderEvent> { it.instructionIndex }.thenBy { it.order }).forEach { event ->
                     val rendered = when (event) {
                         is RenderEvent.Value -> if (event.value.id in expression.materialization.discardedResultValues) {
                             renderNode(event.value.node, expression)
@@ -68,8 +61,7 @@ class ExpressionIrRenderer {
         } else {
             renderNode(node, expression)
         }
-        return "v${value.id.value}:$renderedType = $renderedNode" +
-            value.instructionIndices.takeIf { it.size > 1 }?.joinToString(prefix = "  // @", separator = ",@") { it.toString() }.orEmpty()
+        return "v${value.id.value}:$renderedType = $renderedNode" + value.instructionIndices.takeIf { it.size > 1 }?.joinToString(prefix = "  // @", separator = ",@") { it.toString() }.orEmpty()
     }
 
     private fun renderBooleanPhi(node: ExpressionNode.Phi, output: ValueId, expression: ExpressionAnalysis): String =
@@ -108,8 +100,7 @@ class ExpressionIrRenderer {
         }
 
         is ExpressionNode.Conversion -> renderInlineNode(node, expression, precedence(node))
-        is ExpressionNode.FieldRead -> node.receiver?.let { "${ref(it, expression)}.${node.field.name}" }
-            ?: "${sourceName(node.field.ownerInternalName)}.${node.field.name}"
+        is ExpressionNode.FieldRead -> node.receiver?.let { "${ref(it, expression)}.${node.field.name}" } ?: "${sourceName(node.field.ownerInternalName)}.${node.field.name}"
 
         is ExpressionNode.ArrayRead -> "${ref(node.array, expression)}[${ref(node.index, expression)}]"
         is ExpressionNode.ArrayLength -> "${ref(node.array, expression)}.length"
@@ -129,15 +120,13 @@ class ExpressionIrRenderer {
         expression: ExpressionAnalysis,
     ): String = when (statement) {
         is ExpressionStatement.FieldWrite -> {
-            val target = statement.receiver?.let { "${ref(it, expression)}.${statement.field.name}" }
-                ?: "${sourceName(statement.field.ownerInternalName)}.${statement.field.name}"
+            val target = statement.receiver?.let { "${ref(it, expression)}.${statement.field.name}" } ?: "${sourceName(statement.field.ownerInternalName)}.${statement.field.name}"
             "$target = ${ref(statement.value, expression)}"
         }
 
         is ExpressionStatement.ArrayWrite -> "${ref(statement.array, expression)}[${ref(statement.index, expression)}] = ${ref(statement.value, expression)}"
         is ExpressionStatement.Call -> renderCall(statement.method, statement.receiver, statement.arguments, expression)
-        is ExpressionStatement.DynamicCall ->
-            "invokedynamic ${statement.callSite.name}(${statement.arguments.joinToString { ref(it, expression) }})"
+        is ExpressionStatement.DynamicCall -> "invokedynamic ${statement.callSite.name}(${statement.arguments.joinToString { ref(it, expression) }})"
 
         is ExpressionStatement.Return -> statement.value?.let { "return ${ref(it, expression)}" } ?: "return"
         is ExpressionStatement.Throw -> "throw ${ref(statement.value, expression)}"
@@ -168,8 +157,7 @@ class ExpressionIrRenderer {
         outgoing: List<io.github.relvl.deobscura.cfg.ControlFlowEdge>,
         expression: ExpressionAnalysis,
     ): String {
-        val cases = outgoing.filter { it.kind == ControlFlowEdgeKind.SWITCH }
-            .joinToString { edge -> edge.switchValue?.let { "$it:B${edge.to.value}" } ?: "default:B${edge.to.value}" }
+        val cases = outgoing.filter { it.kind == ControlFlowEdgeKind.SWITCH }.joinToString { edge -> edge.switchValue?.let { "$it:B${edge.to.value}" } ?: "default:B${edge.to.value}" }
         return "switch (${ref(selector, expression)}) [$cases]"
     }
 
@@ -180,8 +168,7 @@ class ExpressionIrRenderer {
     ): String {
         val effective = if (negate) condition.copy(operator = condition.operator.negated()) else condition
         val left = expression.values[effective.left]
-        val isBoolean = effective.left in expression.materialization.booleanValues ||
-            left?.type == JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.BOOLEAN)
+        val isBoolean = effective.left in expression.materialization.booleanValues || left?.type?.isBoolean == true
         if (isBoolean && effective.right == BranchOperand.Zero) {
             return when (effective.operator) {
                 ComparisonOperator.EQ -> "!${parenthesizeBoolean(effective.left, expression)}"
@@ -249,19 +236,13 @@ class ExpressionIrRenderer {
         is ValueOrigin.Instruction -> "instruction@${origin.index}"
     }
 
-    private fun formatPhiLocation(location: SsaPhiLocation): String = when (location) {
-        is SsaPhiLocation.Local -> "local[${location.slot}]"
-        is SsaPhiLocation.Stack -> "stack[${location.index}]"
-    }
-
     private fun formatConstant(value: Any): String = when (value) {
         is String -> "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r") + "\""
         is Char -> "'$value'"
         else -> value.toString()
     }
 
-    private fun ref(id: ValueId, expression: ExpressionAnalysis): String =
-        renderValue(id, expression, PRECEDENCE_LOWEST)
+    private fun ref(id: ValueId, expression: ExpressionAnalysis): String = renderValue(id, expression, PRECEDENCE_LOWEST)
 
     private fun renderValue(id: ValueId, expression: ExpressionAnalysis, parentPrecedence: Int): String {
         val value = expression.values[id] ?: return "v${id.value}"
@@ -316,29 +297,9 @@ class ExpressionIrRenderer {
 
     private fun sourceName(internalName: String): String = internalName.removePrefix("class/").replace('/', '.')
 
-    private fun formatValueType(type: JvmValueType): String = when (type) {
-        is JvmValueType.Reference -> when (val reference = type.referenceType) {
-            JvmReferenceType.Null -> "null"
-            JvmReferenceType.Unknown -> "reference?"
-            is JvmReferenceType.Exact -> formatJvmType(reference.type)
-        }
+    private fun formatValueType(type: JvmValueType): String = type.formatTypeName(::sourceName, nullTypeName = "null", unknownReferenceName = "reference?")
 
-        is JvmValueType.Computational -> type.type.name.lowercase()
-    }
-
-    private fun formatJvmType(type: JvmType): String = when (type) {
-        JvmType.BooleanType -> "boolean"
-        JvmType.ByteType -> "byte"
-        JvmType.CharType -> "char"
-        JvmType.ShortType -> "short"
-        JvmType.IntType -> "int"
-        JvmType.LongType -> "long"
-        JvmType.FloatType -> "float"
-        JvmType.DoubleType -> "double"
-        JvmType.VoidType -> "void"
-        is JvmType.ObjectType -> sourceName(type.internalName)
-        is JvmType.ArrayType -> "${formatJvmType(type.componentType)}[]"
-    }
+    private fun formatJvmType(type: JvmType): String = type.formatTypeName(::sourceName)
 
     private fun outgoingTargets(outgoing: List<io.github.relvl.deobscura.cfg.ControlFlowEdge>): String =
         outgoing.filter { it.kind != ControlFlowEdgeKind.EXCEPTION }.joinToString(prefix = "-> [", postfix = "]") { "B${it.to.value}" }

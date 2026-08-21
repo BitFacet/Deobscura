@@ -10,9 +10,7 @@ class StructuredControlFlowRenderer(
     private val expressionRenderer: ExpressionIrRenderer = ExpressionIrRenderer(),
 ) {
     fun render(structure: StructuredControlFlowAnalysis, expression: ExpressionAnalysis): String = buildString {
-        if (structure.regions.isEmpty() && structure.booleanConditionFolds.isEmpty() &&
-            structure.shortCircuitConditionFolds.isEmpty() && structure.unstructured.isEmpty()
-        ) {
+        if (structure.regions.isEmpty() && structure.booleanConditionFolds.isEmpty() && structure.shortCircuitConditionFolds.isEmpty() && structure.unstructured.isEmpty()) {
             appendLine("    <no recognized regions>")
             return@buildString
         }
@@ -252,11 +250,8 @@ class StructuredControlFlowRenderer(
             StructuredRegionTransferKind.NORMAL_SWITCH_COMPLETION -> "$from->${requireNotNull(target)}:normal"
             StructuredRegionTransferKind.BREAK_LOOP -> "$from->${requireNotNull(target)}:break-loop"
             StructuredRegionTransferKind.CONTINUE_LOOP -> "$from->${requireNotNull(target)}:continue-loop"
-            StructuredRegionTransferKind.RETURN_OR_THROW ->
-                if (target == null) "$from:terminates" else "$from->$target:terminates"
+            StructuredRegionTransferKind.RETURN_OR_THROW -> if (target == null) "$from:terminates" else "$from->$target:terminates"
         }
     }
 
-    private fun formatBlocks(blocks: Set<io.github.relvl.deobscura.cfg.BasicBlockId>): String =
-        blocks.sortedBy { it.value }.joinToString(prefix = "[", postfix = "]") { "B${it.value}" }
 }

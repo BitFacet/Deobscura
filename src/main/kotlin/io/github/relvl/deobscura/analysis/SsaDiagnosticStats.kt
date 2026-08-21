@@ -153,8 +153,7 @@ internal class SsaDiagnosticStats {
         if (nonExceptionSinglePredecessorPhiDetails.size >= MAX_PHI_PLACEMENT_DETAILS) return
         val incoming = incomingEdges.joinToString(",") { "${it.from.value}:${it.kind}" }.ifEmpty { "none" }
         val locations = phiNodes.joinToString(",") { it.location.toDiagnosticString() }
-        nonExceptionSinglePredecessorPhiDetails +=
-            "$methodName block=$blockId, predecessors=$predecessorCount, incoming=$incoming, phi=${phiNodes.size} [$locations]"
+        nonExceptionSinglePredecessorPhiDetails += "$methodName block=$blockId, predecessors=$predecessorCount, incoming=$incoming, phi=${phiNodes.size} [$locations]"
     }
 
     fun log(logger: Logger) {
@@ -236,11 +235,7 @@ internal class SsaDiagnosticStats {
             constantPhiCount,
             newlyExposedConstantCount,
         )
-        if (
-            retainedExceptionalProvenanceOperationCount > 0 ||
-            retainedExceptionalProvenancePhiCount > 0 ||
-            conservativelyRetainedPhiCount > 0
-        ) {
+        if (retainedExceptionalProvenanceOperationCount > 0 || retainedExceptionalProvenancePhiCount > 0 || conservativelyRetainedPhiCount > 0) {
             logger.debug(
                 "SSA CFG pruning retained {} unreachable operation(s), {} unreachable phi node(s), and left {} exception-related phi node(s) conservative.",
                 retainedExceptionalProvenanceOperationCount,
@@ -260,8 +255,7 @@ internal class SsaDiagnosticStats {
     }
 }
 
-private fun SsaPhiLocation.toDiagnosticString(): String =
-    when (this) {
-        is SsaPhiLocation.Local -> "local[$slot]"
-        is SsaPhiLocation.Stack -> "stack[$index]"
-    }
+private fun SsaPhiLocation.toDiagnosticString(): String = when (this) {
+    is SsaPhiLocation.Local -> "local[$slot]"
+    is SsaPhiLocation.Stack -> "stack[$index]"
+}

@@ -47,8 +47,7 @@ class RuntimeClassSource(
 
     private fun findClassUncached(internalName: String): RuntimeClass? {
         val relativeClassPath = "$internalName.class"
-        val packageName = internalName.substringBeforeLast('/', missingDelimiterValue = "")
-            .replace('/', '.')
+        val packageName = internalName.substringBeforeLast('/', missingDelimiterValue = "").replace('/', '.')
 
         if (packageName.isNotEmpty()) {
             val packageDirectory = packagesRoot.resolve(packageName)

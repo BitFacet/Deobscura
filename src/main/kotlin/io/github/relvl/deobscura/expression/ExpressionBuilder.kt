@@ -26,14 +26,12 @@ class ExpressionBuilder(
                 )
 
                 is SsaValueDefinition.Instruction -> {
-                    val operation = operationsByOutput[definition.id]
-                        ?: throw ExpressionIrInconsistencyException(
-                            "SSA value v${definition.id.value} refers to instruction ${definition.instructionIndex} without a producing operation.",
-                        )
+                    val operation = operationsByOutput[definition.id] ?: throw ExpressionIrInconsistencyException(
+                        "SSA value v${definition.id.value} refers to instruction ${definition.instructionIndex} without a producing operation.",
+                    )
                     if (operation.instructionIndex != definition.instructionIndex) {
                         throw ExpressionIrInconsistencyException(
-                            "SSA value v${definition.id.value} definition points to instruction ${definition.instructionIndex}, " +
-                                "but its producing operation is ${operation.instructionIndex}.",
+                            "SSA value v${definition.id.value} definition points to instruction ${definition.instructionIndex}, " + "but its producing operation is ${operation.instructionIndex}.",
                         )
                     }
                     ExpressionValue(
@@ -48,16 +46,11 @@ class ExpressionBuilder(
         }
 
         val consumedConstructors = mutableSetOf<Int>()
-        ssa.operations.asSequence()
-            .filter { it.output == null }
-            .forEach { operation ->
+        ssa.operations.asSequence().filter { it.output == null }.forEach { operation ->
                 if (attachConstructor(operation, values)) consumedConstructors += operation.instructionIndex
             }
 
-        val statements = ssa.operations.asSequence()
-            .filter { it.output == null && it.instructionIndex !in consumedConstructors }
-            .map(::liftStatement)
-            .toList()
+        val statements = ssa.operations.asSequence().filter { it.output == null && it.instructionIndex !in consumedConstructors }.map(::liftStatement).toList()
 
         val initial = ExpressionAnalysis(values, statements)
         return initial.copy(materialization = materializer.materialize(ssa, initial))
@@ -169,8 +162,7 @@ class ExpressionBuilder(
                 ExpressionStatement.Call(operation.instructionIndex, instruction.toSymbol(), receiver, arguments)
             }
 
-            is RawInvokeDynamicInstruction ->
-                ExpressionStatement.DynamicCall(operation.instructionIndex, instruction.toCallSite(), inputs)
+            is RawInvokeDynamicInstruction -> ExpressionStatement.DynamicCall(operation.instructionIndex, instruction.toCallSite(), inputs)
 
             is RawReturnInstruction -> ExpressionStatement.Return(operation.instructionIndex, inputs.singleOrNull())
             is RawThrowInstruction -> requireInputs(operation, 1) {
@@ -261,10 +253,9 @@ class ExpressionBuilder(
     ): Pair<ValueId?, List<ValueId>> = if (instruction.opcode.mnemonic == "invokestatic") {
         null to operation.inputs
     } else {
-        val receiver = operation.inputs.firstOrNull()
-            ?: throw ExpressionIrInconsistencyException(
-                "${instruction.opcode.mnemonic} ${instruction.owner}.${instruction.name} at ${operation.instructionIndex} has no receiver.",
-            )
+        val receiver = operation.inputs.firstOrNull() ?: throw ExpressionIrInconsistencyException(
+            "${instruction.opcode.mnemonic} ${instruction.owner}.${instruction.name} at ${operation.instructionIndex} has no receiver.",
+        )
         receiver to operation.inputs.drop(1)
     }
 
@@ -292,11 +283,9 @@ class ExpressionBuilder(
         bootstrapArguments = bootstrapArguments,
     )
 
-    private fun rawValue(operation: ValueOperation) =
-        ExpressionNode.Raw(operation.instruction.opcode.mnemonic, operation.inputs)
+    private fun rawValue(operation: ValueOperation) = ExpressionNode.Raw(operation.instruction.opcode.mnemonic, operation.inputs)
 
-    private fun rawStatement(operation: ValueOperation) =
-        ExpressionStatement.Raw(operation.instructionIndex, operation.instruction.opcode.mnemonic, operation.inputs)
+    private fun rawStatement(operation: ValueOperation) = ExpressionStatement.Raw(operation.instructionIndex, operation.instruction.opcode.mnemonic, operation.inputs)
 
     private inline fun <T> requireInputs(operation: ValueOperation, expected: Int, block: () -> T): T {
         if (operation.inputs.size != expected) throw inputCountError(operation, expected)

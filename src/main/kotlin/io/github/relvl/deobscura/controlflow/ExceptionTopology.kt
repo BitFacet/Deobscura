@@ -34,8 +34,7 @@ internal data class FinallyFamilyTopology(
 )
 
 internal enum class FinallyFamilyTopologyFailure {
-    EMPTY_CATCH_ALL_FAMILY,
-    NOT_FAMILY_ANCHOR,
+    EMPTY_CATCH_ALL_FAMILY, NOT_FAMILY_ANCHOR,
 }
 
 internal data class FinallyFamilyTopologyBuild(
@@ -80,9 +79,7 @@ internal fun buildFinallyFamilyTopology(
         extendExceptionProtectedScopeWithTerminalTransfers(candidate.protectedBlocks, facts)
     } - excludedBlocks - setOfNotNull(continuation)
 
-    val protectedRanges = groups.flatMap { it.group.segments }
-        .map { StructuredProtectedRange(it.range.start, it.range.endExclusive) }
-        .distinct()
+    val protectedRanges = groups.flatMap { it.group.segments }.map { StructuredProtectedRange(it.range.start, it.range.endExclusive) }.distinct()
         .sortedWith(compareBy<StructuredProtectedRange> { it.startInstructionIndex }.thenBy { it.endInstructionIndexExclusive })
 
     return FinallyFamilyTopologyBuild(
@@ -98,8 +95,7 @@ internal fun buildFinallyFamilyTopology(
 
 /** Half-open instruction interval used while grouping raw exception-table entries. */
 internal data class ProtectedRange(
-    val start: Int,
-    val endExclusive: Int
+    val start: Int, val endExclusive: Int
 )
 
 internal data class ExceptionTableSegment(
@@ -158,13 +154,10 @@ internal fun <T> buildExceptionScopeNesting(scopes: List<T>, blocksOf: (T) -> Se
     val parentByScope = linkedMapOf<T, T>()
     for (scope in scopes) {
         val scopeBlocks = blocks.getValue(scope)
-        val parent = scopes.asSequence()
-            .filter { candidate -> candidate != scope }
-            .filter { candidate ->
+        val parent = scopes.asSequence().filter { candidate -> candidate != scope }.filter { candidate ->
                 val candidateBlocks = blocks.getValue(candidate)
                 candidateBlocks.size > scopeBlocks.size && candidateBlocks.containsAll(scopeBlocks)
-            }
-            .minWithOrNull(compareBy<T> { candidate -> blocks.getValue(candidate).size }.thenBy { candidate -> scopes.indexOf(candidate) })
+            }.minWithOrNull(compareBy<T> { candidate -> blocks.getValue(candidate).size }.thenBy { candidate -> scopes.indexOf(candidate) })
         if (parent != null) parentByScope[scope] = parent
     }
 
@@ -180,7 +173,6 @@ internal fun <T> buildExceptionScopeNesting(scopes: List<T>, blocksOf: (T) -> Se
     )
 }
 
-
 /**
  * Source-level topology of one typed try/catch scope before CFG-body proof. The descriptor is
  * representation-neutral: ordinary exception-table groups and scopes nested under a legacy
@@ -194,10 +186,7 @@ internal data class TypedCatchScopeTopology(
 )
 
 internal enum class TypedCatchTopologyFailure {
-    INVALID_HANDLER_ENTRY,
-    EMPTY_PROTECTED_SCOPE,
-    INVALID_PROTECTED_HEADER,
-    CROSSING_SCOPES,
+    INVALID_HANDLER_ENTRY, EMPTY_PROTECTED_SCOPE, INVALID_PROTECTED_HEADER, CROSSING_SCOPES,
 }
 
 internal data class TypedCatchScopeTopologyForest(
@@ -207,8 +196,7 @@ internal data class TypedCatchScopeTopologyForest(
     val roots: List<TypedCatchScopeTopology>
         get() = scopes.filter { scope -> nesting.parentByScope[scope] == null }
 
-    fun childrenOf(scope: TypedCatchScopeTopology): List<TypedCatchScopeTopology> =
-        nesting.childrenByScope[scope].orEmpty()
+    fun childrenOf(scope: TypedCatchScopeTopology): List<TypedCatchScopeTopology> = nesting.childrenByScope[scope].orEmpty()
 
     fun depthFirstScopes(): List<TypedCatchScopeTopology> = buildList {
         fun visit(scope: TypedCatchScopeTopology) {
@@ -237,10 +225,7 @@ private data class TypedCatchPhysicalScopeKey(
  * finally copies), but physical-range grouping itself is independent from finally recognition.
  */
 internal fun buildTypedCatchScopeTopologies(
-    groups: List<ExceptionGroupTopology>,
-    labelPositions: Map<RawLabelId, Int>,
-    facts: ControlFlowFacts,
-    excludedBlocks: Set<BasicBlockId> = emptySet()
+    groups: List<ExceptionGroupTopology>, labelPositions: Map<RawLabelId, Int>, facts: ControlFlowFacts, excludedBlocks: Set<BasicBlockId> = emptySet()
 ): TypedCatchTopologyBuild {
     if (groups.isEmpty()) return TypedCatchTopologyBuild(
         topology = TypedCatchScopeTopologyForest(
@@ -254,8 +239,7 @@ internal fun buildTypedCatchScopeTopologies(
     for (candidate in groups) {
         for (handler in candidate.group.handlers) {
             if (handler.catchType == null) continue
-            val entry = facts.instructionToBlock.getOrNull(exceptionLabelPosition(labelPositions, handler.handler))
-                ?: return TypedCatchTopologyBuild(failure = TypedCatchTopologyFailure.INVALID_HANDLER_ENTRY)
+            val entry = facts.instructionToBlock.getOrNull(exceptionLabelPosition(labelPositions, handler.handler)) ?: return TypedCatchTopologyBuild(failure = TypedCatchTopologyFailure.INVALID_HANDLER_ENTRY)
             groupsByEntry.getOrPut(entry) { mutableListOf() } += candidate
             handlersByEntry.getOrPut(entry) { mutableListOf() } += handler
         }
@@ -269,9 +253,7 @@ internal fun buildTypedCatchScopeTopologies(
 
     val entriesByScope = groupsByEntry.entries.groupBy { (_, entryGroups) ->
         TypedCatchPhysicalScopeKey(
-            entryGroups.map { candidate -> candidate.group.envelope }
-                .distinct()
-                .sortedWith(compareBy<ProtectedRange> { it.start }.thenBy { it.endExclusive }),
+            entryGroups.map { candidate -> candidate.group.envelope }.distinct().sortedWith(compareBy<ProtectedRange> { it.start }.thenBy { it.endExclusive }),
         )
     }
 
@@ -286,14 +268,11 @@ internal fun buildTypedCatchScopeTopologies(
         }
 
         val start = scopeGroups.first().group.envelope.start
-        val header = facts.instructionToBlock.getOrNull(start)
-            ?: return TypedCatchTopologyBuild(failure = TypedCatchTopologyFailure.INVALID_PROTECTED_HEADER)
+        val header = facts.instructionToBlock.getOrNull(start) ?: return TypedCatchTopologyBuild(failure = TypedCatchTopologyFailure.INVALID_PROTECTED_HEADER)
         if (header !in protectedBlocks) {
             return TypedCatchTopologyBuild(failure = TypedCatchTopologyFailure.INVALID_PROTECTED_HEADER)
         }
-        val protectedRanges = scopeGroups.flatMap { it.group.segments }
-            .map { StructuredProtectedRange(it.range.start, it.range.endExclusive) }
-            .distinct()
+        val protectedRanges = scopeGroups.flatMap { it.group.segments }.map { StructuredProtectedRange(it.range.start, it.range.endExclusive) }.distinct()
             .sortedWith(compareBy<StructuredProtectedRange> { it.startInstructionIndex }.thenBy { it.endInstructionIndexExclusive })
         scopes += TypedCatchScopeTopology(
             header = header,
@@ -322,12 +301,7 @@ internal fun extendExceptionProtectedScopeWithTerminalTransfers(protectedBlocks:
     var changed: Boolean
     do {
         changed = false
-        val candidates = result.asSequence()
-            .flatMap { block -> facts.outgoing[block].orEmpty().asSequence() }
-            .map { it.to }
-            .filter { it in facts.explicitTerminalBlocks && it !in result }
-            .distinct()
-            .toList()
+        val candidates = result.asSequence().flatMap { block -> facts.outgoing[block].orEmpty().asSequence() }.map { it.to }.filter { it in facts.explicitTerminalBlocks && it !in result }.distinct().toList()
         for (candidate in candidates) {
             val incoming = facts.incoming[candidate].orEmpty()
             if (incoming.isNotEmpty() && incoming.all { it.from in result }) {
@@ -344,12 +318,10 @@ internal data class ExceptionHandlerSignature(
     val catchType: String?,
 )
 
-internal fun exceptionLabelPosition(positions: Map<RawLabelId, Int>, label: RawLabelId): Int =
-    requireNotNull(positions[label]) { "Unknown exception-table label ${label.value}." }
+internal fun exceptionLabelPosition(positions: Map<RawLabelId, Int>, label: RawLabelId): Int = requireNotNull(positions[label]) { "Unknown exception-table label ${label.value}." }
 
 internal fun exceptionHandlerSignature(handlers: List<RawExceptionHandler>, labelPositions: Map<RawLabelId, Int>): List<ExceptionHandlerSignature> =
-    handlers
-        .map { handler -> ExceptionHandlerSignature(exceptionLabelPosition(labelPositions, handler.handler), handler.catchType) }
+    handlers.map { handler -> ExceptionHandlerSignature(exceptionLabelPosition(labelPositions, handler.handler), handler.catchType) }
         .sortedWith(compareBy<ExceptionHandlerSignature> { it.handlerInstructionIndex }.thenBy { it.catchType ?: "" })
 
 /** Builds the physical exception topology once so source recognizers do not reinterpret raw tables. */
@@ -357,16 +329,12 @@ internal object ExceptionTopologyBuilder {
     /** Groups raw table ranges, projects them to blocks, and indexes shared catch-all handlers. */
     fun build(graph: ControlFlowGraph, facts: ControlFlowFacts): ExceptionTopology {
         val labelPositions = graph.code.labels.associate { it.id to it.instructionIndex }
-        val segments = graph.code.exceptionHandlers
-            .groupBy { handler ->
+        val segments = graph.code.exceptionHandlers.groupBy { handler ->
                 ProtectedRange(
                     start = exceptionLabelPosition(labelPositions, handler.tryStart),
                     endExclusive = exceptionLabelPosition(labelPositions, handler.tryEnd),
                 )
-            }
-            .entries
-            .map { (range, handlers) -> ExceptionTableSegment(range, handlers) }
-            .sortedWith(compareBy<ExceptionTableSegment> { it.range.start }.thenBy { it.range.endExclusive })
+            }.entries.map { (range, handlers) -> ExceptionTableSegment(range, handlers) }.sortedWith(compareBy<ExceptionTableSegment> { it.range.start }.thenBy { it.range.endExclusive })
         val groups = coalesceSegments(segments, labelPositions, facts).map { group ->
             ExceptionGroupTopology(
                 group = group,
@@ -384,9 +352,7 @@ internal object ExceptionTopologyBuilder {
     }
 
     private fun protectedBlocks(range: ProtectedRange, graph: ControlFlowGraph, facts: ControlFlowFacts): Set<BasicBlockId> =
-        graph.blocks.asSequence()
-            .filter { block -> block.id in facts.blocks && block.startInstructionIndex < range.endExclusive && block.endInstructionIndexExclusive > range.start }
-            .mapTo(linkedSetOf()) { it.id }
+        graph.blocks.asSequence().filter { block -> block.id in facts.blocks && block.startInstructionIndex < range.endExclusive && block.endInstructionIndexExclusive > range.start }.mapTo(linkedSetOf()) { it.id }
 
     private fun coalesceSegments(segments: List<ExceptionTableSegment>, labelPositions: Map<RawLabelId, Int>, facts: ControlFlowFacts): List<ExceptionTableGroup> {
         if (segments.isEmpty()) return emptyList()
@@ -413,19 +379,14 @@ internal object ExceptionTopologyBuilder {
         if (next.range.start < currentEnd) return false
         if (next.range.start == currentEnd) return true
 
-        val gapBlocks = (currentEnd until next.range.start)
-            .map { instructionIndex -> facts.instructionToBlock.getOrNull(instructionIndex) ?: return false }
-            .toSet()
+        val gapBlocks = (currentEnd until next.range.start).map { instructionIndex -> facts.instructionToBlock.getOrNull(instructionIndex) ?: return false }.toSet()
         return gapBlocks.isNotEmpty() && gapBlocks.all { it in facts.explicitTerminalBlocks }
     }
 
     private fun buildCatchAllPeerIndex(groups: List<ExceptionGroupTopology>, labelPositions: Map<RawLabelId, Int>): Map<Int, List<ExceptionGroupTopology>> {
         val peers = linkedMapOf<Int, MutableList<ExceptionGroupTopology>>()
         for (topology in groups) {
-            topology.group.handlers.asSequence()
-                .filter { it.catchType == null }
-                .map { exceptionLabelPosition(labelPositions, it.handler) }
-                .distinct()
+            topology.group.handlers.asSequence().filter { it.catchType == null }.map { exceptionLabelPosition(labelPositions, it.handler) }.distinct()
                 .forEach { handlerInstructionIndex -> peers.getOrPut(handlerInstructionIndex) { mutableListOf() } += topology }
         }
         return peers.mapValues { (_, candidates) -> candidates.sortedBy { it.group.envelope.start } }

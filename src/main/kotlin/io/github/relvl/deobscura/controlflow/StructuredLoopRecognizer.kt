@@ -46,18 +46,12 @@ internal class StructuredLoopRecognizer {
             val bodyEdge = bodySuccessors.single()
             val exitEdge = exitSuccessors.single()
 
-            val externalExits = loopBlocks.asSequence()
-                .flatMap { facts.outgoing[it].orEmpty().asSequence() }
-                .filter { it.to !in loopBlocks }
-                .toList()
+            val externalExits = loopBlocks.asSequence().flatMap { facts.outgoing[it].orEmpty().asSequence() }.filter { it.to !in loopBlocks }.toList()
             if (externalExits.any { it.to != exitEdge.to }) {
                 rejections[header] = UnstructuredControlFlowReason.LOOP_HAS_ADDITIONAL_EXIT
                 return@forEach
             }
-            val breakEdges = externalExits.asSequence()
-                .filter { it.from != header }
-                .map { it.from to it.to }
-                .toCollection(linkedSetOf())
+            val breakEdges = externalExits.asSequence().filter { it.from != header }.map { it.from to it.to }.toCollection(linkedSetOf())
 
             val body = loopBlocks - header
             if (body.any { block -> facts.predecessors[block].orEmpty().any { it !in loopBlocks } }) {
@@ -65,9 +59,7 @@ internal class StructuredLoopRecognizer {
                 return@forEach
             }
 
-            val conditionalTarget = facts.outgoing[header].orEmpty()
-                .firstOrNull { it.kind == ControlFlowEdgeKind.CONDITIONAL }
-                ?.to
+            val conditionalTarget = facts.outgoing[header].orEmpty().firstOrNull { it.kind == ControlFlowEdgeKind.CONDITIONAL }?.to
             if (conditionalTarget == null) {
                 rejections[header] = UnstructuredControlFlowReason.LOOP_MISSING_CONDITIONAL_EDGE
                 return@forEach
@@ -87,29 +79,19 @@ internal class StructuredLoopRecognizer {
         return LoopRecognition(regions, rejections)
     }
 
-    fun contexts(regions: List<StructuredRegion.While>, facts: ControlFlowFacts, expression: ExpressionAnalysis): Map<BasicBlockId, LoopFlowContext> =
-        regions.associate { loop ->
-            loop.header to LoopFlowContext(
-                loop = loop,
-                continueTargets = transparentLoopContinueTargets(loop, facts, expression),
-            )
-        }
+    fun contexts(regions: List<StructuredRegion.While>, facts: ControlFlowFacts, expression: ExpressionAnalysis): Map<BasicBlockId, LoopFlowContext> = regions.associate { loop ->
+        loop.header to LoopFlowContext(
+            loop = loop,
+            continueTargets = transparentLoopContinueTargets(loop, facts, expression),
+        )
+    }
 
     fun naturalContexts(facts: ControlFlowFacts, expression: ExpressionAnalysis): List<NaturalLoopFlowContext> {
         val backEdges = facts.normalEdges.filter { edge -> edge.to in facts.dominators[edge.from].orEmpty() }
         return backEdges.groupBy { it.to }.mapNotNull { (header, latchEdges) ->
             val loopBlocks = naturalLoopBlocks(header, latchEdges.map { it.from }, facts) ?: return@mapNotNull null
-            val exitTargets = loopBlocks.asSequence()
-                .flatMap { facts.outgoing[it].orEmpty().asSequence() }
-                .filter { it.to !in loopBlocks }
-                .map { it.to }
-                .distinct()
-                .toList()
-            val headerExitTargets = facts.outgoing[header].orEmpty().asSequence()
-                .map { it.to }
-                .filter { it !in loopBlocks }
-                .distinct()
-                .toList()
+            val exitTargets = loopBlocks.asSequence().flatMap { facts.outgoing[it].orEmpty().asSequence() }.filter { it.to !in loopBlocks }.map { it.to }.distinct().toList()
+            val headerExitTargets = facts.outgoing[header].orEmpty().asSequence().map { it.to }.filter { it !in loopBlocks }.distinct().toList()
             NaturalLoopFlowContext(
                 header = header,
                 blocks = loopBlocks,
@@ -139,18 +121,15 @@ internal class StructuredLoopRecognizer {
         return loopBlocks.takeIf { blocks -> blocks.all { header in facts.dominators[it].orEmpty() } }
     }
 
-    private fun transparentLoopContinueTargets(loop: StructuredRegion.While, facts: ControlFlowFacts, expression: ExpressionAnalysis): Set<BasicBlockId> =
-        transparentLoopContinueTargets(
-            header = loop.header,
-            bodyBlocks = loop.bodyBlocks,
-            facts = facts,
-            expression = expression,
-        )
+    private fun transparentLoopContinueTargets(loop: StructuredRegion.While, facts: ControlFlowFacts, expression: ExpressionAnalysis): Set<BasicBlockId> = transparentLoopContinueTargets(
+        header = loop.header,
+        bodyBlocks = loop.bodyBlocks,
+        facts = facts,
+        expression = expression,
+    )
 
     private fun transparentLoopContinueTargets(header: BasicBlockId, bodyBlocks: Set<BasicBlockId>, facts: ControlFlowFacts, expression: ExpressionAnalysis): Set<BasicBlockId> {
-        val valuesByBlock = expression.values.values.asSequence()
-            .filter { it.instructionIndices.isNotEmpty() }
-            .groupBy { facts.instructionToBlock.getOrNull(it.instructionIndices.last()) }
+        val valuesByBlock = expression.values.values.asSequence().filter { it.instructionIndices.isNotEmpty() }.groupBy { facts.instructionToBlock.getOrNull(it.instructionIndices.last()) }
         val statementsByBlock = expression.statements.groupBy { facts.instructionToBlock.getOrNull(it.instructionIndex) }
         val result = linkedSetOf(header)
         var changed: Boolean

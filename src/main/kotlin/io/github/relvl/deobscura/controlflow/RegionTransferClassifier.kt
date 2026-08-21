@@ -47,9 +47,7 @@ internal class RegionTransferClassifier {
         }
 
         return transfers.distinct().sortedWith(
-            compareBy<StructuredRegionTransfer> { it.from.value }
-                .thenBy { it.target?.value ?: Int.MAX_VALUE }
-                .thenBy { it.kind.ordinal },
+            compareBy<StructuredRegionTransfer> { it.from.value }.thenBy { it.target?.value ?: Int.MAX_VALUE }.thenBy { it.kind.ordinal },
         )
     }
 

@@ -75,13 +75,9 @@ class SsaControlFlowCanonicalizer {
         controlFlow: SsaControlFlowGraph,
         analysis: SsaAnalysis,
     ): GotoRemoval {
-        val activeTerminalIndexes = graph.blocks.asSequence()
-            .filter { it.id in controlFlow.blocks }
-            .mapTo(mutableSetOf()) { it.endInstructionIndexExclusive - 1 }
+        val activeTerminalIndexes = graph.blocks.asSequence().filter { it.id in controlFlow.blocks }.mapTo(mutableSetOf()) { it.endInstructionIndexExclusive - 1 }
         val removed = analysis.operations.filter { operation ->
-            operation.instructionIndex in activeTerminalIndexes &&
-                operation.instruction is RawBranchInstruction &&
-                operation.instruction.opcode.mnemonic in DIRECT_GOTOS
+            operation.instructionIndex in activeTerminalIndexes && operation.instruction is RawBranchInstruction && operation.instruction.opcode.mnemonic in DIRECT_GOTOS
         }.toSet()
         if (removed.isEmpty()) return GotoRemoval(analysis, 0)
 
@@ -115,8 +111,7 @@ class SsaControlFlowCanonicalizer {
 
             val target = normalOutgoing.first().to
             if (normalOutgoing.any { it.to != target }) continue
-            val collapsed = collapseOutgoingEdges(graph, controlFlow, analysis, block.id, target, normalOutgoing)
-                ?: continue
+            val collapsed = collapseOutgoingEdges(graph, controlFlow, analysis, block.id, target, normalOutgoing) ?: continue
 
             return TerminatorRewrite(
                 analysis = removeOperation(collapsed.analysis, operation),
@@ -264,8 +259,7 @@ class SsaControlFlowCanonicalizer {
         val phisByOutput = phiNodes.associateBy { it.output }
         val values = analysis.values.mapValues { (id, definition) ->
             if (definition !is SsaValueDefinition.Phi) return@mapValues definition
-            val phi = phisByOutput[id]
-                ?: throw SsaInconsistencyException("CFG canonicalization lost phi definition ${id.value}.")
+            val phi = phisByOutput[id] ?: throw SsaInconsistencyException("CFG canonicalization lost phi definition ${id.value}.")
             definition.copy(inputs = phi.inputs)
         }
         val uses = rebuildSsaUses(values, analysis.operations, phiNodes, "CFG canonicalization")

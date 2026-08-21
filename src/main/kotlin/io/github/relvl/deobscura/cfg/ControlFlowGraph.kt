@@ -11,11 +11,9 @@ data class ControlFlowGraph(
 ) {
     private val blocksById = blocks.associateBy { it.id }
 
-    fun block(id: BasicBlockId): BasicBlock =
-        requireNotNull(blocksById[id]) { "Unknown basic block id: ${id.value}" }
+    fun block(id: BasicBlockId): BasicBlock = requireNotNull(blocksById[id]) { "Unknown basic block id: ${id.value}" }
 
-    fun instructions(block: BasicBlock): List<RawInstruction> =
-        code.instructions.subList(block.startInstructionIndex, block.endInstructionIndexExclusive)
+    fun instructions(block: BasicBlock): List<RawInstruction> = code.instructions.subList(block.startInstructionIndex, block.endInstructionIndexExclusive)
 }
 
 @JvmInline
@@ -38,9 +36,5 @@ data class ControlFlowEdge(
 )
 
 enum class ControlFlowEdgeKind {
-    FALLTHROUGH,
-    CONDITIONAL,
-    JUMP,
-    SWITCH,
-    EXCEPTION,
+    FALLTHROUGH, CONDITIONAL, JUMP, SWITCH, EXCEPTION,
 }

@@ -22,9 +22,7 @@ data class SsaControlFlowGraph(
     fun reachableBlocks(candidateEdges: List<ControlFlowEdge>): Set<BasicBlockId> {
         val entry = entryBlock ?: return emptySet()
         if (entry !in blocks) return emptySet()
-        val outgoing = candidateEdges.asSequence()
-            .filter { it.from in blocks && it.to in blocks }
-            .groupBy { it.from }
+        val outgoing = candidateEdges.asSequence().filter { it.from in blocks && it.to in blocks }.groupBy { it.from }
         val reachable = linkedSetOf<BasicBlockId>()
         val queue = ArrayDeque<BasicBlockId>()
         queue.addLast(entry)

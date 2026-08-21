@@ -24,10 +24,7 @@ class ClassImporter(
         var instructionCount = 0L
         var unknownInstructionCount = 0L
 
-        jarLoadResult.classes.values
-            .asSequence()
-            .filter { it.origin.role == JarRole.INPUT }
-            .forEach { loadedClass ->
+        jarLoadResult.classes.values.asSequence().filter { it.origin.role == JarRole.INPUT }.forEach { loadedClass ->
                 try {
                     val imported = importClass(loadedClass.bytes)
                     classes[imported.internalName] = imported
@@ -107,9 +104,7 @@ class ClassImporter(
                     descriptor = descriptor,
                     type = JvmMethodDescriptor.parse(descriptor),
                     accessFlags = method.flags().flagsMask(),
-                    exceptions = method.findAttribute(Attributes.exceptions())
-                        .map { attribute -> attribute.exceptions().map { it.asInternalName() } }
-                        .orElse(emptyList()),
+                    exceptions = method.findAttribute(Attributes.exceptions()).map { attribute -> attribute.exceptions().map { it.asInternalName() } }.orElse(emptyList()),
                     code = method.code().map(::importCode).orElse(null),
                 )
             },
@@ -141,15 +136,13 @@ class ClassImporter(
         }
 
         val codeAttribute = code as? CodeAttribute
-        val rawLabels = labels.entries()
-            .map { (label, id) ->
+        val rawLabels = labels.entries().map { (label, id) ->
                 RawLabel(
                     id = id,
                     instructionIndex = labelPositions[id] ?: instructions.size,
                     bytecodeOffset = codeAttribute?.labelToBci(label),
                 )
-            }
-            .sortedBy { it.id.value }
+            }.sortedBy { it.id.value }
 
         return RawCode(
             maxStack = codeAttribute?.maxStack(),
@@ -290,8 +283,7 @@ class ClassImporter(
         }
     }
 
-    private fun TypeKind.toRawType(): JvmComputationalType =
-        JvmComputationalType.fromClassFileName(name)
+    private fun TypeKind.toRawType(): JvmComputationalType = JvmComputationalType.fromClassFileName(name)
 
     private fun TypeKind.toJvmType(): JvmType = when (name) {
         "BOOLEAN" -> JvmType.BooleanType
@@ -305,8 +297,7 @@ class ClassImporter(
         else -> throw IllegalArgumentException("Type kind '$name' is not a primitive array component type.")
     }
 
-    private fun classEntryToJvmType(value: String): JvmType =
-        if (value.startsWith('[')) JvmType.parse(value) else JvmType.ObjectType(value)
+    private fun classEntryToJvmType(value: String): JvmType = if (value.startsWith('[')) JvmType.parse(value) else JvmType.ObjectType(value)
 
     private class LabelRegistry {
         private val labels = IdentityHashMap<Label, RawLabelId>()

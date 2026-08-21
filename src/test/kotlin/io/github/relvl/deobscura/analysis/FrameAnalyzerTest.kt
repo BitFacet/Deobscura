@@ -129,7 +129,6 @@ class FrameAnalyzerTest {
         assertEquals(FrameValueKind.INT, analysis.entryFrames.getValue(secondReturnSite.id).locals[1]?.kind)
     }
 
-
     @Test
     fun `merges exact reference types through the class hierarchy`() {
         val elseLabel = RawLabelId(1)

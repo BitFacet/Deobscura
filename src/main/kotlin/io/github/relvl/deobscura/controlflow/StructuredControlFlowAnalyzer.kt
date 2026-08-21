@@ -17,14 +17,9 @@ class StructuredControlFlowAnalyzer {
     private val exceptionRecognizer = StructuredExceptionRecognizer()
 
     fun analyze(
-        graph: ControlFlowGraph,
-        flow: SsaControlFlowGraph,
-        expression: ExpressionAnalysis,
-        legacySubroutineNormalized: Boolean = false,
-        legacySubroutineProvenance: LegacySubroutineProvenance? = null
+        graph: ControlFlowGraph, flow: SsaControlFlowGraph, expression: ExpressionAnalysis, legacySubroutineNormalized: Boolean = false, legacySubroutineProvenance: LegacySubroutineProvenance? = null
     ): StructuredControlFlowAnalysis {
-        val facts = ControlFlowFacts.build(graph, flow, expression)
-            ?: return StructuredControlFlowAnalysis(emptyList(), 0, 0)
+        val facts = ControlFlowFacts.build(graph, flow, expression) ?: return StructuredControlFlowAnalysis(emptyList(), 0, 0)
         val outgoing = facts.outgoing
         val predecessors = facts.predecessors
         val instructionToBlock = facts.instructionToBlock
@@ -39,9 +34,8 @@ class StructuredControlFlowAnalyzer {
         )
         val foldedProducerHeaders = folds.mapTo(hashSetOf()) { it.producerHeader }
         val foldedConditions = folds.associate { it.consumerHeader to it.condition }
-        val branches = originalBranches.asSequence()
-            .filter { (header, _) -> header !in foldedProducerHeaders }
-            .associate { (header, branch) -> header to (foldedConditions[header]?.let { branch.copy(condition = it) } ?: branch) }
+        val branches =
+            originalBranches.asSequence().filter { (header, _) -> header !in foldedProducerHeaders }.associate { (header, branch) -> header to (foldedConditions[header]?.let { branch.copy(condition = it) } ?: branch) }
         val loopRecognition = loopRecognizer.recognize(facts, branches)
         val loopHeaders = loopRecognition.regions.mapTo(hashSetOf()) { it.header }
         val shortCircuitFolds = findShortCircuitConditionFolds(
@@ -75,8 +69,7 @@ class StructuredControlFlowAnalyzer {
         )
 
         val regions = (loopRecognition.regions + switchRecognition.regions + ifRecognition.regions + exceptionRecognition.regions).sortedWith(
-            compareBy<StructuredRegion> { it.header.value }
-                .thenBy {
+            compareBy<StructuredRegion> { it.header.value }.thenBy {
                     when (it) {
                         is StructuredRegion.While -> 0
                         is StructuredRegion.TryCatch -> 1
@@ -99,24 +92,19 @@ class StructuredControlFlowAnalyzer {
         val diagnostics = buildList {
             originalBranches.keys.sortedBy { it.value }.forEach { header ->
                 if (header in recognizedConditionalHeaders) return@forEach
-                val reason = loopRecognition.rejections[header]
-                    ?: ifRecognition.rejections[header]
-                    ?: UnstructuredControlFlowReason.UNSUPPORTED_SHAPE
+                val reason = loopRecognition.rejections[header] ?: ifRecognition.rejections[header] ?: UnstructuredControlFlowReason.UNSUPPORTED_SHAPE
                 add(UnstructuredControlFlowDiagnostic(header, UnstructuredControlFlowKind.CONDITIONAL, reason))
             }
             switchHeaders.sortedBy { it.value }.forEach { header ->
                 if (header in recognizedSwitchHeaders) return@forEach
                 add(
                     UnstructuredControlFlowDiagnostic(
-                        header,
-                        UnstructuredControlFlowKind.SWITCH,
-                        switchRecognition.rejections[header] ?: UnstructuredControlFlowReason.UNSUPPORTED_SHAPE
+                        header, UnstructuredControlFlowKind.SWITCH, switchRecognition.rejections[header] ?: UnstructuredControlFlowReason.UNSUPPORTED_SHAPE
                     ),
                 )
             }
             exceptionRecognition.rejections.entries
-                .sortedWith(compareBy<Map.Entry<ExceptionRegionKey, UnstructuredControlFlowReason>> { it.key.protectedStartInstructionIndex }
-                    .thenBy { it.key.protectedEndInstructionIndexExclusive })
+                .sortedWith(compareBy<Map.Entry<ExceptionRegionKey, UnstructuredControlFlowReason>> { it.key.protectedStartInstructionIndex }.thenBy { it.key.protectedEndInstructionIndexExclusive })
                 .forEach { (key, reason) ->
                     val header = facts.instructionToBlock.getOrNull(key.protectedStartInstructionIndex) ?: return@forEach
                     add(
@@ -156,9 +144,7 @@ class StructuredControlFlowAnalyzer {
         instructionToBlock: Array<BasicBlockId?>,
     ): List<BooleanConditionFold> {
         if (expression.materialization.booleanValues.isEmpty()) return emptyList()
-        val valuesByBlock = expression.values.values.asSequence()
-            .filter { it.instructionIndices.isNotEmpty() }
-            .groupBy { instructionToBlock.getOrNull(it.instructionIndices.last()) }
+        val valuesByBlock = expression.values.values.asSequence().filter { it.instructionIndices.isNotEmpty() }.groupBy { instructionToBlock.getOrNull(it.instructionIndices.last()) }
         val statementsByBlock = expression.statements.groupBy { instructionToBlock.getOrNull(it.instructionIndex) }
         val result = mutableListOf<BooleanConditionFold>()
         val occupiedConsumers = hashSetOf<BasicBlockId>()
@@ -196,8 +182,7 @@ class StructuredControlFlowAnalyzer {
             if (phi.inputs.any { it.predecessor != null && it.predecessor !in setOf(conditional.to, fallthrough.to) }) return@forEach
 
             // C is true on the CONDITIONAL edge. P either equals C or !C depending on phi constants.
-            val phiNegatesSource = !conditionalTruth && fallthroughTruth
-            // The consumer branch is true for P with ifne, false for P with ifeq.
+            val phiNegatesSource = !conditionalTruth && fallthroughTruth // The consumer branch is true for P with ifne, false for P with ifeq.
             val consumerNegatesPhi = consumerCondition.operator == ComparisonOperator.EQ
             val effectiveCondition = if (phiNegatesSource.xor(consumerNegatesPhi)) sourceCondition.negated() else sourceCondition
 
@@ -254,9 +239,7 @@ class StructuredControlFlowAnalyzer {
         excludedHeaders: Set<BasicBlockId> = emptySet(),
     ): List<ShortCircuitConditionFold> {
         if (branches.size < 2) return emptyList()
-        val valuesByBlock = expression.values.values.asSequence()
-            .filter { it.instructionIndices.isNotEmpty() }
-            .groupBy { instructionToBlock.getOrNull(it.instructionIndices.last()) }
+        val valuesByBlock = expression.values.values.asSequence().filter { it.instructionIndices.isNotEmpty() }.groupBy { instructionToBlock.getOrNull(it.instructionIndices.last()) }
         val statementsByBlock = expression.statements.groupBy { instructionToBlock.getOrNull(it.instructionIndex) }
         val occupied = hashSetOf<BasicBlockId>()
         val result = mutableListOf<ShortCircuitConditionFold>()
@@ -299,13 +282,9 @@ class StructuredControlFlowAnalyzer {
 
                     val nextBranch = branches[other]
                     val nextTargets = nextBranch?.let { branchTargets(other, outgoing) }
-                    val canContinue = nextBranch != null &&
-                        nextTargets != null &&
-                        commonTarget in listOf(nextTargets.first, nextTargets.second) &&
-                        other !in occupied &&
-                        other !in excludedHeaders &&
-                        predecessors[other].orEmpty().distinct() == listOf(current) &&
-                        isTransparentConditionHeader(other, valuesByBlock, statementsByBlock, expression)
+                    val canContinue =
+                        nextBranch != null && nextTargets != null && commonTarget in listOf(nextTargets.first, nextTargets.second) && other !in occupied && other !in excludedHeaders && predecessors[other].orEmpty()
+                            .distinct() == listOf(current) && isTransparentConditionHeader(other, valuesByBlock, statementsByBlock, expression)
                     if (!canContinue) {
                         finalOther = other
                         break
@@ -360,10 +339,7 @@ class StructuredControlFlowAnalyzer {
     }
 
     private fun isTransparentConditionHeader(
-        block: BasicBlockId,
-        valuesByBlock: Map<BasicBlockId?, List<ExpressionValue>>,
-        statementsByBlock: Map<BasicBlockId?, List<ExpressionStatement>>,
-        expression: ExpressionAnalysis
+        block: BasicBlockId, valuesByBlock: Map<BasicBlockId?, List<ExpressionValue>>, statementsByBlock: Map<BasicBlockId?, List<ExpressionStatement>>, expression: ExpressionAnalysis
     ): Boolean {
         if (valuesByBlock[block].orEmpty().any { it.id !in expression.materialization.inlineValues }) return false
         val statements = statementsByBlock[block].orEmpty()

@@ -209,14 +209,12 @@ class StructuredExceptionRegionTest {
             ExpressionAnalysis(emptyMap(), listOf(ExpressionStatement.Return(3, null))),
         )
 
-        val outer = result.regions.filterIsInstance<StructuredRegion.TryCatch>()
-            .single { it.header == outerTry }
+        val outer = result.regions.filterIsInstance<StructuredRegion.TryCatch>().single { it.header == outerTry }
         assertEquals(setOf(outerTry), outer.tryBlocks)
         assertEquals(setOf(outerCatch, nestedCatch), outer.catches.single().blocks)
         assertEquals(continuation, outer.continuation)
 
-        val nested = result.regions.filterIsInstance<StructuredRegion.TryCatch>()
-            .single { it.header == outerCatch }
+        val nested = result.regions.filterIsInstance<StructuredRegion.TryCatch>().single { it.header == outerCatch }
         assertEquals(setOf(outerCatch), nested.tryBlocks)
         assertEquals(setOf(nestedCatch), nested.catches.single().blocks)
         assertEquals(continuation, nested.continuation)
@@ -301,8 +299,7 @@ class StructuredExceptionRegionTest {
             ExpressionAnalysis(emptyMap(), listOf(ExpressionStatement.Throw(5, ValueId(0)))),
         )
 
-        val outer = result.regions.filterIsInstance<StructuredRegion.TryCatch>()
-            .single { it.header == b0 }
+        val outer = result.regions.filterIsInstance<StructuredRegion.TryCatch>().single { it.header == b0 }
         assertEquals(setOf(b2, b3, b4, b5), outer.catches.single().blocks)
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }

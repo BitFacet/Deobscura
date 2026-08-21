@@ -161,7 +161,6 @@ class ExpressionBuilderTest {
         assertNull(result.values[ValueId(99)])
     }
 
-
     @Test
     fun `materializes pure single-use values into their consumer`() {
         val left = ValueId(0)

@@ -26,11 +26,7 @@ data class SsaAnalysis(
 
     val trivialPhiCount: Int
         get() = phiNodes.count { phi ->
-            phi.inputs.asSequence()
-                .map { it.value }
-                .filter { it != phi.output }
-                .distinct()
-                .count() <= 1
+            phi.inputs.asSequence().map { it.value }.filter { it != phi.output }.distinct().count() <= 1
         }
 }
 
@@ -62,8 +58,7 @@ sealed interface SsaValueDefinition {
         val location: SsaPhiLocation,
         val inputs: List<SsaPhiInput>,
     ) : SsaValueDefinition {
-        constructor(id: ValueId, kind: FrameValueKind, blockId: BasicBlockId, location: SsaPhiLocation, inputs: List<SsaPhiInput>) :
-            this(id, JvmValueType.of(kind), blockId, location, inputs)
+        constructor(id: ValueId, kind: FrameValueKind, blockId: BasicBlockId, location: SsaPhiLocation, inputs: List<SsaPhiInput>) : this(id, JvmValueType.of(kind), blockId, location, inputs)
     }
 }
 

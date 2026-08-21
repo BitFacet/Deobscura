@@ -234,9 +234,7 @@ internal class StructuredControlFlowDiagnosticStats {
         if (unstructuredReasonCounts.isNotEmpty()) {
             logger.info(
                 "Unstructured control-flow reasons: {}.",
-                unstructuredReasonCounts.entries
-                    .sortedByDescending { it.value }
-                    .joinToString { (reason, count) -> "${reason.diagnosticName}=$count" },
+                unstructuredReasonCounts.entries.sortedByDescending { it.value }.joinToString { (reason, count) -> "${reason.diagnosticName}=$count" },
             )
         }
         exceptionResidualFamilies.log(logger)
@@ -247,7 +245,6 @@ internal class StructuredControlFlowDiagnosticStats {
         )
     }
 }
-
 
 /** Aggregates unsupported catch-all regions into coarse structural families with a few examples. */
 internal class ExceptionResidualFamilyStats(
@@ -262,18 +259,14 @@ internal class ExceptionResidualFamilyStats(
     private val families = linkedMapOf<String, Family>()
 
     fun record(methodName: String, diagnostic: io.github.relvl.deobscura.controlflow.UnstructuredControlFlowDiagnostic) {
-        if (diagnostic.kind != UnstructuredControlFlowKind.EXCEPTION ||
-            diagnostic.reason != UnstructuredControlFlowReason.EXCEPTION_CATCH_ALL_UNSUPPORTED
-        ) return
+        if (diagnostic.kind != UnstructuredControlFlowKind.EXCEPTION || diagnostic.reason != UnstructuredControlFlowReason.EXCEPTION_CATCH_ALL_UNSUPPORTED) return
         val familyName = diagnostic.exceptionResidualFamily ?: "unclassified"
         val family = families.getOrPut(familyName) { Family() }
         family.count++
         if (family.representatives.size < representativeLimit) family.representatives += methodName
     }
 
-    internal fun summaries(): List<String> = families.entries
-        .sortedWith(compareByDescending<Map.Entry<String, Family>> { it.value.count }.thenBy { it.key })
-        .map { (name, family) ->
+    internal fun summaries(): List<String> = families.entries.sortedWith(compareByDescending<Map.Entry<String, Family>> { it.value.count }.thenBy { it.key }).map { (name, family) ->
             buildString {
                 append(name).append('=').append(family.count)
                 if (family.representatives.isNotEmpty()) {
@@ -283,8 +276,7 @@ internal class ExceptionResidualFamilyStats(
         }
 
     fun log(logger: Logger) {
-        val ordered = families.entries
-            .sortedWith(compareByDescending<Map.Entry<String, Family>> { it.value.count }.thenBy { it.key })
+        val ordered = families.entries.sortedWith(compareByDescending<Map.Entry<String, Family>> { it.value.count }.thenBy { it.key })
         if (ordered.isEmpty()) return
 
         logger.info(

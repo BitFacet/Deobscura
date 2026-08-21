@@ -288,11 +288,9 @@ class SsaConstantPropagator {
     }
 
     private fun sameConstant(left: SsaConstant, right: SsaConstant): Boolean = when {
-        left is SsaConstant.FloatValue && right is SsaConstant.FloatValue ->
-            left.value.toRawBits() == right.value.toRawBits()
+        left is SsaConstant.FloatValue && right is SsaConstant.FloatValue -> left.value.toRawBits() == right.value.toRawBits()
 
-        left is SsaConstant.DoubleValue && right is SsaConstant.DoubleValue ->
-            left.value.toRawBits() == right.value.toRawBits()
+        left is SsaConstant.DoubleValue && right is SsaConstant.DoubleValue -> left.value.toRawBits() == right.value.toRawBits()
 
         else -> left == right
     }

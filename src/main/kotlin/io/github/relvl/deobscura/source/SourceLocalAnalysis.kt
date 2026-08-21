@@ -60,18 +60,11 @@ class SourceLocalAnalyzer {
                 for (index in block.startInstructionIndex until block.endInstructionIndexExclusive) put(index, block.id)
             }
         }
-        val materializedValueBlocks = expression.values.values
-            .asSequence()
-            .filter { it.instructionIndices.isNotEmpty() && it.id !in expression.materialization.inlineValues }
-            .mapNotNull { value -> instructionToBlock[value.instructionIndices.last()]?.let { value.id to it } }
-            .toMap()
+        val materializedValueBlocks = expression.values.values.asSequence().filter { it.instructionIndices.isNotEmpty() && it.id !in expression.materialization.inlineValues }
+            .mapNotNull { value -> instructionToBlock[value.instructionIndices.last()]?.let { value.id to it } }.toMap()
         val materializedValuesByBlock = materializedValueBlocks.entries.groupBy({ it.value }, { it.key })
-        val statementsByBlock = expression.statements
-            .mapNotNull { statement -> instructionToBlock[statement.instructionIndex]?.let { it to statement } }
-            .groupBy({ it.first }, { it.second })
-        val phisByBlock = expression.values.values
-            .filter { it.node is ExpressionNode.Phi }
-            .groupBy { (it.node as ExpressionNode.Phi).blockId }
+        val statementsByBlock = expression.statements.mapNotNull { statement -> instructionToBlock[statement.instructionIndex]?.let { it to statement } }.groupBy({ it.first }, { it.second })
+        val phisByBlock = expression.values.values.filter { it.node is ExpressionNode.Phi }.groupBy { (it.node as ExpressionNode.Phi).blockId }
         val nestedHeaders = structure.regions.mapTo(linkedSetOf()) { it.header }
 
         val conditionalValues = linkedMapOf<ValueId, SourceConditionalValue>()
@@ -100,9 +93,7 @@ class SourceLocalAnalyzer {
                     val candidateInputs = candidates.values.flatMapTo(linkedSetOf()) { listOf(it.thenValue, it.elseValue) }
                     val armBlocks = region.thenBlocks + region.elseBlocks
                     val emittedArmValues = armBlocks.flatMap { materializedValuesByBlock[it].orEmpty() }.toSet()
-                    val hasSemanticStatement = armBlocks
-                        .flatMap { statementsByBlock[it].orEmpty() }
-                        .any { it !is ExpressionStatement.Branch }
+                    val hasSemanticStatement = armBlocks.flatMap { statementsByBlock[it].orEmpty() }.any { it !is ExpressionStatement.Branch }
                     val hasArmPhi = armBlocks.any { phisByBlock[it].orEmpty().isNotEmpty() }
                     if (emittedArmValues == candidateInputs && !hasSemanticStatement && !hasArmPhi) {
                         conditionalValues.putAll(candidates)
@@ -114,8 +105,7 @@ class SourceLocalAnalyzer {
 
                 phisByBlock[region.continuation].orEmpty().forEach phiLoop@{ phiValue ->
                     if (!canDeclareSourceLocal(phiValue)) return@phiLoop
-                    val phi = phiValue.node as ExpressionNode.Phi
-                    // A complete two-arm merge is source-local regardless of whether the JVM
+                    val phi = phiValue.node as ExpressionNode.Phi // A complete two-arm merge is source-local regardless of whether the JVM
                     // verifier carried the value in a local slot or on the operand stack. Both
                     // structured arms assign it before the common continuation.
                     if (phi.inputs.size != 2 || phi.inputs.any { it.predecessor == null }) return@phiLoop
@@ -131,11 +121,8 @@ class SourceLocalAnalyzer {
                 return@forEach
             }
 
-            val assignmentBlocks = when {
-                region.thenBlocks.isNotEmpty() && region.elseBlocks.isEmpty() -> region.thenBlocks
-                region.thenBlocks.isEmpty() && region.elseBlocks.isNotEmpty() -> region.elseBlocks
-                else -> return@forEach
-            }
+            if (region.thenBlocks.isEmpty() == region.elseBlocks.isEmpty()) return@forEach
+            val assignmentBlocks = if (region.thenBlocks.isEmpty()) region.elseBlocks else region.thenBlocks
             if (assignmentBlocks.any { it in nestedHeaders }) return@forEach
 
             phisByBlock[region.continuation].orEmpty().forEach phiLoop@{ phiValue ->

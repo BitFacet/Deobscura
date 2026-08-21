@@ -111,8 +111,7 @@ class SsaConstantPropagatorTest {
         assertEquals(1, result.constantPhiCount)
     }
 
-    private fun instruction(id: ValueId, kind: FrameValueKind, index: Int) =
-        SsaValueDefinition.Instruction(id, kind, index)
+    private fun instruction(id: ValueId, kind: FrameValueKind, index: Int) = SsaValueDefinition.Instruction(id, kind, index)
 
     private fun constant(index: Int, output: ValueId, value: Int) = ValueOperation(
         instructionIndex = index,

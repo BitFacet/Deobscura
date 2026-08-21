@@ -7,21 +7,15 @@ package io.github.relvl.deobscura.config
  * by [ConfigResolver] before they are used by the rest of the application.
  */
 data class DeobscuraConfig(
-    @ConfigProperty("JAR file to analyze.")
-    val input: String = "input.jar",
+    @ConfigProperty("JAR file to analyze.") val input: String = "input.jar",
 
-    @ConfigProperty("Additional JAR files used for class resolution. Glob patterns are supported.")
-    val classpath: List<String> = emptyList(),
+    @ConfigProperty("Additional JAR files used for class resolution. Glob patterns are supported.") val classpath: List<String> = emptyList(),
 
-    @ConfigProperty("Target Java runtime directory. null uses the runtime of the current JVM.")
-    val runtime: String? = null,
+    @ConfigProperty("Target Java runtime directory. null uses the runtime of the current JVM.") val runtime: String? = null,
 
-    @ConfigProperty("Output directory.")
-    val output: String = "out",
+    @ConfigProperty("Output directory.") val output: String = "out",
 
-    @ConfigProperty("Apply source-facing deobfuscation renames.")
-    val deobfuscation: Boolean = true,
+    @ConfigProperty("Apply source-facing deobfuscation renames.") val deobfuscation: Boolean = true,
 
-    @ConfigProperty("Write technical IR alongside Java-like source files.")
-    val technicalIr: Boolean = true,
+    @ConfigProperty("Write technical IR alongside Java-like source files.") val technicalIr: Boolean = true,
 )

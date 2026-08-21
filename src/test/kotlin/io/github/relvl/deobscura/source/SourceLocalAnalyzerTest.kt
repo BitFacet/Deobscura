@@ -386,9 +386,7 @@ class SourceLocalAnalyzerTest {
                 thenValue to ExpressionValue(thenValue, JvmValueType.Computational(JvmComputationalType.INT), ExpressionNode.Constant(constantDesc(1)), listOf(1)),
                 elseValue to ExpressionValue(elseValue, JvmValueType.Computational(JvmComputationalType.INT), ExpressionNode.Constant(constantDesc(0)), listOf(2)),
                 phiValue to ExpressionValue(
-                    phiValue,
-                    JvmValueType.Computational(JvmComputationalType.INT),
-                    ExpressionNode.Phi(continuation, SsaPhiLocation.Local(1), listOf(SsaPhiInput(thenValue, thenBlock), SsaPhiInput(elseValue, elseBlock)))
+                    phiValue, JvmValueType.Computational(JvmComputationalType.INT), ExpressionNode.Phi(continuation, SsaPhiLocation.Local(1), listOf(SsaPhiInput(thenValue, thenBlock), SsaPhiInput(elseValue, elseBlock)))
                 ),
             ),
             statements = listOf(ExpressionStatement.Return(1, null)),

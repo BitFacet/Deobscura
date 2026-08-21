@@ -48,8 +48,7 @@ class ExpressionMaterializer(
 
     private fun findBooleanPhiValues(ssa: SsaAnalysis, expression: ExpressionAnalysis): Set<ValueId> {
         val operationsByIndex = ssa.operations.associateBy { it.instructionIndex }
-        return expression.values.values.asSequence()
-            .filter { value ->
+        return expression.values.values.asSequence().filter { value ->
                 val phi = value.node as? ExpressionNode.Phi ?: return@filter false
                 val meaningfulInputs = phi.inputs.asSequence().map { it.value }.filter { it != value.id }.distinct().toList()
                 if (meaningfulInputs.isEmpty() || meaningfulInputs.any { !expression.value(it).node.isZeroOrOneConstant() }) return@filter false
@@ -60,13 +59,10 @@ class ExpressionMaterializer(
                     val branch = operationsByIndex[operationUse.instructionIndex]?.instruction as? RawBranchInstruction ?: return@all false
                     branch.opcode.mnemonic == "ifeq" || branch.opcode.mnemonic == "ifne"
                 }
-            }
-            .map { it.id }
-            .toSet()
+            }.map { it.id }.toSet()
     }
 
-    private fun ExpressionNode.isZeroOrOneConstant(): Boolean =
-        this is ExpressionNode.Constant && (value.equals(0) || value.equals(1))
+    private fun ExpressionNode.isZeroOrOneConstant(): Boolean = this is ExpressionNode.Constant && (value.equals(0) || value.equals(1))
 
     private fun ExpressionNode.isJavaStatementExpression(): Boolean = when (this) {
         is ExpressionNode.Call,

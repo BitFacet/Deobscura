@@ -44,8 +44,7 @@ class SsaConstantBranchAnalyzer {
 
             when (val instruction = operation.instruction) {
                 is RawBranchInstruction -> {
-                    val taken = evaluateConditional(instruction.opcode.mnemonic, operation.inputs, analysis.constants)
-                        ?: return@forEach
+                    val taken = evaluateConditional(instruction.opcode.mnemonic, operation.inputs, analysis.constants) ?: return@forEach
                     val outgoing = controlFlow.edges.filter {
                         it.from == block.id && it.kind != ControlFlowEdgeKind.EXCEPTION
                     }
@@ -59,8 +58,7 @@ class SsaConstantBranchAnalyzer {
                 }
 
                 is RawSwitchInstruction -> {
-                    val selector = operation.inputs.singleOrNull()?.let(analysis.constants::get) as? SsaConstant.IntValue
-                        ?: return@forEach
+                    val selector = operation.inputs.singleOrNull()?.let(analysis.constants::get) as? SsaConstant.IntValue ?: return@forEach
                     val outgoing = controlFlow.edges.filter {
                         it.from == block.id && it.kind == ControlFlowEdgeKind.SWITCH
                     }

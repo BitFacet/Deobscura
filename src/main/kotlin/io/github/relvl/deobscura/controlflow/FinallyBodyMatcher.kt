@@ -45,11 +45,7 @@ internal object FinallyBodyMatcher {
             if (leftInstructions.size < 2 || leftInstructions.size != rightInstructions.size) return false
             val leftStore = leftInstructions.first() as? RawLocalInstruction ?: return false
             val rightStore = rightInstructions.first() as? RawLocalInstruction ?: return false
-            if (leftStore.operation != LocalOperation.STORE ||
-                leftStore.type != JvmComputationalType.REFERENCE ||
-                rightStore.operation != LocalOperation.STORE ||
-                rightStore.type != JvmComputationalType.REFERENCE
-            ) return false
+            if (leftStore.operation != LocalOperation.STORE || leftStore.type != JvmComputationalType.REFERENCE || rightStore.operation != LocalOperation.STORE || rightStore.type != JvmComputationalType.REFERENCE) return false
             if (leftInstructions.indices.any {
                     !equivalentFinallyInstruction(leftInstructions[it], rightInstructions[it], localSlots, reverseLocalSlots)
                 }) return false
@@ -60,8 +56,7 @@ internal object FinallyBodyMatcher {
             if (rightNormalEdges.size != 1) return false
             val rightContinuation = rightNormalEdges.single().to
             val mappedHandlerExit = mapping[handlerExit]
-            if (mappedHandlerExit != null) {
-                // If the rethrow block itself carries a cleanup prefix, the nested handler rejoins
+            if (mappedHandlerExit != null) { // If the rethrow block itself carries a cleanup prefix, the nested handler rejoins
                 // that prefix in both copies rather than the final continuation after it.
                 if (rightContinuation != mappedHandlerExit) return false
             } else {
@@ -90,9 +85,7 @@ internal object FinallyBodyMatcher {
                 instructions.subList(start, endExclusive)
             }
             val right = graph.instructions(graph.block(normalBlock))
-            val trailingGoto = right.size == left.size + 1 &&
-                right.last() is RawBranchInstruction &&
-                (right.last() as RawBranchInstruction).opcode.mnemonic == "goto"
+            val trailingGoto = right.size == left.size + 1 && right.last() is RawBranchInstruction && (right.last() as RawBranchInstruction).opcode.mnemonic == "goto"
             val trailingReturn = right.size == left.size + 1 && right.last() is RawReturnInstruction
             val rightBody = if (trailingGoto || trailingReturn) right.dropLast(1) else right
             if (left.size != rightBody.size || left.indices.any { !equivalentFinallyInstruction(left[it], rightBody[it], localSlots, reverseLocalSlots) }) {
@@ -113,10 +106,7 @@ internal object FinallyBodyMatcher {
                 continuation = target
                 return true
             }
-            val terminalExit = trailingReturn &&
-                rightEdges.isEmpty() &&
-                leftEdges.size == 1 &&
-                leftEdges.single().to == handlerExit
+            val terminalExit = trailingReturn && rightEdges.isEmpty() && leftEdges.size == 1 && leftEdges.single().to == handlerExit
             if (terminalExit) {
                 if (terminalExitBlock != null && terminalExitBlock != normalBlock) return false
                 terminalExitBlock = normalBlock
@@ -131,8 +121,7 @@ internal object FinallyBodyMatcher {
                 } else {
                     sameKind
                 }
-                if (candidates.size != 1)
-                    return false
+                if (candidates.size != 1) return false
                 val rightTarget = candidates.single().to
                 if (leftEdge.to == handlerExit) {
                     if (handlerExitInstructionPrefixLength != 0) {
@@ -146,24 +135,16 @@ internal object FinallyBodyMatcher {
                         continuation = rightTarget
                     }
                 } else {
-                    if (leftEdge.to !in handlerBlocks || !match(leftEdge.to, rightTarget))
-                        return false
+                    if (leftEdge.to !in handlerBlocks || !match(leftEdge.to, rightTarget)) return false
                 }
             }
             if (allowNestedSingleBlockHandlers) {
                 val leftNestedEdges = graph.edges.filter { edge ->
-                    edge.from == handlerBlock &&
-                        edge.kind == ControlFlowEdgeKind.EXCEPTION &&
-                        edge.catchType != null &&
-                        edge.to !in handlerBlocks &&
-                        facts.outgoing[edge.to].orEmpty().singleOrNull()?.to == handlerExit
+                    edge.from == handlerBlock && edge.kind == ControlFlowEdgeKind.EXCEPTION && edge.catchType != null && edge.to !in handlerBlocks && facts.outgoing[edge.to].orEmpty().singleOrNull()?.to == handlerExit
                 }
                 for (leftNestedEdge in leftNestedEdges) {
                     val candidates = graph.edges.filter { rightNestedEdge ->
-                        rightNestedEdge.from == normalBlock &&
-                            rightNestedEdge.kind == ControlFlowEdgeKind.EXCEPTION &&
-                            rightNestedEdge.catchType == leftNestedEdge.catchType &&
-                            facts.outgoing[rightNestedEdge.to].orEmpty().size == 1
+                        rightNestedEdge.from == normalBlock && rightNestedEdge.kind == ControlFlowEdgeKind.EXCEPTION && rightNestedEdge.catchType == leftNestedEdge.catchType && facts.outgoing[rightNestedEdge.to].orEmpty().size == 1
                     }
                     if (candidates.size != 1 || !matchNestedHandler(leftNestedEdge.to, candidates.single().to)) return false
                 }
@@ -192,9 +173,7 @@ internal object FinallyBodyMatcher {
         if (continuation != null && continuation in normalBlocks) return null
         if (normalBlocks.any { block ->
                 facts.incoming[block].orEmpty().any { edge ->
-                    edge.from !in normalBlocks &&
-                        edge.from !in matchedNestedNormalHandlers &&
-                        block != normalEntry
+                    edge.from !in normalBlocks && edge.from !in matchedNestedNormalHandlers && block != normalEntry
                 }
             }) return null
 
@@ -219,9 +198,7 @@ internal object FinallyBodyMatcher {
         facts: ControlFlowFacts,
     ): Boolean {
         val instructions = graph.instructions(graph.block(block))
-        return instructions.size == 1 &&
-            instructions.single() is RawReturnInstruction &&
-            facts.outgoing[block].orEmpty().isEmpty()
+        return instructions.size == 1 && instructions.single() is RawReturnInstruction && facts.outgoing[block].orEmpty().isEmpty()
     }
 
     private fun equivalentFinallyInstruction(
@@ -230,14 +207,9 @@ internal object FinallyBodyMatcher {
         localSlots: MutableMap<Int, Int>,
         reverseLocalSlots: MutableMap<Int, Int>,
     ): Boolean = when {
-        left is RawLocalInstruction && right is RawLocalInstruction ->
-            left.operation == right.operation &&
-                left.type == right.type &&
-                equivalentLocalSlot(left.slot, right.slot, localSlots, reverseLocalSlots)
+        left is RawLocalInstruction && right is RawLocalInstruction -> left.operation == right.operation && left.type == right.type && equivalentLocalSlot(left.slot, right.slot, localSlots, reverseLocalSlots)
 
-        left is RawIncrementInstruction && right is RawIncrementInstruction ->
-            left.amount == right.amount &&
-                equivalentLocalSlot(left.slot, right.slot, localSlots, reverseLocalSlots)
+        left is RawIncrementInstruction && right is RawIncrementInstruction -> left.amount == right.amount && equivalentLocalSlot(left.slot, right.slot, localSlots, reverseLocalSlots)
 
         left is RawBranchInstruction && right is RawBranchInstruction -> left.opcode == right.opcode
         else -> left == right

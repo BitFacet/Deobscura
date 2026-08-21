@@ -72,14 +72,7 @@ data class SourceRegionPart(
 )
 
 enum class SourceRegionPartKind {
-    THEN,
-    ELSE,
-    LOOP_BODY,
-    SWITCH_CASE,
-    TRY_BODY,
-    CATCH_BODY,
-    FINALLY_BODY,
-    SYNCHRONIZED_BODY,
+    THEN, ELSE, LOOP_BODY, SWITCH_CASE, TRY_BODY, CATCH_BODY, FINALLY_BODY, SYNCHRONIZED_BODY,
 }
 
 data class SourceProvenance(
@@ -103,9 +96,7 @@ enum class SourceProjectionIssueReason {
 }
 
 enum class SourceConsumptionReason {
-    FINALLY_NORMAL_COPY,
-    FINALLY_EXCEPTIONAL_SCAFFOLDING,
-    SYNCHRONIZED_MONITOR_SCAFFOLDING,
+    FINALLY_NORMAL_COPY, FINALLY_EXCEPTIONAL_SCAFFOLDING, SYNCHRONIZED_MONITOR_SCAFFOLDING,
 }
 
 class SourceStructureInconsistencyException(message: String) : IllegalStateException(message)

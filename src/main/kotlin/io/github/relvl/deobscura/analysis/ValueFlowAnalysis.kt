@@ -45,8 +45,7 @@ sealed interface ValueDefinition {
         val site: ValueMergeSite,
         val inputs: List<ValueId>,
     ) : ValueDefinition {
-        constructor(id: ValueId, kind: FrameValueKind, site: ValueMergeSite, inputs: List<ValueId>) :
-            this(id, JvmValueType.of(kind), site, inputs)
+        constructor(id: ValueId, kind: FrameValueKind, site: ValueMergeSite, inputs: List<ValueId>) : this(id, JvmValueType.of(kind), site, inputs)
     }
 }
 

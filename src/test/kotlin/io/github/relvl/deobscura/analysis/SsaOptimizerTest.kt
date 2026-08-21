@@ -121,8 +121,7 @@ class SsaOptimizerTest {
         kotlin.test.assertFailsWith<SsaInconsistencyException> { optimizer.optimize(graph, analysis) }
     }
 
-    private fun constantInstruction(value: Int) =
-        RawConstantInstruction(JvmOpcode("iconst"), JvmComputationalType.INT, constantDesc(value))
+    private fun constantInstruction(value: Int) = RawConstantInstruction(JvmOpcode("iconst"), JvmComputationalType.INT, constantDesc(value))
 
     private fun constantDesc(value: Any): ConstantDesc = value as ConstantDesc
 
@@ -143,6 +142,5 @@ class SsaOptimizerTest {
         successors: List<Int> = emptyList(),
     ) = BasicBlock(BasicBlockId(id), start, end, predecessors.map(::BasicBlockId), successors.map(::BasicBlockId))
 
-    private fun edge(from: Int, to: Int, kind: ControlFlowEdgeKind) =
-        ControlFlowEdge(BasicBlockId(from), BasicBlockId(to), kind)
+    private fun edge(from: Int, to: Int, kind: ControlFlowEdgeKind) = ControlFlowEdge(BasicBlockId(from), BasicBlockId(to), kind)
 }

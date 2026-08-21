@@ -1,13 +1,11 @@
 package io.github.relvl.deobscura.source
 
-import io.github.relvl.deobscura.analysis.JvmValueType
-import io.github.relvl.deobscura.analysis.ValueId
-import io.github.relvl.deobscura.analysis.ValueOrigin
+import io.github.relvl.deobscura.analysis.*
 import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
 import io.github.relvl.deobscura.expression.*
-import io.github.relvl.deobscura.raw.JvmComputationalType
 import io.github.relvl.deobscura.raw.JvmReferenceType
 import io.github.relvl.deobscura.raw.JvmType
+import io.github.relvl.deobscura.raw.formatTypeName
 import java.lang.constant.ConstantDescs
 
 /** Minimal source-facing rendering for Expression IR. Names remain deliberately technical. */
@@ -24,40 +22,25 @@ internal class SourceExpressionRenderer(
         }
     }
 
-    fun renderValue(id: ValueId, expression: ExpressionAnalysis): String =
-        renderValue(id, expression, PRECEDENCE_LOWEST)
+    fun renderValue(id: ValueId, expression: ExpressionAnalysis): String = renderValue(id, expression, PRECEDENCE_LOWEST)
 
-    fun renderValue(id: ValueId, expression: ExpressionAnalysis, expectedType: JvmType): String =
-        if (expectedType == JvmType.BooleanType) renderBooleanValue(id, expression) else renderValue(id, expression)
+    fun renderValue(id: ValueId, expression: ExpressionAnalysis, expectedType: JvmType): String = if (expectedType == JvmType.BooleanType) renderBooleanValue(id, expression) else renderValue(id, expression)
 
-    fun renderConditionalDefinition(
-        value: ExpressionValue,
-        condition: String,
-        thenValue: ValueId,
-        elseValue: ValueId,
-        expression: ExpressionAnalysis,
-    ): String = "var v${value.id.value} = $condition ? ${renderConditionalOperand(thenValue, expression)} : ${renderConditionalOperand(elseValue, expression)}"
+    fun renderConditionalDefinition(value: ExpressionValue, condition: String, thenValue: ValueId, elseValue: ValueId, expression: ExpressionAnalysis): String =
+        "var v${value.id.value} = $condition ? ${renderConditionalOperand(thenValue, expression)} : ${renderConditionalOperand(elseValue, expression)}"
 
-    fun renderLocalDeclaration(
-        target: ExpressionValue,
-        initializer: ValueId,
-        expression: ExpressionAnalysis,
-    ): String = "${formatValueType(target.type)} v${target.id.value} = ${renderValueForType(initializer, target.type, expression)}"
+    fun renderLocalDeclaration(target: ExpressionValue, initializer: ValueId, expression: ExpressionAnalysis): String =
+        "${formatValueType(target.type)} v${target.id.value} = ${renderValueForType(initializer, target.type, expression)}"
 
-    fun renderLocalDeclaration(target: ExpressionValue): String =
-        "${formatValueType(target.type)} v${target.id.value}"
+    fun renderLocalDeclaration(target: ExpressionValue): String = "${formatValueType(target.type)} v${target.id.value}"
 
-    fun renderLocalAssignment(target: ValueId, value: ValueId, targetType: JvmValueType, expression: ExpressionAnalysis): String =
-        "v${target.value} = ${renderValueForType(value, targetType, expression)}"
+    fun renderLocalAssignment(target: ValueId, value: ValueId, targetType: JvmValueType, expression: ExpressionAnalysis): String = "v${target.value} = ${renderValueForType(value, targetType, expression)}"
 
     fun renderCondition(condition: BranchCondition, expression: ExpressionAnalysis): String {
         renderThreeWayComparison(condition, expression)?.let { return it }
 
         val left = expression.values[condition.left]
-        val isBoolean = condition.left in expression.materialization.booleanValues ||
-            left?.type == JvmValueType.Computational(
-            JvmComputationalType.BOOLEAN,
-        )
+        val isBoolean = condition.left in expression.materialization.booleanValues || left?.type?.isBoolean == true
         if (isBoolean && condition.right == BranchOperand.Zero) {
             return when (condition.operator) {
                 ComparisonOperator.EQ -> "!${parenthesizeBoolean(condition.left, expression)}"
@@ -69,41 +52,32 @@ internal class SourceExpressionRenderer(
             ComparisonOperator.EQ, ComparisonOperator.NE -> PRECEDENCE_EQUALITY
             else -> PRECEDENCE_RELATIONAL
         }
-        return "${renderValue(condition.left, expression, precedence)} ${condition.operator.symbol} " +
-            when (val right = condition.right) {
-                is BranchOperand.Value -> renderValue(right.value, expression, precedence + 1)
-                BranchOperand.Zero -> "0"
-                BranchOperand.Null -> "null"
-            }
+        return "${renderValue(condition.left, expression, precedence)} ${condition.operator.symbol} " + when (val right = condition.right) {
+            is BranchOperand.Value -> renderValue(right.value, expression, precedence + 1)
+            BranchOperand.Zero -> "0"
+            BranchOperand.Null -> "null"
+        }
     }
 
-    fun renderStatement(
-        statement: ExpressionStatement,
-        expression: ExpressionAnalysis,
-        methodReturnType: JvmType? = null,
-    ): String = when (statement) {
+    fun renderStatement(statement: ExpressionStatement, expression: ExpressionAnalysis, methodReturnType: JvmType? = null): String = when (statement) {
         is ExpressionStatement.FieldWrite -> {
-            val fieldName = deobfuscation.fieldName(
-                statement.field.ownerInternalName,
-                statement.field.name,
-                statement.field.descriptor,
-            )
-            val target = statement.receiver?.let { "${renderValue(it, expression)}.$fieldName" }
-                ?: "${sourceName(statement.field.ownerInternalName)}.$fieldName"
+            val fieldName = deobfuscation.fieldName(statement.field.ownerInternalName, statement.field.name, statement.field.descriptor)
+            val target = statement.receiver?.let { "${renderValue(it, expression)}.$fieldName" } ?: "${deobfuscation.sourceClassName(statement.field.ownerInternalName)}.$fieldName"
             "$target = ${renderValue(statement.value, expression, statement.field.type)}"
         }
 
         is ExpressionStatement.ArrayWrite -> {
             val componentType = arrayComponentType(statement.array, expression)
-            val value = componentType?.let { renderValue(statement.value, expression, it) }
-                ?: renderValue(statement.value, expression)
+            val value = componentType?.let { renderValue(statement.value, expression, it) } ?: renderValue(statement.value, expression)
             "${renderValue(statement.array, expression)}[${renderValue(statement.index, expression)}] = $value"
         }
 
         is ExpressionStatement.Call -> renderCall(statement.method, statement.receiver, statement.arguments, expression)
-        is ExpressionStatement.DynamicCall ->
-            renderStringConcat(statement.callSite, statement.arguments, expression)
-                ?: "/* invokedynamic ${statement.callSite.name} */ (${renderArguments(statement.arguments, statement.callSite.type.parameterTypes, expression)})"
+        is ExpressionStatement.DynamicCall -> renderStringConcat(statement.callSite, statement.arguments, expression) ?: "/* invokedynamic ${statement.callSite.name} */ (${
+            renderArguments(
+                statement.arguments, statement.callSite.type.parameterTypes, expression
+            )
+        })"
 
         is ExpressionStatement.Return -> statement.value?.let { value ->
             val rendered = methodReturnType?.let { renderValue(value, expression, it) } ?: renderValue(value, expression)
@@ -111,13 +85,11 @@ internal class SourceExpressionRenderer(
         } ?: "return"
 
         is ExpressionStatement.Throw -> "throw ${renderValue(statement.value, expression)}"
-        is ExpressionStatement.Monitor ->
-            "/* ${if (statement.operation == MonitorOperation.ENTER) "monitor-enter" else "monitor-exit"} ${renderValue(statement.value, expression)} */"
+        is ExpressionStatement.Monitor -> "/* ${if (statement.operation == MonitorOperation.ENTER) "monitor-enter" else "monitor-exit"} ${renderValue(statement.value, expression)} */"
 
         is ExpressionStatement.Branch -> "/* branch */"
         is ExpressionStatement.Switch -> "/* switch ${renderValue(statement.selector, expression)} */"
-        is ExpressionStatement.Raw ->
-            "/* ${statement.opcode}${statement.inputs.joinToString(prefix = "(", postfix = ")") { renderValue(it, expression) }} */"
+        is ExpressionStatement.Raw -> "/* ${statement.opcode}${statement.inputs.joinToString(prefix = "(", postfix = ")") { renderValue(it, expression) }} */"
     }
 
     private fun renderNode(node: ExpressionNode, expression: ExpressionAnalysis): String = when (node) {
@@ -131,49 +103,43 @@ internal class SourceExpressionRenderer(
 
         is ExpressionNode.Phi -> node.inputs.joinToString(prefix = "phi(", postfix = ")") { "v${it.value.value}" }
         is ExpressionNode.Constant -> formatConstant(node.value)
-        is ExpressionNode.Unary, is ExpressionNode.Binary, is ExpressionNode.Increment, is ExpressionNode.Conversion ->
-            renderInlineNode(node, expression, precedence(node))
+        is ExpressionNode.Unary, is ExpressionNode.Binary, is ExpressionNode.Increment, is ExpressionNode.Conversion -> renderInlineNode(node, expression, precedence(node))
 
-        is ExpressionNode.ThreeWayCompare ->
-            "cmp(${renderValue(node.left, expression)}, ${renderValue(node.right, expression)})"
+        is ExpressionNode.ThreeWayCompare -> "cmp(${renderValue(node.left, expression)}, ${renderValue(node.right, expression)})"
 
         is ExpressionNode.FieldRead -> {
             val fieldName = deobfuscation.fieldName(node.field.ownerInternalName, node.field.name, node.field.descriptor)
-            node.receiver?.let { "${renderValue(it, expression)}.$fieldName" }
-                ?: "${sourceName(node.field.ownerInternalName)}.$fieldName"
+            node.receiver?.let { "${renderValue(it, expression)}.$fieldName" } ?: "${deobfuscation.sourceClassName(node.field.ownerInternalName)}.$fieldName"
         }
 
         is ExpressionNode.ArrayRead -> "${renderValue(node.array, expression)}[${renderValue(node.index, expression)}]"
         is ExpressionNode.ArrayLength -> "${renderValue(node.array, expression)}.length"
         is ExpressionNode.Call -> renderCall(node.method, node.receiver, node.arguments, expression)
-        is ExpressionNode.DynamicCall ->
-            renderStringConcat(node.callSite, node.arguments, expression)
-                ?: "/* invokedynamic ${node.callSite.name} */ (${renderArguments(node.arguments, node.callSite.type.parameterTypes, expression)})"
+        is ExpressionNode.DynamicCall -> renderStringConcat(node.callSite, node.arguments, expression) ?: "/* invokedynamic ${node.callSite.name} */ (${
+            renderArguments(
+                node.arguments, node.callSite.type.parameterTypes, expression
+            )
+        })"
 
-        is ExpressionNode.NewObject -> "new ${sourceName(node.internalName)} /* uninitialized */"
-        is ExpressionNode.ConstructObject ->
-            "new ${sourceName(node.internalName)}(${renderArguments(node.arguments, node.constructor.type.parameterTypes, expression)})"
+        is ExpressionNode.NewObject -> "new ${deobfuscation.sourceClassName(node.internalName)} /* uninitialized */"
+        is ExpressionNode.ConstructObject -> "new ${deobfuscation.sourceClassName(node.internalName)}(${renderArguments(node.arguments, node.constructor.type.parameterTypes, expression)})"
 
         is ExpressionNode.NewArray -> renderNewArray(node, expression)
         is ExpressionNode.Cast -> "(${formatType(node.targetType)}) ${renderValue(node.operand, expression)}"
         is ExpressionNode.InstanceOf -> "${renderValue(node.operand, expression)} instanceof ${formatType(node.targetType)}"
-        is ExpressionNode.Raw ->
-            "/* ${node.opcode}${node.inputs.joinToString(prefix = "(", postfix = ")") { renderValue(it, expression) }} */ null"
+        is ExpressionNode.Raw -> "/* ${node.opcode}${node.inputs.joinToString(prefix = "(", postfix = ")") { renderValue(it, expression) }} */ null"
     }
 
-    private fun renderValue(id: ValueId, expression: ExpressionAnalysis, parentPrecedence: Int): String {
+    private fun renderValue(id: ValueId, expression: ExpressionAnalysis, parentPrecedence: Int, mode: ValueRenderingMode = ValueRenderingMode.MATERIALIZED): String {
         val value = expression.values[id] ?: return "v${id.value}"
         if (value.node is ExpressionNode.Root) return renderNode(value.node, expression)
-        if (id !in expression.materialization.inlineValues) return "v${id.value}"
+        if (mode == ValueRenderingMode.MATERIALIZED && id !in expression.materialization.inlineValues) return "v${id.value}"
         val precedence = precedence(value.node)
         val rendered = renderInlineNode(value.node, expression, precedence)
         return if (precedence < parentPrecedence) "($rendered)" else rendered
     }
 
-    private fun renderThreeWayComparison(
-        condition: BranchCondition,
-        expression: ExpressionAnalysis,
-    ): String? {
+    private fun renderThreeWayComparison(condition: BranchCondition, expression: ExpressionAnalysis): String? {
         if (condition.right != BranchOperand.Zero) return null
         val compare = (expression.values[condition.left]?.node as? ExpressionNode.ThreeWayCompare) ?: return null
         val left = renderValue(compare.left, expression, PRECEDENCE_RELATIONAL)
@@ -182,20 +148,14 @@ internal class SourceExpressionRenderer(
         val directOperator = when (compare.nanResult) {
             null -> condition.operator
             -1 -> when (condition.operator) {
-                ComparisonOperator.EQ,
-                ComparisonOperator.NE,
-                ComparisonOperator.GT,
-                ComparisonOperator.GE -> condition.operator
+                ComparisonOperator.EQ, ComparisonOperator.NE, ComparisonOperator.GT, ComparisonOperator.GE -> condition.operator
 
                 ComparisonOperator.LT -> null
                 ComparisonOperator.LE -> null
             }
 
             1 -> when (condition.operator) {
-                ComparisonOperator.EQ,
-                ComparisonOperator.NE,
-                ComparisonOperator.LT,
-                ComparisonOperator.LE -> condition.operator
+                ComparisonOperator.EQ, ComparisonOperator.NE, ComparisonOperator.LT, ComparisonOperator.LE -> condition.operator
 
                 ComparisonOperator.GT -> null
                 ComparisonOperator.GE -> null
@@ -223,15 +183,15 @@ internal class SourceExpressionRenderer(
         }
     }
 
-    private fun renderBooleanValue(id: ValueId, expression: ExpressionAnalysis): String {
-        val value = expression.values[id] ?: return "v${id.value} != 0"
-        val constant = (value.node as? ExpressionNode.Constant)?.value
+    private fun renderBooleanValue(id: ValueId, expression: ExpressionAnalysis, parentPrecedence: Int = PRECEDENCE_LOWEST, mode: ValueRenderingMode = ValueRenderingMode.MATERIALIZED): String {
+        val value = expression.values[id]
+        val constant = (value?.node as? ExpressionNode.Constant)?.value
         if (constant?.equals(0) == true) return "false"
         if (constant?.equals(1) == true) return "true"
-        if (value.type == JvmValueType.Computational(JvmComputationalType.BOOLEAN)) {
-            return renderValue(id, expression)
-        }
-        return "${renderValue(id, expression, PRECEDENCE_EQUALITY)} != 0"
+        if (value?.type?.isBoolean == true) return renderValue(id, expression, parentPrecedence, mode)
+
+        val rendered = "${renderValue(id, expression, PRECEDENCE_EQUALITY, mode)} != 0"
+        return if (PRECEDENCE_EQUALITY < parentPrecedence) "($rendered)" else rendered
     }
 
     private fun arrayComponentType(array: ValueId, expression: ExpressionAnalysis): JvmType? {
@@ -240,17 +200,14 @@ internal class SourceExpressionRenderer(
         return arrayType?.componentType
     }
 
-    private fun renderArguments(
-        arguments: List<ValueId>,
-        parameterTypes: List<JvmType>,
-        expression: ExpressionAnalysis,
-    ): String = arguments.mapIndexed { index, argument ->
-        parameterTypes.getOrNull(index)?.let { renderValue(argument, expression, it) } ?: renderValue(argument, expression)
-    }.joinToString()
+    private fun renderArguments(arguments: List<ValueId>, parameterTypes: List<JvmType>, expression: ExpressionAnalysis): String =
+        arguments.mapIndexed { index, argument -> parameterTypes.getOrNull(index)?.let { renderValue(argument, expression, it) } ?: renderValue(argument, expression) }.joinToString()
 
     private fun renderInlineNode(node: ExpressionNode, expression: ExpressionAnalysis, ownPrecedence: Int): String = when (node) {
         is ExpressionNode.Constant -> formatConstant(node.value)
+
         is ExpressionNode.Unary -> "${node.operator.symbol}${renderValue(node.operand, expression, PRECEDENCE_UNARY)}"
+
         is ExpressionNode.Binary -> {
             val left = renderValue(node.left, expression, ownPrecedence)
             val right = renderValue(node.right, expression, ownPrecedence + 1)
@@ -263,6 +220,7 @@ internal class SourceExpressionRenderer(
         }
 
         is ExpressionNode.Conversion -> "(${formatValueType(node.targetType)}) ${renderValue(node.operand, expression, PRECEDENCE_UNARY)}"
+
         else -> renderNode(node, expression)
     }
 
@@ -294,7 +252,9 @@ internal class SourceExpressionRenderer(
         expression: ExpressionAnalysis,
     ): String? {
         if (!isStringConcatCallSite(callSite)) return null
-        val recipe = (callSite.bootstrapArguments.firstOrNull() as? Any) as? String ?: return null
+        val recipeConstant = callSite.bootstrapArguments.firstOrNull() ?: return null
+        if (recipeConstant.javaClass != String::class.java) return null
+        val recipe = recipeConstant.toString()
         val constants = callSite.bootstrapArguments.drop(1)
         val parts = mutableListOf<StringConcatPart>()
         val literal = StringBuilder()
@@ -343,34 +303,30 @@ internal class SourceExpressionRenderer(
         return renderedParts.joinToString(" + ")
     }
 
-    private fun renderStringConcatArgument(
-        argument: ValueId,
-        expectedType: JvmType?,
-        expression: ExpressionAnalysis,
-    ): String {
+    private fun renderStringConcatArgument(argument: ValueId, expectedType: JvmType?, expression: ExpressionAnalysis): String {
         if (expectedType != JvmType.BooleanType) {
             return renderValue(argument, expression, PRECEDENCE_ADDITIVE + 1)
         }
-
-        val value = expression.values[argument]
-        val constant = (value?.node as? ExpressionNode.Constant)?.value
-        if (constant?.equals(0) == true) return "false"
-        if (constant?.equals(1) == true) return "true"
-        if (value?.type == JvmValueType.Computational(JvmComputationalType.BOOLEAN)) {
-            return renderValue(argument, expression, PRECEDENCE_ADDITIVE + 1)
-        }
-        return "(${renderValue(argument, expression, PRECEDENCE_EQUALITY)} != 0)"
+        return renderBooleanValue(argument, expression, PRECEDENCE_ADDITIVE + 1)
     }
 
     private fun isStringConcatCallSite(callSite: DynamicCallSite): Boolean =
-        callSite.bootstrapMethod.owner().descriptorString() == "Ljava/lang/invoke/StringConcatFactory;" &&
-            callSite.bootstrapMethod.methodName() == "makeConcatWithConstants"
+        callSite.bootstrapMethod.owner().descriptorString() == "Ljava/lang/invoke/StringConcatFactory;" && callSite.bootstrapMethod.methodName() == "makeConcatWithConstants"
 
-    private fun renderStringConcatConstant(constant: java.lang.constant.ConstantDesc): String? =
-        when (val value: Any = constant) {
-            is String, is Int, is Long, is Float, is Double -> value.toString()
-            else -> null
-        }
+    private fun renderStringConcatConstant(constant: java.lang.constant.ConstantDesc): String? = when (constant.javaClass) {
+        String::class.java,
+        Int::class.javaObjectType,
+        Long::class.javaObjectType,
+        Float::class.javaObjectType,
+        Double::class.javaObjectType,
+            -> constant.toString()
+
+        else -> null
+    }
+
+    private enum class ValueRenderingMode {
+        MATERIALIZED, DEFINITION,
+    }
 
     private sealed interface StringConcatPart {
         data class Literal(val value: String) : StringConcatPart
@@ -395,7 +351,7 @@ internal class SourceExpressionRenderer(
             }
         }
 
-        val target = receiver?.let { renderValue(it, expression) } ?: sourceName(method.ownerInternalName)
+        val target = receiver?.let { renderValue(it, expression) } ?: deobfuscation.sourceClassName(method.ownerInternalName)
         val methodName = deobfuscation.methodName(method.ownerInternalName, method.name, method.descriptor)
         return "$target.$methodName($renderedArguments)"
     }
@@ -407,63 +363,16 @@ internal class SourceExpressionRenderer(
         return "new ${formatType(component)}$dimensions"
     }
 
-    private fun renderValueForType(id: ValueId, type: JvmValueType, expression: ExpressionAnalysis): String =
-        if (type == JvmValueType.Computational(JvmComputationalType.BOOLEAN)) {
-            renderSourceLocalBooleanValue(id, expression)
-        } else {
-            renderSourceLocalValue(id, expression)
-        }
-
-    /**
-     * Renders a value whose original definition is being absorbed into a reconstructed source local.
-     * Unlike renderValue(), this deliberately ignores ExpressionMaterialization.inlineValues: the old
-     * SSA temporary will no longer be emitted, so referring to its vN name would leave an undefined value.
-     */
-    private fun renderSourceLocalValue(
-        id: ValueId,
-        expression: ExpressionAnalysis,
-        parentPrecedence: Int = PRECEDENCE_LOWEST,
-    ): String {
-        val value = expression.values[id] ?: return "v${id.value}"
-        if (value.node is ExpressionNode.Root) return renderNode(value.node, expression)
-        val precedence = precedence(value.node)
-        val rendered = renderInlineNode(value.node, expression, precedence)
-        return if (precedence < parentPrecedence) "($rendered)" else rendered
+    /** Renders a value whose original SSA definition is absorbed into a reconstructed source local. */
+    private fun renderValueForType(id: ValueId, type: JvmValueType, expression: ExpressionAnalysis): String = if (type.isBoolean) {
+        renderBooleanValue(id, expression, mode = ValueRenderingMode.DEFINITION)
+    } else {
+        renderValue(id, expression, PRECEDENCE_LOWEST, ValueRenderingMode.DEFINITION)
     }
 
-    private fun renderSourceLocalBooleanValue(id: ValueId, expression: ExpressionAnalysis): String {
-        val value = expression.values[id] ?: return "v${id.value} != 0"
-        val constant = (value.node as? ExpressionNode.Constant)?.value
-        if (constant?.equals(0) == true) return "false"
-        if (constant?.equals(1) == true) return "true"
-        if (value.type == JvmValueType.Computational(JvmComputationalType.BOOLEAN)) {
-            return renderSourceLocalValue(id, expression)
-        }
-        return "${renderSourceLocalValue(id, expression, PRECEDENCE_EQUALITY)} != 0"
-    }
+    private fun formatValueType(type: JvmValueType): String = type.formatTypeName(deobfuscation::sourceClassName, nullTypeName = "Object", unknownReferenceName = "Object")
 
-    private fun formatValueType(type: JvmValueType): String = when (type) {
-        is JvmValueType.Computational -> type.type.name.lowercase()
-        is JvmValueType.Reference -> when (val reference = type.referenceType) {
-            is JvmReferenceType.Exact -> formatType(reference.type)
-            JvmReferenceType.Null,
-            JvmReferenceType.Unknown -> "Object"
-        }
-    }
-
-    private fun formatType(type: JvmType): String = when (type) {
-        JvmType.BooleanType -> "boolean"
-        JvmType.ByteType -> "byte"
-        JvmType.CharType -> "char"
-        JvmType.ShortType -> "short"
-        JvmType.IntType -> "int"
-        JvmType.LongType -> "long"
-        JvmType.FloatType -> "float"
-        JvmType.DoubleType -> "double"
-        JvmType.VoidType -> "void"
-        is JvmType.ObjectType -> sourceName(type.internalName)
-        is JvmType.ArrayType -> "${formatType(type.componentType)}[]"
-    }
+    private fun formatType(type: JvmType): String = type.formatTypeName(deobfuscation::sourceClassName)
 
     private fun formatConstant(value: Any): String {
         if (value == ConstantDescs.NULL) return "null"
@@ -504,8 +413,6 @@ internal class SourceExpressionRenderer(
         }
     }
 
-    private fun sourceName(internalName: String): String = deobfuscation.classInternalName(internalName).replace('/', '.')
-
     private companion object {
         const val PRECEDENCE_LOWEST = 0
         const val PRECEDENCE_CONDITIONAL = 1
@@ -522,15 +429,11 @@ internal class SourceExpressionRenderer(
     }
 }
 
-
 /** Lexical source names assigned to JVM-root values already represented by source syntax. */
-internal data class SourceValueBindings(
-    private val exceptionParameters: Map<Int, String> = emptyMap(),
-) {
+internal data class SourceValueBindings(private val exceptionParameters: Map<Int, String> = emptyMap()) {
     fun exceptionParameter(handlerInstructionIndex: Int): String? = exceptionParameters[handlerInstructionIndex]
 
-    fun withExceptionParameter(handlerInstructionIndex: Int, name: String): SourceValueBindings =
-        copy(exceptionParameters = exceptionParameters + (handlerInstructionIndex to name))
+    fun withExceptionParameter(handlerInstructionIndex: Int, name: String): SourceValueBindings = copy(exceptionParameters = exceptionParameters + (handlerInstructionIndex to name))
 
     companion object {
         val EMPTY = SourceValueBindings()

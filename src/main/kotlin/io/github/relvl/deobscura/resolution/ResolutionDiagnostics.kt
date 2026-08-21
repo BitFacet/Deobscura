@@ -17,10 +17,7 @@ class ResolutionDiagnostics(
         val unresolvedReferences = linkedMapOf<String, MutableUnresolvedReference>()
         val warnings = mutableListOf<String>()
 
-        jarLoadResult.classes.values
-            .asSequence()
-            .filter { it.origin.role == JarRole.INPUT }
-            .forEach { loadedClass ->
+        jarLoadResult.classes.values.asSequence().filter { it.origin.role == JarRole.INPUT }.forEach { loadedClass ->
                 val references = try {
                     scanner.scan(loadedClass)
                 } catch (exception: Exception) {
@@ -30,16 +27,12 @@ class ResolutionDiagnostics(
 
                 for (reference in references) {
                     if (resolver.findClass(reference.internalName) == null) {
-                        unresolvedReferences
-                            .getOrPut(reference.internalName) { MutableUnresolvedReference() }
-                            .add(loadedClass.internalName, reference.kind)
+                        unresolvedReferences.getOrPut(reference.internalName) { MutableUnresolvedReference() }.add(loadedClass.internalName, reference.kind)
                     }
                 }
             }
 
-        val unresolved = unresolvedReferences
-            .toSortedMap()
-            .map { (internalName, reference) ->
+        val unresolved = unresolvedReferences.toSortedMap().map { (internalName, reference) ->
                 UnresolvedClassReference(
                     internalName = internalName,
                     kind = reference.strongestKind,

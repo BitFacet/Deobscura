@@ -10,11 +10,7 @@ import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
 
 class ConfigRepository {
-    private val mapper = JsonMapper.builder()
-        .addModule(kotlinModule())
-        .configure(JsonReadFeature.ALLOW_JAVA_COMMENTS, true)
-        .configure(JsonReadFeature.ALLOW_TRAILING_COMMA, true)
-        .build()
+    private val mapper = JsonMapper.builder().addModule(kotlinModule()).configure(JsonReadFeature.ALLOW_JAVA_COMMENTS, true).configure(JsonReadFeature.ALLOW_TRAILING_COMMA, true).build()
 
     fun loadOrCreate(path: Path): ConfigLoadResult {
         if (Files.notExists(path)) {
@@ -47,26 +43,16 @@ class ConfigRepository {
     }
 
     private fun render(config: DeobscuraConfig): String {
-        val constructor = DeobscuraConfig::class.primaryConstructor
-            ?: throw ConfigException("DeobscuraConfig must have a primary constructor.")
+        val constructor = DeobscuraConfig::class.primaryConstructor ?: throw ConfigException("DeobscuraConfig must have a primary constructor.")
         val properties = DeobscuraConfig::class.memberProperties.associateBy { it.name }
 
         val renderedProperties = constructor.parameters.map { parameter ->
-            val name = parameter.name
-                ?: throw ConfigException("All DeobscuraConfig constructor parameters must be named.")
-            val property = properties[name]
-                ?: throw ConfigException("No property found for DeobscuraConfig constructor parameter '$name'.")
-            val description = parameter.annotations
-                .filterIsInstance<ConfigProperty>()
-                .singleOrNull()
-                ?.description
-                ?: throw ConfigException("DeobscuraConfig property '$name' is missing @ConfigProperty.")
+            val name = parameter.name ?: throw ConfigException("All DeobscuraConfig constructor parameters must be named.")
+            val property = properties[name] ?: throw ConfigException("No property found for DeobscuraConfig constructor parameter '$name'.")
+            val description = parameter.annotations.filterIsInstance<ConfigProperty>().singleOrNull()?.description ?: throw ConfigException("DeobscuraConfig property '$name' is missing @ConfigProperty.")
 
             buildString {
-                description.lineSequence()
-                    .map(String::trim)
-                    .filter(String::isNotEmpty)
-                    .forEach { append("  // ").append(it).append('\n') }
+                description.lineSequence().map(String::trim).filter(String::isNotEmpty).forEach { append("  // ").append(it).append('\n') }
 
                 append("  ")
                 append(mapper.writeValueAsString(name))

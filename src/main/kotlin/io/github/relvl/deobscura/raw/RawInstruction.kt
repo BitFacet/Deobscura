@@ -7,18 +7,7 @@ import java.lang.constant.DirectMethodHandleDesc
 value class JvmOpcode(val mnemonic: String)
 
 enum class JvmComputationalType {
-    BOOLEAN,
-    BYTE,
-    CHAR,
-    SHORT,
-    INT,
-    LONG,
-    FLOAT,
-    DOUBLE,
-    REFERENCE,
-    VOID,
-    RETURN_ADDRESS,
-    ;
+    BOOLEAN, BYTE, CHAR, SHORT, INT, LONG, FLOAT, DOUBLE, REFERENCE, VOID, RETURN_ADDRESS, ;
 
     companion object {
         fun fromClassFileName(name: String): JvmComputationalType = valueOf(name)

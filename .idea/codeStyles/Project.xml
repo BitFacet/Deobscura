@@ -1,7 +1,7 @@
 <component name="ProjectCodeStyleConfiguration">
   <code_scheme name="Project" version="173">
     <option name="AUTODETECT_INDENTS" value="false" />
-    <option name="RIGHT_MARGIN" value="180" />
+    <option name="RIGHT_MARGIN" value="220" />
     <option name="FORMATTER_TAGS_ENABLED" value="true" />
     <option name="CLASS_BRACE_STYLE" value="2" />
     <option name="METHOD_BRACE_STYLE" value="2" />
@@ -658,6 +658,9 @@
     </codeStyleSettings>
     <codeStyleSettings language="kotlin">
       <option name="CODE_STYLE_DEFAULTS" value="KOTLIN_OFFICIAL" />
+      <option name="RIGHT_MARGIN" value="220" />
+      <option name="KEEP_LINE_BREAKS" value="false" />
+      <option name="KEEP_FIRST_COLUMN_COMMENT" value="false" />
       <option name="WRAP_FIRST_METHOD_IN_CALL_CHAIN" value="true" />
     </codeStyleSettings>
     <codeStyleSettings language="yaml">

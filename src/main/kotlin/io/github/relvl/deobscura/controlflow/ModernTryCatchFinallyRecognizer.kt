@@ -73,9 +73,7 @@ internal class ModernTryCatchFinallyRecognizer(
         val family = familyBuild.topology ?: return reject("family:${familyBuild.failure ?: "unknown"}")
         if (family.mixedGroups.isEmpty()) return reject("no-mixed-groups")
 
-        val mixedSignatures = family.mixedGroups
-            .map { candidate -> exceptionHandlerSignature(candidate.group.handlers, exceptionTopology.labelPositions) }
-            .distinct()
+        val mixedSignatures = family.mixedGroups.map { candidate -> exceptionHandlerSignature(candidate.group.handlers, exceptionTopology.labelPositions) }.distinct()
         if (mixedSignatures.size != 1) return reject("mixed-signature-count=${mixedSignatures.size}")
 
         val sourceScope = family.typedTopology.scopes.singleOrNull() ?: return reject("typed-scope-count=${family.typedTopology.scopes.size}")

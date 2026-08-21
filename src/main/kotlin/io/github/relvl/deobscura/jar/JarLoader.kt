@@ -103,13 +103,9 @@ class JarLoader(
         return JarFile(source.path.toFile(), false, JarFile.OPEN_READ, runtimeVersion).use { jar ->
             val multiRelease = jar.isMultiRelease
             jar.versionedStream().use { entries ->
-                entries
-                    .filter { entry ->
-                        !entry.isDirectory &&
-                            entry.name.endsWith(CLASS_SUFFIX) &&
-                            (multiRelease || !entry.name.startsWith(MULTI_RELEASE_PREFIX))
-                    }
-                    .map { entry ->
+                entries.filter { entry ->
+                        !entry.isDirectory && entry.name.endsWith(CLASS_SUFFIX) && (multiRelease || !entry.name.startsWith(MULTI_RELEASE_PREFIX))
+                    }.map { entry ->
                         LoadedClass(
                             internalName = entry.name.removeSuffix(CLASS_SUFFIX),
                             bytes = jar.getInputStream(entry).use { it.readAllBytes() },
@@ -119,8 +115,7 @@ class JarLoader(
                                 role = source.role,
                             ),
                         )
-                    }
-                    .toList()
+                    }.toList()
             }
         }
     }
@@ -137,8 +132,7 @@ class JarLoader(
 }
 
 enum class JarRole {
-    INPUT,
-    CLASSPATH,
+    INPUT, CLASSPATH,
 }
 
 data class ClassOrigin(

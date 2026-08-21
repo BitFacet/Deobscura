@@ -57,8 +57,7 @@ class ClassHierarchyTest {
         }
     }
 
-    private fun exact(internalName: String): JvmReferenceType =
-        JvmReferenceType.Exact(JvmType.ObjectType(internalName))
+    private fun exact(internalName: String): JvmReferenceType = JvmReferenceType.Exact(JvmType.ObjectType(internalName))
 
     private fun emptyJarResult() = JarLoadResult(
         classes = emptyMap(),

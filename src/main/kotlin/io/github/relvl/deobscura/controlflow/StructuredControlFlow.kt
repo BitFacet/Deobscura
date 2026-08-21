@@ -74,43 +74,29 @@ sealed interface StructuredCondition {
 }
 
 enum class UnstructuredControlFlowKind {
-    CONDITIONAL,
-    SWITCH,
-    EXCEPTION,
+    CONDITIONAL, SWITCH, EXCEPTION,
 }
 
 enum class UnstructuredControlFlowReason(val diagnosticName: String) {
-    SWITCH_MISSING_EDGES("switch-missing-edges"),
-    SWITCH_NO_CONTINUATION("switch-no-common-continuation"),
-    SWITCH_EXTERNAL_ENTRY("switch-case-has-external-entry"),
-    SWITCH_OVERLAPPING_CASES("switch-overlapping-case-regions"),
-    SWITCH_UNSUPPORTED_EXIT("switch-unsupported-exit-shape"),
-    EXCEPTION_EMPTY_PROTECTED_REGION("exception-empty-protected-region"),
-    EXCEPTION_INVALID_PROTECTED_ENTRY("exception-invalid-protected-entry"),
-    EXCEPTION_INVALID_HANDLER_ENTRY("exception-invalid-handler-entry"),
-    EXCEPTION_CATCH_ALL_UNSUPPORTED("exception-catch-all-finally-unsupported"),
-    EXCEPTION_PROTECTED_REGION_HAS_EXTERNAL_ENTRY("exception-protected-region-has-external-entry"),
-    EXCEPTION_NO_COMMON_CONTINUATION("exception-no-common-continuation"),
-    EXCEPTION_EMPTY_HANDLER_REGION("exception-empty-handler-region"),
-    EXCEPTION_OVERLAPPING_HANDLER_REGIONS("exception-overlapping-handler-regions"),
-    EXCEPTION_HANDLER_HAS_EXTERNAL_ENTRY("exception-handler-has-external-entry"),
-    EXCEPTION_UNSUPPORTED_HANDLER_EXIT("exception-unsupported-handler-exit-shape"),
-    MISSING_BRANCH_EDGES("missing-conditional-or-fallthrough-edge"),
-    IDENTICAL_SUCCESSORS("identical-successors"),
-    NO_COMMON_POST_DOMINATOR("no-common-post-dominator"),
-    INVALID_JOIN("invalid-join"),
-    TERMINAL_ARM("terminal-arm"),
-    ARM_REENTERS_HEADER("arm-reenters-header"),
-    ARM_LEAVES_REACHABLE_FLOW("arm-leaves-reachable-flow"),
-    ARM_HAS_OTHER_EXIT("arm-has-non-join-exit"),
-    OVERLAPPING_ARMS("overlapping-arms"),
-    EXTERNAL_ARM_ENTRY("arm-has-external-entry"),
-    LOOP_NOT_TWO_SUCCESSORS("loop-header-not-two-successors"),
-    LOOP_BODY_EXIT_SHAPE("loop-body-exit-shape"),
-    LOOP_HAS_ADDITIONAL_EXIT("loop-has-additional-exit"),
-    LOOP_HAS_EXTERNAL_ENTRY("loop-body-has-external-entry"),
-    LOOP_MISSING_CONDITIONAL_EDGE("loop-missing-conditional-edge"),
-    UNSUPPORTED_SHAPE("unsupported-shape"),
+    SWITCH_MISSING_EDGES("switch-missing-edges"), SWITCH_NO_CONTINUATION("switch-no-common-continuation"), SWITCH_EXTERNAL_ENTRY("switch-case-has-external-entry"), SWITCH_OVERLAPPING_CASES("switch-overlapping-case-regions"), SWITCH_UNSUPPORTED_EXIT(
+        "switch-unsupported-exit-shape"
+    ),
+    EXCEPTION_EMPTY_PROTECTED_REGION("exception-empty-protected-region"), EXCEPTION_INVALID_PROTECTED_ENTRY("exception-invalid-protected-entry"), EXCEPTION_INVALID_HANDLER_ENTRY("exception-invalid-handler-entry"), EXCEPTION_CATCH_ALL_UNSUPPORTED(
+        "exception-catch-all-finally-unsupported"
+    ),
+    EXCEPTION_PROTECTED_REGION_HAS_EXTERNAL_ENTRY("exception-protected-region-has-external-entry"), EXCEPTION_NO_COMMON_CONTINUATION("exception-no-common-continuation"), EXCEPTION_EMPTY_HANDLER_REGION("exception-empty-handler-region"), EXCEPTION_OVERLAPPING_HANDLER_REGIONS(
+        "exception-overlapping-handler-regions"
+    ),
+    EXCEPTION_HANDLER_HAS_EXTERNAL_ENTRY("exception-handler-has-external-entry"), EXCEPTION_UNSUPPORTED_HANDLER_EXIT("exception-unsupported-handler-exit-shape"), MISSING_BRANCH_EDGES("missing-conditional-or-fallthrough-edge"), IDENTICAL_SUCCESSORS(
+        "identical-successors"
+    ),
+    NO_COMMON_POST_DOMINATOR("no-common-post-dominator"), INVALID_JOIN("invalid-join"), TERMINAL_ARM("terminal-arm"), ARM_REENTERS_HEADER("arm-reenters-header"), ARM_LEAVES_REACHABLE_FLOW("arm-leaves-reachable-flow"), ARM_HAS_OTHER_EXIT(
+        "arm-has-non-join-exit"
+    ),
+    OVERLAPPING_ARMS("overlapping-arms"), EXTERNAL_ARM_ENTRY("arm-has-external-entry"), LOOP_NOT_TWO_SUCCESSORS("loop-header-not-two-successors"), LOOP_BODY_EXIT_SHAPE("loop-body-exit-shape"), LOOP_HAS_ADDITIONAL_EXIT("loop-has-additional-exit"), LOOP_HAS_EXTERNAL_ENTRY(
+        "loop-body-has-external-entry"
+    ),
+    LOOP_MISSING_CONDITIONAL_EDGE("loop-missing-conditional-edge"), UNSUPPORTED_SHAPE("unsupported-shape"),
 }
 
 data class UnstructuredControlFlowDiagnostic(
@@ -125,9 +111,7 @@ data class UnstructuredControlFlowDiagnostic(
 )
 
 enum class StructuredArmExitKind {
-    RETURN_OR_THROW,
-    CONTINUE,
-    BREAK,
+    RETURN_OR_THROW, CONTINUE, BREAK,
 }
 
 enum class StructuredRegionTransferKind {
@@ -161,11 +145,7 @@ data class StructuredRegionTransfer(
  * A case with multiple boundary transfers intentionally has no single `exit`.
  */
 enum class StructuredSwitchCaseExitKind {
-    BREAK,
-    NORMAL,
-    FALLTHROUGH,
-    CONTINUE,
-    RETURN_OR_THROW,
+    BREAK, NORMAL, FALLTHROUGH, CONTINUE, RETURN_OR_THROW,
 }
 
 data class StructuredSwitchCaseExit(
@@ -198,7 +178,6 @@ data class StructuredArmExit(
     /** Control-flow target represented by CONTINUE/BREAK; null for return/throw. */
     val target: BasicBlockId? = null,
 )
-
 
 data class StructuredProtectedRange(
     val startInstructionIndex: Int,

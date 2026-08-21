@@ -4,9 +4,7 @@ import io.github.relvl.deobscura.cfg.BasicBlockId
 
 /** Outcome of one fixed-point ownership expansion step. */
 internal enum class ExceptionOwnershipExpansion {
-    UNCHANGED,
-    CHANGED,
-    REJECTED,
+    UNCHANGED, CHANGED, REJECTED,
 }
 
 /**
@@ -27,9 +25,7 @@ internal fun closeOverContainedExceptionRegions(
     do {
         changed = false
         val containedGroups = groups.filter { candidate ->
-            !excludeGroup(candidate) &&
-                candidate.protectedBlocks.isNotEmpty() &&
-                candidate.protectedBlocks.all { it in owned }
+            !excludeGroup(candidate) && candidate.protectedBlocks.isNotEmpty() && candidate.protectedBlocks.all { it in owned }
         }
         val entriesByGroup = containedGroups.associateWith(handlerEntriesFor)
         val containedHandlerEntries = entriesByGroup.values.flatMapTo(linkedSetOf()) { it }

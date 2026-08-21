@@ -161,7 +161,6 @@ class JavaLikeSourceRendererTest {
         assertContains(rendered, "@Override\n    public void run();")
     }
 
-
     private fun constructor(
         descriptor: String,
         maxLocals: Int,

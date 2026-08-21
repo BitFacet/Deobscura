@@ -94,12 +94,7 @@ class ValueFlowAnalyzer {
         }
 
         is RawNewObjectInstruction -> produce(
-            instruction,
-            index,
-            JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType(instruction.internalName))),
-            emptyList(),
-            state,
-            allocator
+            instruction, index, JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType(instruction.internalName))), emptyList(), state, allocator
         )
 
         is RawNewArrayInstruction -> {
@@ -202,7 +197,7 @@ class ValueFlowAnalyzer {
         if (componentType != JvmComputationalType.REFERENCE) return JvmValueType.of(componentType)
         val exactArray = (array.type as? JvmValueType.Reference)?.referenceType as? JvmReferenceType.Exact
         val component = (exactArray?.type as? JvmType.ArrayType)?.componentType
-        return if (component is JvmType.ObjectType || component is JvmType.ArrayType) {
+        return if (component?.isReferenceType == true) {
             JvmValueType.Reference(JvmReferenceType.Exact(component))
         } else {
             JvmValueType.Reference(JvmReferenceType.Unknown)
@@ -391,10 +386,9 @@ class ValueFlowAnalyzer {
         return value
     }
 
-    private fun unsupported(instruction: RawInstruction, index: Int): Nothing =
-        throw UnsupportedValueFlowInstructionException(
-            "Unsupported instruction '${instruction.opcode.mnemonic}' at instruction $index (${instruction::class.simpleName}).",
-        )
+    private fun unsupported(instruction: RawInstruction, index: Int): Nothing = throw UnsupportedValueFlowInstructionException(
+        "Unsupported instruction '${instruction.opcode.mnemonic}' at instruction $index (${instruction::class.simpleName}).",
+    )
 
     private data class SymbolicValue(val id: ValueId, val type: JvmValueType) {
         val kind: FrameValueKind get() = type.kind
@@ -424,12 +418,10 @@ class ValueFlowAnalyzer {
             return value
         }
 
-        fun popAny(): SymbolicValue = stack.removeLastOrNull()
-            ?: throw ValueFlowInconsistencyException("Operand stack underflow.")
+        fun popAny(): SymbolicValue = stack.removeLastOrNull() ?: throw ValueFlowInconsistencyException("Operand stack underflow.")
 
         fun requireLocal(slot: Int, expected: FrameValueKind): SymbolicValue {
-            val value = locals.getOrNull(slot)
-                ?: throw ValueFlowInconsistencyException("Local slot $slot is unavailable.")
+            val value = locals.getOrNull(slot) ?: throw ValueFlowInconsistencyException("Local slot $slot is unavailable.")
             if (value.kind != expected) {
                 throw ValueFlowInconsistencyException("Expected $expected in local slot $slot, got ${value.kind}.")
             }
@@ -483,8 +475,7 @@ class ValueFlowAnalyzer {
             return precise
         }
 
-        fun instructionValue(index: Int, kind: FrameValueKind): SymbolicValue =
-            instructionValue(index, JvmValueType.of(kind))
+        fun instructionValue(index: Int, kind: FrameValueKind): SymbolicValue = instructionValue(index, JvmValueType.of(kind))
 
         fun verifyInstructionDefinitions(rawInstructions: List<RawInstruction>) {
             instructions.keys.forEach { index ->
@@ -494,8 +485,7 @@ class ValueFlowAnalyzer {
 
         private fun valueForOrigin(type: JvmValueType, origin: ValueOrigin): SymbolicValue = when (origin) {
             is ValueOrigin.Instruction -> instructionValueForFrame(origin.index, type)
-            else -> roots.getOrPut(origin) {
-                // A root is identified by its semantic origin, not by the contextual type observed
+            else -> roots.getOrPut(origin) { // A root is identified by its semantic origin, not by the contextual type observed
                 // at a particular block entry. Parameters, `this`, return addresses, and handler
                 // values are single SSA values even when frame merging later widens their type.
                 val id = newId()

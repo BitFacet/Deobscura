@@ -139,17 +139,7 @@ enum class UnaryOperator(val symbol: String) {
 }
 
 enum class BinaryOperator(val symbol: String) {
-    ADD("+"),
-    SUBTRACT("-"),
-    MULTIPLY("*"),
-    DIVIDE("/"),
-    REMAINDER("%"),
-    BIT_AND("&"),
-    BIT_OR("|"),
-    BIT_XOR("^"),
-    SHIFT_LEFT("<<"),
-    SHIFT_RIGHT(">>"),
-    UNSIGNED_SHIFT_RIGHT(">>>"),
+    ADD("+"), SUBTRACT("-"), MULTIPLY("*"), DIVIDE("/"), REMAINDER("%"), BIT_AND("&"), BIT_OR("|"), BIT_XOR("^"), SHIFT_LEFT("<<"), SHIFT_RIGHT(">>"), UNSIGNED_SHIFT_RIGHT(">>>"),
 }
 
 data class FieldSymbol(
@@ -168,10 +158,7 @@ data class MethodSymbol(
 )
 
 enum class InvocationKind {
-    STATIC,
-    VIRTUAL,
-    SPECIAL,
-    INTERFACE,
+    STATIC, VIRTUAL, SPECIAL, INTERFACE,
 }
 
 data class DynamicCallSite(
@@ -261,12 +248,7 @@ sealed interface BranchOperand {
 }
 
 enum class ComparisonOperator(val symbol: String) {
-    EQ("=="),
-    NE("!="),
-    LT("<"),
-    LE("<="),
-    GT(">"),
-    GE(">="),
+    EQ("=="), NE("!="), LT("<"), LE("<="), GT(">"), GE(">="),
 }
 
 class ExpressionIrInconsistencyException(message: String) : IllegalStateException(message)

@@ -50,9 +50,7 @@ internal class StructuredConditionalRecognizer {
                 return@forEach
             }
 
-            val containingLoop = loopContexts.asSequence()
-                .filter { header in it.loop.bodyBlocks }
-                .minByOrNull { it.loop.bodyBlocks.size }
+            val containingLoop = loopContexts.asSequence().filter { header in it.loop.bodyBlocks }.minByOrNull { it.loop.bodyBlocks.size }
             if (containingLoop != null) {
                 val loopTransferRegion = recognizeLoopTransferIf(
                     header = header,
@@ -134,15 +132,12 @@ internal class StructuredConditionalRecognizer {
                 rejections[header] = UnstructuredControlFlowReason.OVERLAPPING_ARMS
                 return@forEach
             }
-            if (!singleEntryArm(thenBlocks, header, predecessors, ignoredArmPredecessors) ||
-                !singleEntryArm(elseBlocks, header, predecessors, ignoredArmPredecessors)
-            ) {
+            if (!singleEntryArm(thenBlocks, header, predecessors, ignoredArmPredecessors) || !singleEntryArm(elseBlocks, header, predecessors, ignoredArmPredecessors)) {
                 rejections[header] = UnstructuredControlFlowReason.EXTERNAL_ARM_ENTRY
                 return@forEach
             }
 
-            if (thenBlocks.isEmpty() && elseBlocks.isNotEmpty()) {
-                // Prefer a non-empty `then` arm in the source view. This removes shapes such as
+            if (thenBlocks.isEmpty() && elseBlocks.isNotEmpty()) { // Prefer a non-empty `then` arm in the source view. This removes shapes such as
                 // `if (!condition) {} else { body }` without touching the canonical CFG.
                 regions += StructuredRegion.If(
                     header = header,
@@ -229,11 +224,7 @@ internal class StructuredConditionalRecognizer {
     }
 
     private fun reachableWithinLoop(
-        start: BasicBlockId,
-        target: BasicBlockId,
-        loop: StructuredRegion.While,
-        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
-        transferTargets: Set<BasicBlockId>
+        start: BasicBlockId, target: BasicBlockId, loop: StructuredRegion.While, outgoing: Map<BasicBlockId, List<ControlFlowEdge>>, transferTargets: Set<BasicBlockId>
     ): Boolean {
         if (start == target) return true
         val seen = hashSetOf<BasicBlockId>()
@@ -298,8 +289,7 @@ internal class StructuredConditionalRecognizer {
         predecessors: Map<BasicBlockId, List<BasicBlockId>>,
         ignoredPredecessors: Set<BasicBlockId> = emptySet(),
     ): LoopTransferRecognition? {
-        val loop = context.loop
-        // Prefer an explicit edge to the canonical loop exit over describing the opposite arm as
+        val loop = context.loop // Prefer an explicit edge to the canonical loop exit over describing the opposite arm as
         // `continue`; `if (x) break` is the direct source shape and leaves the remaining body as
         // the normal continuation.
         val candidates = listOf(
@@ -337,15 +327,13 @@ internal class StructuredConditionalRecognizer {
             var usedContinuationSpine = false
             if (conditionalTransfers && fallthroughTransfers) {
                 if (exit.kind != StructuredArmExitKind.CONTINUE) continue
-                when (
-                    selectLoopContinuation(
-                        conditionalTarget = conditionalTarget,
-                        conditionalArm = conditionalArm.blocks,
-                        fallthroughTarget = fallthroughTarget,
-                        fallthroughArm = fallthroughArm.blocks,
-                        context = context,
-                    )
-                ) {
+                when (selectLoopContinuation(
+                    conditionalTarget = conditionalTarget,
+                    conditionalArm = conditionalArm.blocks,
+                    fallthroughTarget = fallthroughTarget,
+                    fallthroughArm = fallthroughArm.blocks,
+                    context = context,
+                )) {
                     LoopContinuation.CONDITIONAL -> effectiveConditionalTransfers = false
                     LoopContinuation.FALLTHROUGH -> effectiveFallthroughTransfers = false
                     LoopContinuation.AMBIGUOUS -> continue
@@ -587,18 +575,13 @@ internal class StructuredConditionalRecognizer {
                 if (successor != join) queue.addLast(successor)
             }
         }
-        if (result.any { block -> outgoing[block].orEmpty().distinctTargets().any { it.to !in result && it.to != join } })
-            return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_HAS_OTHER_EXIT)
+        if (result.any { block -> outgoing[block].orEmpty().distinctTargets().any { it.to !in result && it.to != join } }) return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_HAS_OTHER_EXIT)
         return ArmCollection.Success(result)
     }
 
     private fun singleEntryArm(
-        arm: Set<BasicBlockId>,
-        header: BasicBlockId,
-        predecessors: Map<BasicBlockId, List<BasicBlockId>>,
-        ignoredPredecessors: Set<BasicBlockId> = emptySet()
+        arm: Set<BasicBlockId>, header: BasicBlockId, predecessors: Map<BasicBlockId, List<BasicBlockId>>, ignoredPredecessors: Set<BasicBlockId> = emptySet()
     ): Boolean = arm.all { block -> predecessors[block].orEmpty().all { it == header || it in arm || it in ignoredPredecessors } }
-
 
     private fun StructuredCondition.negated(): StructuredCondition = when (this) {
         is StructuredCondition.Atomic -> copy(condition = condition.negated())
@@ -618,11 +601,7 @@ internal class StructuredConditionalRecognizer {
     }
 
     private enum class LoopContinuation {
-        CONDITIONAL,
-        FALLTHROUGH,
-        CONDITIONAL_SPINE,
-        FALLTHROUGH_SPINE,
-        AMBIGUOUS,
+        CONDITIONAL, FALLTHROUGH, CONDITIONAL_SPINE, FALLTHROUGH_SPINE, AMBIGUOUS,
     }
 
     private data class LoopTransferRecognition(

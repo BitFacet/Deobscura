@@ -15,6 +15,7 @@ import io.github.relvl.deobscura.output.OutputDirectoryService
 import io.github.relvl.deobscura.raw.ClassImporter
 import io.github.relvl.deobscura.resolution.*
 import io.github.relvl.deobscura.source.SourceOutputService
+import io.github.relvl.deobscura.util.formatElapsedSeconds
 import org.slf4j.LoggerFactory
 import picocli.CommandLine.Command
 import picocli.CommandLine.Option
@@ -60,7 +61,7 @@ class DeobscuraCommand : Callable<Int> {
         }
 
         if (result == EXIT_SUCCESS) {
-            logger.info("Deobscura completed successfully in {}.", formatElapsed(System.nanoTime() - startedAt))
+            logger.info("Deobscura completed successfully in {}.", formatElapsedSeconds(System.nanoTime() - startedAt))
         }
         return result
     }
@@ -148,9 +149,6 @@ class DeobscuraCommand : Callable<Int> {
         val path = Path.of(value)
         return (if (path.isAbsolute) path else base.resolve(path)).normalize()
     }
-
-    private fun formatElapsed(nanos: Long): String =
-        String.format(java.util.Locale.ROOT, "%.1f s", nanos / 1_000_000_000.0)
 
     private companion object {
         const val DEFAULT_CONFIG = "default.jsonc"

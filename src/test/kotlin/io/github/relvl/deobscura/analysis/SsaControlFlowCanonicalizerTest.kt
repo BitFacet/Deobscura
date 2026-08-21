@@ -116,7 +116,6 @@ class SsaControlFlowCanonicalizerTest {
         )
     }
 
-
     @Test
     fun `bypassing passthrough block rewrites phi predecessor identity`() {
         val left = ValueId(0)
@@ -230,11 +229,9 @@ class SsaControlFlowCanonicalizerTest {
         entryBlock = BasicBlockId(0),
     )
 
-    private fun block(id: Int, start: Int, end: Int) =
-        BasicBlock(BasicBlockId(id), start, end, emptyList(), emptyList())
+    private fun block(id: Int, start: Int, end: Int) = BasicBlock(BasicBlockId(id), start, end, emptyList(), emptyList())
 
-    private fun edge(from: Int, to: Int, kind: ControlFlowEdgeKind) =
-        ControlFlowEdge(BasicBlockId(from), BasicBlockId(to), kind)
+    private fun edge(from: Int, to: Int, kind: ControlFlowEdgeKind) = ControlFlowEdge(BasicBlockId(from), BasicBlockId(to), kind)
 
     private fun goto(target: Int) = RawBranchInstruction(JvmOpcode("goto"), RawLabelId(target))
 

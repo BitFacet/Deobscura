@@ -86,12 +86,10 @@ class LegacySubroutineNormalizerTest {
         val analysis = frameAnalyzer.analyze("test/Owner", method, graph)
 
         val referenceLoadBlock = graph.blocks.single { block ->
-            result.code.instructions[block.startInstructionIndex] is RawLocalInstruction &&
-                (result.code.instructions[block.startInstructionIndex] as RawLocalInstruction).opcode.mnemonic == "aload"
+            result.code.instructions[block.startInstructionIndex] is RawLocalInstruction && (result.code.instructions[block.startInstructionIndex] as RawLocalInstruction).opcode.mnemonic == "aload"
         }
         val intLoadBlocks = graph.blocks.filter { block ->
-            result.code.instructions[block.startInstructionIndex] is RawLocalInstruction &&
-                (result.code.instructions[block.startInstructionIndex] as RawLocalInstruction).opcode.mnemonic == "iload"
+            result.code.instructions[block.startInstructionIndex] is RawLocalInstruction && (result.code.instructions[block.startInstructionIndex] as RawLocalInstruction).opcode.mnemonic == "iload"
         }
         val secondReturnSite = intLoadBlocks.last()
 

@@ -1,6 +1,7 @@
 package io.github.relvl.deobscura.deobfuscation
 
 import io.github.relvl.deobscura.raw.RawClass
+import io.github.relvl.deobscura.raw.methodParameterDescriptor
 import io.github.relvl.deobscura.resolution.MethodOverrideAnalysis
 import io.github.relvl.deobscura.resolution.MethodOverrideKey
 
@@ -18,11 +19,9 @@ data class DeobfuscationPlan(
 ) {
     fun classInternalName(original: String): String = renamePackage(original, packageRenames)
 
-    fun fieldName(ownerInternalName: String, name: String, descriptor: String): String =
-        fieldNames[FieldKey(ownerInternalName, name, descriptor)] ?: name
+    fun fieldName(ownerInternalName: String, name: String, descriptor: String): String = fieldNames[FieldKey(ownerInternalName, name, descriptor)] ?: name
 
-    fun methodName(ownerInternalName: String, name: String, descriptor: String): String =
-        methodNames[MethodKey(ownerInternalName, name, descriptor)] ?: name
+    fun methodName(ownerInternalName: String, name: String, descriptor: String): String = methodNames[MethodKey(ownerInternalName, name, descriptor)] ?: name
 
     companion object {
         fun build(
@@ -126,7 +125,7 @@ data class DeobfuscationPlan(
 
             classes.sortedBy { it.internalName }.forEach { rawClass ->
                 val methods = rawClass.methods.filterNot { it.name.startsWith("<") }
-                methods.groupBy { parameterDescriptor(it.descriptor) }.forEach { (_, sameParameters) ->
+                methods.groupBy { methodParameterDescriptor(it.descriptor) }.forEach { (_, sameParameters) ->
                     sameParameters.groupBy { it.name }.values.filter { it.size > 1 }.forEach collision@{ duplicates ->
                         val units = duplicates.map { method ->
                             val key = MethodOverrideKey(rawClass.internalName, method.name, method.descriptor)
@@ -182,18 +181,14 @@ data class DeobfuscationPlan(
             val members = methodOverrides.familyMembers(family).ifEmpty { setOf(family) }
             return members.all { member ->
                 val owner = classesByName[member.ownerInternalName] ?: return@all true
-                val params = parameterDescriptor(member.descriptor)
-                owner.methods.filterNot { it.name.startsWith("<") }
-                    .filter { parameterDescriptor(it.descriptor) == params }
-                    .none { other ->
+                val params = methodParameterDescriptor(member.descriptor)
+                owner.methods.filterNot { it.name.startsWith("<") }.filter { methodParameterDescriptor(it.descriptor) == params }.none { other ->
                         val otherKey = MethodOverrideKey(owner.internalName, other.name, other.descriptor)
                         val otherFamily = methodOverrides.familyOf(otherKey) ?: otherKey
                         otherFamily != family && (assignedFamilies[otherFamily] ?: other.name) == candidate
                     }
             }
         }
-
-        private fun parameterDescriptor(descriptor: String): String = descriptor.substringBefore(')') + ')'
 
         private fun allocate(candidate: String, used: Set<String>): String {
             if (candidate !in used) return candidate
@@ -216,10 +211,7 @@ data class DeobfuscationPlan(
         }.ifEmpty { "unnamed" }
 
         private fun isLegalJavaIdentifier(value: String): Boolean =
-            value.isNotEmpty() &&
-                Character.isJavaIdentifierStart(value[0]) &&
-                value.drop(1).all { Character.isJavaIdentifierPart(it) } &&
-                value !in JAVA_RESERVED_WORDS
+            value.isNotEmpty() && Character.isJavaIdentifierStart(value[0]) && value.drop(1).all { Character.isJavaIdentifierPart(it) } && value !in JAVA_RESERVED_WORDS
 
         private val JAVA_RESERVED_WORDS = setOf(
             "abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const",

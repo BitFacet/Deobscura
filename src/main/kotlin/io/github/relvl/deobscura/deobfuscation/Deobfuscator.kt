@@ -9,6 +9,5 @@ class Deobfuscator {
         rawImport: RawImportResult,
         enabled: Boolean,
         methodOverrides: MethodOverrideAnalysis = MethodOverrideAnalysis.EMPTY,
-    ): DeobfuscationPlan =
-        DeobfuscationPlan.build(rawImport.classes.values, enabled, methodOverrides)
+    ): DeobfuscationPlan = DeobfuscationPlan.build(rawImport.classes.values, enabled, methodOverrides)
 }

@@ -70,18 +70,15 @@ class SsaDeadValueEliminator(
 
         while (worklist.isNotEmpty()) {
             val id = worklist.removeFirst()
-            when (analysis.values[id]
-                ?: throw SsaInconsistencyException("SSA liveness refers to undefined value ${id.value}.")) {
+            when (analysis.values[id] ?: throw SsaInconsistencyException("SSA liveness refers to undefined value ${id.value}.")) {
                 is SsaValueDefinition.Root -> Unit
                 is SsaValueDefinition.Phi -> {
-                    val phi = phiByOutput[id]
-                        ?: throw SsaInconsistencyException("SSA phi definition ${id.value} has no phi node.")
+                    val phi = phiByOutput[id] ?: throw SsaInconsistencyException("SSA phi definition ${id.value} has no phi node.")
                     phi.inputs.forEach { mark(it.value) }
                 }
 
                 is SsaValueDefinition.Instruction -> {
-                    val operation = operationsByOutput[id]
-                        ?: throw SsaInconsistencyException("SSA instruction value ${id.value} has no defining operation.")
+                    val operation = operationsByOutput[id] ?: throw SsaInconsistencyException("SSA instruction value ${id.value} has no defining operation.")
                     operation.inputs.forEach(::mark)
                 }
             }

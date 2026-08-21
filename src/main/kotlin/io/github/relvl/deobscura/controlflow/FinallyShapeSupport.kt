@@ -72,19 +72,14 @@ internal fun canonicalRethrowPrefixSize(
     val instructions = graph.instructions(graph.block(block))
     if (instructions.size < 2) return null
     val reload = instructions[instructions.lastIndex - 1] as? RawLocalInstruction ?: return null
-    if (reload.operation != LocalOperation.LOAD ||
-        reload.type != JvmComputationalType.REFERENCE ||
-        reload.slot != exceptionSlot ||
-        instructions.last() !is RawThrowInstruction
-    ) {
+    if (reload.operation != LocalOperation.LOAD || reload.type != JvmComputationalType.REFERENCE || reload.slot != exceptionSlot || instructions.last() !is RawThrowInstruction) {
         return null
     }
     return instructions.size - 2
 }
 
 /** Matches a standalone exception reload + `athrow` block. */
-internal fun isCanonicalRethrowBlock(graph: ControlFlowGraph, block: BasicBlockId, exceptionSlot: Int): Boolean =
-    canonicalRethrowPrefixSize(graph, block, exceptionSlot) == 0
+internal fun isCanonicalRethrowBlock(graph: ControlFlowGraph, block: BasicBlockId, exceptionSlot: Int): Boolean = canonicalRethrowPrefixSize(graph, block, exceptionSlot) == 0
 
 /**
  * Collects a typed catch body that is followed by a proven normal finally copy. The copy is a stop

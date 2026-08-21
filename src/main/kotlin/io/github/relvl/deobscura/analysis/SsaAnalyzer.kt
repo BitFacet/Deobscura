@@ -13,8 +13,7 @@ class SsaAnalyzer {
         val mergeDefinitions = valueFlow.values.values.filterIsInstance<ValueDefinition.Merge>().associateBy { it.id }
         val aliases = mutableMapOf<ValueId, ValueId>()
         val directInputs = mergeDefinitions.mapValues { (_, definition) ->
-            directPredecessorInputs(graph, valueFlow, definition)
-                ?: definition.inputs.map { SsaPhiInput(it) }
+            directPredecessorInputs(graph, valueFlow, definition) ?: definition.inputs.map { SsaPhiInput(it) }
         }
 
         fun resolve(id: ValueId): ValueId {
@@ -38,12 +37,7 @@ class SsaAnalyzer {
             changed = false
             mergeDefinitions.forEach { (id, _) ->
                 if (id in aliases) return@forEach
-                val meaningfulInputs = directInputs.getValue(id)
-                    .asSequence()
-                    .map { resolve(it).value }
-                    .filter { it != id }
-                    .distinct()
-                    .toList()
+                val meaningfulInputs = directInputs.getValue(id).asSequence().map { resolve(it).value }.filter { it != id }.distinct().toList()
                 if (meaningfulInputs.size == 1) {
                     aliases[id] = meaningfulInputs.single()
                     changed = true
@@ -68,16 +62,11 @@ class SsaAnalyzer {
                     val location = when (val site = definition.site) {
                         is ValueMergeSite.Local -> SsaPhiLocation.Local(site.slot)
                         is ValueMergeSite.Stack -> SsaPhiLocation.Stack(site.index)
-                    }
-                    // Keep self inputs: on a back-edge they mean that the predecessor carries the
+                    } // Keep self inputs: on a back-edge they mean that the predecessor carries the
                     // loop-entry value through unchanged. Simplification may ignore them when
                     // deciding whether a phi is trivial, but CFG rewrites still need the mapping.
                     val inputs = directInputs.getValue(id).map(::resolve)
-                    val meaningfulInputs = inputs.asSequence()
-                        .map { it.value }
-                        .filter { it != id }
-                        .distinct()
-                        .toList()
+                    val meaningfulInputs = inputs.asSequence().map { it.value }.filter { it != id }.distinct().toList()
                     if (meaningfulInputs.size <= 1) {
                         throw SsaInconsistencyException(
                             "Non-aliased phi ${id.value} in block ${definition.site.blockId.value} has fewer than two distinct inputs.",
@@ -90,19 +79,13 @@ class SsaAnalyzer {
             }
         }
 
-        val operations = valueFlow.operations
-            .asSequence()
-            .filterNot { it.instruction is RawLocalInstruction }
-            .map { operation ->
+        val operations = valueFlow.operations.asSequence().filterNot { it.instruction is RawLocalInstruction }.map { operation ->
                 operation.copy(inputs = operation.inputs.map(::resolve))
-            }
-            .toList()
+            }.toList()
         val eliminatedLocalInstructionCount = valueFlow.operations.size - operations.size
         val uses = rebuildSsaUses(values, operations, phiNodes, "Initial")
 
-        val duplicatePhiSites = phiNodes
-            .groupBy { it.blockId to it.location }
-            .filterValues { it.size > 1 }
+        val duplicatePhiSites = phiNodes.groupBy { it.blockId to it.location }.filterValues { it.size > 1 }
         if (duplicatePhiSites.isNotEmpty()) {
             val site = duplicatePhiSites.keys.first()
             throw SsaInconsistencyException("Multiple phi nodes occupy block ${site.first.value} at ${site.second}.")

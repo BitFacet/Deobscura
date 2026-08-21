@@ -23,13 +23,11 @@ data class MethodOverrideAnalysis internal constructor(
 ) {
     fun familyOf(method: MethodOverrideKey): MethodOverrideKey? = familyByMethod[method]
 
-    fun familyMembers(method: MethodOverrideKey): Set<MethodOverrideKey> =
-        familyOf(method)?.let { membersByFamily[it].orEmpty() }.orEmpty()
+    fun familyMembers(method: MethodOverrideKey): Set<MethodOverrideKey> = familyOf(method)?.let { membersByFamily[it].orEmpty() }.orEmpty()
 
     fun isPinned(method: MethodOverrideKey): Boolean = familyOf(method) in pinnedFamilies
 
-    fun overridesSuperMethod(ownerInternalName: String, name: String, descriptor: String): Boolean =
-        MethodOverrideKey(ownerInternalName, name, descriptor) in overridesSuper
+    fun overridesSuperMethod(ownerInternalName: String, name: String, descriptor: String): Boolean = MethodOverrideKey(ownerInternalName, name, descriptor) in overridesSuper
 
     /** Resolves an application declaration family for a symbolic method owner, including inherited members. */
     fun familyOfReference(ownerInternalName: String, name: String, descriptor: String): MethodOverrideKey? {
@@ -85,8 +83,7 @@ class MethodOverrideAnalyzer private constructor(
         fun load(owner: String): ClassMethods? {
             declarations[owner]?.let { return it }
             return try {
-                externalLookup(owner)?.toClassMethods(external = owner !in application)
-                    ?.also { declarations[owner] = it }
+                externalLookup(owner)?.toClassMethods(external = owner !in application)?.also { declarations[owner] = it }
             } catch (_: RuntimeException) {
                 null
             }
@@ -116,11 +113,8 @@ class MethodOverrideAnalyzer private constructor(
                 val child = MethodOverrideKey(rawClass.internalName, method.name, method.descriptor)
                 ancestors(rawClass, declarations).forEach { ancestorPath ->
                     val ancestor = ancestorPath.declaration
-                    ancestor.methods
-                        .filter { candidate -> candidate.name == method.name }
-                        .filter { candidate -> parameterDescriptor(candidate.descriptor) == parameterDescriptor(method.descriptor) }
-                        .filter { candidate -> isOverridableFrom(candidate, ancestorPath) }
-                        .filter { candidate -> returnsAreOverrideCompatible(method.descriptor, candidate.descriptor, rawClass.internalName) }
+                    ancestor.methods.filter { candidate -> candidate.name == method.name }.filter { candidate -> methodParameterDescriptor(candidate.descriptor) == methodParameterDescriptor(method.descriptor) }
+                        .filter { candidate -> isOverridableFrom(candidate, ancestorPath) }.filter { candidate -> returnsAreOverrideCompatible(method.descriptor, candidate.descriptor, rawClass.internalName) }
                         .forEach { candidate ->
                             overridesSuper += child
                             val parent = MethodOverrideKey(ancestor.internalName, candidate.name, candidate.descriptor)
@@ -178,7 +172,7 @@ class MethodOverrideAnalyzer private constructor(
         val child = JvmMethodDescriptor.parse(childDescriptor).returnType
         val parent = JvmMethodDescriptor.parse(parentDescriptor).returnType
         if (child == parent) return true
-        if (!child.isReference || !parent.isReference) return false
+        if (!child.isReferenceType || !parent.isReferenceType) return false
         return returnAssignable(parent, child, consumer) == true
     }
 
@@ -196,9 +190,6 @@ class MethodOverrideAnalyzer private constructor(
         methods = methods.map { MethodDeclaration(it.name, it.descriptor, it.accessFlags) },
         external = external,
     )
-
-    private val JvmType.isReference: Boolean
-        get() = this is JvmType.ObjectType || this is JvmType.ArrayType
 
     private companion object {
         const val ACC_PUBLIC = 0x0001
@@ -249,10 +240,8 @@ private class MethodFamilySet(methods: Collection<MethodOverrideKey>) {
     }
 }
 
-private fun isVirtualMethod(method: RawMethod): Boolean =
-    !method.name.startsWith("<") && method.accessFlags and (0x0002 or 0x0008) == 0
+private fun isVirtualMethod(method: RawMethod): Boolean = !method.name.startsWith("<") && method.accessFlags and (0x0002 or 0x0008) == 0
 
-internal fun parameterDescriptor(descriptor: String): String = descriptor.substringBefore(')') + ')'
 private fun packageName(internalName: String): String = internalName.substringBeforeLast('/', missingDelimiterValue = "")
 
 private fun resolverClassLookup(resolver: ClassResolver): (String) -> RawClass? {

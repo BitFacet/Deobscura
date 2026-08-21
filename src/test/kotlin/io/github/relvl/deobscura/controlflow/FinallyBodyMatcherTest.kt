@@ -161,8 +161,7 @@ class FinallyBodyMatcherTest {
         )
     }
 
-    private fun local(mnemonic: String, operation: LocalOperation, slot: Int) =
-        RawLocalInstruction(JvmOpcode(mnemonic), operation, JvmComputationalType.REFERENCE, slot)
+    private fun local(mnemonic: String, operation: LocalOperation, slot: Int) = RawLocalInstruction(JvmOpcode(mnemonic), operation, JvmComputationalType.REFERENCE, slot)
 
     private fun graph(instructions: List<RawInstruction>, blocks: List<BasicBlock>): ControlFlowGraph {
         val labels = List(instructions.size + 1) { index -> RawLabel(RawLabelId(index), index, index) }

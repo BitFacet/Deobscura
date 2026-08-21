@@ -97,7 +97,6 @@ class ClassResolverTest {
         }
     }
 
-
     @Test
     fun `negative lookup cache still records every analysis use`() {
         val jarResult = emptyJarResult()

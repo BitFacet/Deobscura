@@ -20,17 +20,10 @@ internal data class ModernFinallyShape(
 internal object ModernFinallyRecognizer {
     /** Tries the supported modern finally shapes, from strict linear form to branching cleanup. */
     fun recognize(
-        graph: ControlFlowGraph,
-        topology: ExceptionGroupTopology,
-        header: BasicBlockId,
-        protectedBlocks: Set<BasicBlockId>,
-        groupedHandlers: Map<BasicBlockId?, List<RawExceptionHandler>>,
-        facts: ControlFlowFacts
+        graph: ControlFlowGraph, topology: ExceptionGroupTopology, header: BasicBlockId, protectedBlocks: Set<BasicBlockId>, groupedHandlers: Map<BasicBlockId?, List<RawExceptionHandler>>, facts: ControlFlowFacts
     ): StructuredRegion.TryFinally? =
-        recognizeLinearCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts)
-            ?: recognizeSplitLinearCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts)
-            ?: recognizeStackPreservedCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts)
-            ?: recognizeBranchingCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts)
+        recognizeLinearCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts) ?: recognizeSplitLinearCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts)
+        ?: recognizeStackPreservedCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts) ?: recognizeBranchingCanonicalFinally(graph, topology, header, protectedBlocks, groupedHandlers, facts)
 
     /**
      * First safe finally slice: a single linear catch-all handler
@@ -160,10 +153,7 @@ internal object ModernFinallyRecognizer {
         val store = entryInstructions.single() as? RawLocalInstruction ?: return null
         if (store.operation != LocalOperation.STORE || store.type != JvmComputationalType.REFERENCE) return null
 
-        val bodyBlock = facts.outgoing[handlerEntry].orEmpty()
-            .map { it.to }
-            .distinct()
-            .singleOrNull() ?: return null
+        val bodyBlock = facts.outgoing[handlerEntry].orEmpty().map { it.to }.distinct().singleOrNull() ?: return null
         if (facts.incoming[bodyBlock].orEmpty().any { it.from != handlerEntry }) return null
 
         val bodyInstructions = graph.instructions(graph.block(bodyBlock))
@@ -208,7 +198,6 @@ internal object ModernFinallyRecognizer {
             },
         )
     }
-
 
     /**
      * Handles catch-all cleanup that keeps the implicit handler exception on the operand stack:
@@ -369,8 +358,7 @@ internal object ModernFinallyRecognizer {
                 add(handlerEntry)
                 addAll(bodyBlocks)
                 add(rethrow)
-            }
-            // Mixed try/catch/finally peers may physically overlap the catch-all handler itself.
+            } // Mixed try/catch/finally peers may physically overlap the catch-all handler itself.
             // In that topology the proven exceptional cleanup must not masquerade as a normal copy.
             normalBoundaryTargets(
                 protectedBlocks - handlerOwnedBlocks,
@@ -393,8 +381,7 @@ internal object ModernFinallyRecognizer {
                 handlerExitInstructionPrefixLength = rethrowPrefixSize,
                 allowEquivalentTerminalReturnTargets = allowTerminalAndGuardElidedNormalCopies,
             )?.let { target to it }
-        }
-        // A TWR-style cleanup can be split by a nested catch(Throwable) used for addSuppressed.
+        } // A TWR-style cleanup can be split by a nested catch(Throwable) used for addSuppressed.
         // Only try this proof after the established matcher found nothing, so ordinary finally
         // recognition and ownership remain completely unchanged.
         val nestedDirectMatches = if (strictDirectMatches.isEmpty()) {
@@ -447,12 +434,8 @@ internal object ModernFinallyRecognizer {
             else -> exceptionIslandMatches
         }
         val usingNestedHandlerMatches = strictDirectMatches.isEmpty() && nestedDirectMatches.isNotEmpty()
-        val usingExceptionIslandMatches =
-            strictDirectMatches.isEmpty() && nestedDirectMatches.isEmpty() && exceptionIslandMatches.isNotEmpty()
-        val projectedMatches = if (
-            allowTerminalAndGuardElidedNormalCopies &&
-            strictDirectMatches.isNotEmpty()
-        ) {
+        val usingExceptionIslandMatches = strictDirectMatches.isEmpty() && nestedDirectMatches.isEmpty() && exceptionIslandMatches.isNotEmpty()
+        val projectedMatches = if (allowTerminalAndGuardElidedNormalCopies && strictDirectMatches.isNotEmpty()) {
             val unmatchedTargets = boundaryTargets - strictDirectMatches.mapTo(linkedSetOf()) { it.first }
             matchGuardElidedBoundaryCopies(
                 graph = graph,
@@ -507,8 +490,7 @@ internal object ModernFinallyRecognizer {
             val continuations = matches.mapNotNullTo(linkedSetOf()) { it.continuation }
             when {
                 continuations.size == 1 -> continuations.single()
-                allowDivergentNormalContinuations &&
-                    (continuations.size > 1 || matches.all { it.continuation == null }) -> null
+                allowDivergentNormalContinuations && (continuations.size > 1 || matches.all { it.continuation == null }) -> null
 
                 else -> return reject("continuation-count=${continuations.size}")
             }
@@ -527,8 +509,7 @@ internal object ModernFinallyRecognizer {
                 handlerExit = rethrow,
                 handlerExitInstructionPrefixLength = rethrowPrefixSize,
             ).also { ranges ->
-                val nestedCount = matches.map { it.matchedNestedHandlerCount }.distinct().singleOrNull()
-                    ?: return reject("nested-handler-count")
+                val nestedCount = matches.map { it.matchedNestedHandlerCount }.distinct().singleOrNull() ?: return reject("nested-handler-count")
                 if (ranges.size != nestedCount + 1 || matches.any { it.instructionRanges.size != ranges.size }) {
                     return reject("nested-handler-range-count")
                 }
@@ -542,19 +523,13 @@ internal object ModernFinallyRecognizer {
                 handlerExit = rethrow,
                 handlerExitInstructionPrefixLength = rethrowPrefixSize,
             ).also { ranges ->
-                if (ranges.size < 2 ||
-                    matches.any { it.instructionRanges.size != ranges.size } ||
-                    !cleanupGapsAreExceptionHandlerIslands(bodyBlocks, ranges, graph, facts)
-                ) {
+                if (ranges.size < 2 || matches.any { it.instructionRanges.size != ranges.size } || !cleanupGapsAreExceptionHandlerIslands(bodyBlocks, ranges, graph, facts)) {
                     return reject("handler-split-not-exception-islands")
                 }
             }
         } else {
             listOf(
-                bodyBlocks.asSequence()
-                    .map(graph::block)
-                    .sortedBy { it.startInstructionIndex }
-                    .let { blocks ->
+                bodyBlocks.asSequence().map(graph::block).sortedBy { it.startInstructionIndex }.let { blocks ->
                         val list = blocks.toList()
                         val rethrowBlock = graph.block(rethrow)
                         val first = if (list.isNotEmpty()) {
@@ -567,8 +542,7 @@ internal object ModernFinallyRecognizer {
                         } else {
                             list.last().endInstructionIndexExclusive
                         }
-                        val bodyInstructionCount = list.sumOf { it.endInstructionIndexExclusive - it.startInstructionIndex } -
-                            if (handlerEntry in bodyBlocks) handlerEntryInstructionOffset else 0
+                        val bodyInstructionCount = list.sumOf { it.endInstructionIndexExclusive - it.startInstructionIndex } - if (handlerEntry in bodyBlocks) handlerEntryInstructionOffset else 0
                         val instructionCount = bodyInstructionCount + rethrowCleanupInstructionCount
                         if (lastExclusive - first != instructionCount) return reject("non-contiguous-handler-body")
                         first until lastExclusive
@@ -589,7 +563,6 @@ internal object ModernFinallyRecognizer {
         )
     }
 
-
     private fun describeCleanupGaps(
         blocks: Set<BasicBlockId>,
         ranges: List<IntRange>,
@@ -598,29 +571,18 @@ internal object ModernFinallyRecognizer {
     ): String = ranges.zipWithNext().joinToString("|") { (left, right) ->
         val gapStart = left.last + 1
         val gapEndExclusive = right.first
-        val gapBlocks = graph.blocks.asSequence()
-            .filter { block ->
-                block.startInstructionIndex >= gapStart &&
-                    block.endInstructionIndexExclusive <= gapEndExclusive
-            }
-            .mapTo(linkedSetOf()) { it.id }
+        val gapBlocks = graph.blocks.asSequence().filter { block ->
+                block.startInstructionIndex >= gapStart && block.endInstructionIndexExclusive <= gapEndExclusive
+            }.mapTo(linkedSetOf()) { it.id }
         val normalEntries = gapBlocks.flatMap { block ->
-            facts.incoming[block].orEmpty()
-                .filter { edge -> edge.from !in gapBlocks }
-                .map { edge -> "B${edge.from.value}->B${edge.to.value}:${edge.kind}" }
+            facts.incoming[block].orEmpty().filter { edge -> edge.from !in gapBlocks }.map { edge -> "B${edge.from.value}->B${edge.to.value}:${edge.kind}" }
         }.distinct()
-        val exceptionEntries = graph.edges.asSequence()
-            .filter { edge ->
-                edge.kind == ControlFlowEdgeKind.EXCEPTION &&
-                    edge.from in blocks &&
-                    edge.to in gapBlocks
-            }
-            .map { edge -> "B${edge.from.value}->B${edge.to.value}" }
-            .distinct()
-            .toList()
-        "gap=$gapStart..<$gapEndExclusive/blocks=${gapBlocks.joinToString(",") { "B${it.value}" }}" +
-            "/normal-in=${normalEntries.ifEmpty { listOf("none") }.joinToString(",")}" +
-            "/exception-in=${exceptionEntries.ifEmpty { listOf("none") }.joinToString(",")}"
+        val exceptionEntries = graph.edges.asSequence().filter { edge ->
+                edge.kind == ControlFlowEdgeKind.EXCEPTION && edge.from in blocks && edge.to in gapBlocks
+            }.map { edge -> "B${edge.from.value}->B${edge.to.value}" }.distinct().toList()
+        "gap=$gapStart..<$gapEndExclusive/blocks=${gapBlocks.joinToString(",") { "B${it.value}" }}" + "/normal-in=${normalEntries.ifEmpty { listOf("none") }.joinToString(",")}" + "/exception-in=${
+            exceptionEntries.ifEmpty { listOf("none") }.joinToString(",")
+        }"
     }
 
     /**
@@ -641,22 +603,14 @@ internal object ModernFinallyRecognizer {
             val gapEndExclusive = right.first
             if (gapStart >= gapEndExclusive) return false
 
-            val gapBlocks = graph.blocks.asSequence()
-                .filter { block ->
-                    block.id in facts.blocks &&
-                        block.startInstructionIndex >= gapStart &&
-                        block.endInstructionIndexExclusive <= gapEndExclusive
-                }
-                .mapTo(linkedSetOf()) { it.id }
+            val gapBlocks = graph.blocks.asSequence().filter { block ->
+                    block.id in facts.blocks && block.startInstructionIndex >= gapStart && block.endInstructionIndexExclusive <= gapEndExclusive
+                }.mapTo(linkedSetOf()) { it.id }
             if (gapBlocks.isEmpty()) return false
 
-            val exceptionEntries = graph.edges.asSequence()
-                .filter { edge ->
-                    edge.kind == ControlFlowEdgeKind.EXCEPTION &&
-                        edge.from in blocks &&
-                        edge.to in gapBlocks
-                }
-                .mapTo(linkedSetOf()) { it.to }
+            val exceptionEntries = graph.edges.asSequence().filter { edge ->
+                    edge.kind == ControlFlowEdgeKind.EXCEPTION && edge.from in blocks && edge.to in gapBlocks
+                }.mapTo(linkedSetOf()) { it.to }
             if (exceptionEntries.isEmpty()) return false
 
             if (gapBlocks.any { block ->
@@ -670,16 +624,12 @@ internal object ModernFinallyRecognizer {
             while (pending.isNotEmpty()) {
                 val block = pending.removeFirst()
                 if (!reachable.add(block)) continue
-                facts.outgoing[block].orEmpty()
-                    .map { it.to }
-                    .filter { it in gapBlocks && it !in reachable }
-                    .forEach(pending::addLast)
+                facts.outgoing[block].orEmpty().map { it.to }.filter { it in gapBlocks && it !in reachable }.forEach(pending::addLast)
             }
             if (reachable != gapBlocks) return false
         }
         return true
     }
-
 
     /** Returns cleanup ranges while leaving already-structured nested handler islands unowned. */
     private fun splitHandlerInstructionRanges(
@@ -698,8 +648,7 @@ internal object ModernFinallyRecognizer {
         }
         if (handlerExitInstructionPrefixLength != 0) {
             val exitBlock = graph.block(handlerExit)
-            val start = exitBlock.startInstructionIndex +
-                if (handlerExit == handlerEntry) handlerEntryInstructionOffset else 0
+            val start = exitBlock.startInstructionIndex + if (handlerExit == handlerEntry) handlerEntryInstructionOffset else 0
             val endExclusive = exitBlock.startInstructionIndex + handlerExitInstructionPrefixLength
             if (start < endExclusive) {
                 val prefix = start until endExclusive
@@ -713,7 +662,6 @@ internal object ModernFinallyRecognizer {
         }
         return ranges
     }
-
 
     /**
      * Accepts a path-specialized copy only after another boundary has proven the complete cleanup.
@@ -779,8 +727,5 @@ internal object ModernFinallyRecognizer {
     }
 
     private fun isControlTransfer(instruction: RawInstruction): Boolean =
-        instruction is RawBranchInstruction ||
-            instruction is RawSwitchInstruction ||
-            instruction is RawReturnInstruction ||
-            instruction is RawThrowInstruction
+        instruction is RawBranchInstruction || instruction is RawSwitchInstruction || instruction is RawReturnInstruction || instruction is RawThrowInstruction
 }

@@ -6,12 +6,7 @@ import java.lang.constant.MethodHandleDesc
 import java.lang.constant.MethodTypeDesc
 
 enum class FrameValueKind(val category: Int) {
-    INT(1),
-    LONG(2),
-    FLOAT(1),
-    DOUBLE(2),
-    REFERENCE(1),
-    RETURN_ADDRESS(1),
+    INT(1), LONG(2), FLOAT(1), DOUBLE(2), REFERENCE(1), RETURN_ADDRESS(1),
 }
 
 sealed interface JvmValueType {
@@ -62,6 +57,9 @@ sealed interface JvmValueType {
     }
 }
 
+internal val JvmValueType.isBoolean: Boolean
+    get() = this == JvmValueType.Computational(JvmComputationalType.BOOLEAN)
+
 sealed interface ValueOrigin {
     data class This(val ownerInternalName: String) : ValueOrigin
     data class Parameter(val index: Int) : ValueOrigin
@@ -81,20 +79,15 @@ data class FrameValue(
         get() = (type as? JvmValueType.Reference)?.referenceType
 
     companion object {
-        fun of(kind: FrameValueKind, origin: ValueOrigin): FrameValue =
-            FrameValue(JvmValueType.of(kind), setOf(origin))
+        fun of(kind: FrameValueKind, origin: ValueOrigin): FrameValue = FrameValue(JvmValueType.of(kind), setOf(origin))
 
-        fun of(type: JvmComputationalType, origin: ValueOrigin): FrameValue =
-            FrameValue(JvmValueType.of(type), setOf(origin))
+        fun of(type: JvmComputationalType, origin: ValueOrigin): FrameValue = FrameValue(JvmValueType.of(type), setOf(origin))
 
-        fun of(type: JvmValueType, origin: ValueOrigin): FrameValue =
-            FrameValue(type, setOf(origin))
+        fun of(type: JvmValueType, origin: ValueOrigin): FrameValue = FrameValue(type, setOf(origin))
 
-        fun reference(type: JvmReferenceType, origin: ValueOrigin): FrameValue =
-            FrameValue(JvmValueType.Reference(type), setOf(origin))
+        fun reference(type: JvmReferenceType, origin: ValueOrigin): FrameValue = FrameValue(JvmValueType.Reference(type), setOf(origin))
 
-        fun of(type: JvmType, origin: ValueOrigin): FrameValue =
-            FrameValue(JvmValueType.of(type), setOf(origin))
+        fun of(type: JvmType, origin: ValueOrigin): FrameValue = FrameValue(JvmValueType.of(type), setOf(origin))
     }
 }
 
@@ -136,5 +129,4 @@ internal fun RawConstantInstruction.toValueType(): JvmValueType {
     return JvmValueType.Reference(referenceType)
 }
 
-private fun exactObjectType(internalName: String): JvmReferenceType =
-    JvmReferenceType.Exact(JvmType.ObjectType(internalName))
+private fun exactObjectType(internalName: String): JvmReferenceType = JvmReferenceType.Exact(JvmType.ObjectType(internalName))

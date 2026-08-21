@@ -31,14 +31,7 @@ internal data class TypedCatchScopeProof(
 
 /** Structural reasons a typed scope can fail before it is safe to emit as source syntax. */
 internal enum class TypedCatchScopeFailure {
-    PROTECTED_EXTERNAL_ENTRY,
-    NO_COMMON_CONTINUATION,
-    CATCH_BODY_SHAPE,
-    EMPTY_HANDLER_REGION,
-    OVERLAPPING_HANDLER_REGIONS,
-    HANDLER_EXTERNAL_ENTRY,
-    UNSUPPORTED_HANDLER_EXIT,
-    ;
+    PROTECTED_EXTERNAL_ENTRY, NO_COMMON_CONTINUATION, CATCH_BODY_SHAPE, EMPTY_HANDLER_REGION, OVERLAPPING_HANDLER_REGIONS, HANDLER_EXTERNAL_ENTRY, UNSUPPORTED_HANDLER_EXIT, ;
 
     fun toUnstructuredReason(): UnstructuredControlFlowReason = when (this) {
         PROTECTED_EXTERNAL_ENTRY -> UnstructuredControlFlowReason.EXCEPTION_PROTECTED_REGION_HAS_EXTERNAL_ENTRY
@@ -88,17 +81,13 @@ internal class TypedCatchRecognizer {
         )
         if (typedTopology.failure != null || typedTopology.topology?.scopes?.size != 1) {
             val failure = when (typedTopology.failure) {
-                TypedCatchTopologyFailure.INVALID_HANDLER_ENTRY ->
-                    UnstructuredControlFlowReason.EXCEPTION_INVALID_HANDLER_ENTRY
+                TypedCatchTopologyFailure.INVALID_HANDLER_ENTRY -> UnstructuredControlFlowReason.EXCEPTION_INVALID_HANDLER_ENTRY
 
-                TypedCatchTopologyFailure.EMPTY_PROTECTED_SCOPE ->
-                    UnstructuredControlFlowReason.EXCEPTION_EMPTY_PROTECTED_REGION
+                TypedCatchTopologyFailure.EMPTY_PROTECTED_SCOPE -> UnstructuredControlFlowReason.EXCEPTION_EMPTY_PROTECTED_REGION
 
-                TypedCatchTopologyFailure.INVALID_PROTECTED_HEADER ->
-                    UnstructuredControlFlowReason.EXCEPTION_INVALID_PROTECTED_ENTRY
+                TypedCatchTopologyFailure.INVALID_PROTECTED_HEADER -> UnstructuredControlFlowReason.EXCEPTION_INVALID_PROTECTED_ENTRY
 
-                TypedCatchTopologyFailure.CROSSING_SCOPES, null ->
-                    UnstructuredControlFlowReason.EXCEPTION_OVERLAPPING_HANDLER_REGIONS
+                TypedCatchTopologyFailure.CROSSING_SCOPES, null -> UnstructuredControlFlowReason.EXCEPTION_OVERLAPPING_HANDLER_REGIONS
             }
             return TypedCatchRecognition(failure = failure)
         }
@@ -158,24 +147,20 @@ internal class TypedCatchRecognizer {
         val protectedBlocks = scope.protectedBlocks
         val handlersByEntry = scope.handlersByEntry
         val protectedRanges = scope.protectedRanges
-        val hasExternalProtectedEntry = hasExternalProtectedEntryCheck?.invoke(header, protectedBlocks)
-            ?: hasExternalProtectedEntry(header, protectedBlocks, facts)
+        val hasExternalProtectedEntry = hasExternalProtectedEntryCheck?.invoke(header, protectedBlocks) ?: hasExternalProtectedEntry(header, protectedBlocks, facts)
         if (header !in protectedBlocks || hasExternalProtectedEntry) {
             return TypedCatchScopeAnalysis(failure = TypedCatchScopeFailure.PROTECTED_EXTERNAL_ENTRY)
         }
 
         val handlerEntries = handlersByEntry.keys
         val selectedContinuation = requiredContinuation ?: selectContinuation(protectedBlocks, handlerEntries, facts)
-        if (selectedContinuation == null && rejectNormalBoundaryWithoutContinuation &&
-            normalBoundaryTargets(protectedBlocks, handlerEntries, facts).isNotEmpty()
-        ) {
+        if (selectedContinuation == null && rejectNormalBoundaryWithoutContinuation && normalBoundaryTargets(protectedBlocks, handlerEntries, facts).isNotEmpty()) {
             return TypedCatchScopeAnalysis(failure = TypedCatchScopeFailure.NO_COMMON_CONTINUATION)
         }
 
         val collectedCatches = mutableListOf<CollectedCatch>()
         for ((entry, entries) in handlersByEntry.entries.sortedBy { it.key.value }) {
-            val collected = collectCatch(entry, handlerEntries, selectedContinuation)
-                ?: return TypedCatchScopeAnalysis(failure = TypedCatchScopeFailure.CATCH_BODY_SHAPE)
+            val collected = collectCatch(entry, handlerEntries, selectedContinuation) ?: return TypedCatchScopeAnalysis(failure = TypedCatchScopeFailure.CATCH_BODY_SHAPE)
             if (collected.blocks.isEmpty()) {
                 return TypedCatchScopeAnalysis(failure = TypedCatchScopeFailure.EMPTY_HANDLER_REGION)
             }
@@ -240,9 +225,7 @@ internal class TypedCatchRecognizer {
         fun drainQueue(): Boolean {
             while (queue.isNotEmpty()) {
                 val block = queue.removeFirst()
-                if (block == continuation || block in protectedBlocks || block in stopBlocks ||
-                    (block != entry && block in handlerEntries)
-                ) {
+                if (block == continuation || block in protectedBlocks || block in stopBlocks || (block != entry && block in handlerEntries)) {
                     continue
                 }
                 if (!result.add(block)) continue
@@ -285,8 +268,7 @@ internal class TypedCatchRecognizer {
 
         if (continuation != null) return TypedCatchHandlerCollection(result, null)
 
-        val inferredContinuation = inferSharedHandlerContinuation(entry, result, facts)
-            ?: return TypedCatchHandlerCollection(result, null)
+        val inferredContinuation = inferSharedHandlerContinuation(entry, result, facts) ?: return TypedCatchHandlerCollection(result, null)
         val trimmed = result.filterTo(linkedSetOf()) { block ->
             inferredContinuation !in facts.dominators[block].orEmpty()
         }
@@ -360,18 +342,12 @@ internal class TypedCatchRecognizer {
         if (targets.isEmpty()) return null
 
         val allEntries = targets + handlerEntries
-        val sourceCommon = allEntries
-            .map { block -> facts.postDominators[block].orEmpty() }
-            .reduce(Set<BasicBlockId>::intersect)
-            .filter { candidate -> candidate !in protectedBlocks && candidate !in handlerEntries }
+        val sourceCommon = allEntries.map { block -> facts.postDominators[block].orEmpty() }.reduce(Set<BasicBlockId>::intersect).filter { candidate -> candidate !in protectedBlocks && candidate !in handlerEntries }
         val sourceJoin = nearestCommonPostDominator(sourceCommon, facts)
         if (sourceJoin != null) return sourceJoin
         if (targets.size == 1) return targets.single()
 
-        val common = targets
-            .map { target -> facts.postDominators[target].orEmpty() }
-            .reduce(Set<BasicBlockId>::intersect)
-            .filter { candidate -> candidate !in protectedBlocks && candidate !in handlerEntries }
+        val common = targets.map { target -> facts.postDominators[target].orEmpty() }.reduce(Set<BasicBlockId>::intersect).filter { candidate -> candidate !in protectedBlocks && candidate !in handlerEntries }
         return nearestCommonPostDominator(common, facts)
     }
 
@@ -389,13 +365,9 @@ internal class TypedCatchRecognizer {
         blocks: Set<BasicBlockId>,
         facts: ControlFlowFacts,
     ): BasicBlockId? {
-        val candidates = blocks.asSequence()
-            .filter { block ->
-                block != entry &&
-                    block in facts.postDominators[entry].orEmpty() &&
-                    facts.incoming[block].orEmpty().any { edge -> edge.from !in blocks }
-            }
-            .toList()
+        val candidates = blocks.asSequence().filter { block ->
+                block != entry && block in facts.postDominators[entry].orEmpty() && facts.incoming[block].orEmpty().any { edge -> edge.from !in blocks }
+            }.toList()
         return candidates.firstOrNull { candidate ->
             candidates.none { other ->
                 other != candidate && candidate in facts.postDominators[other].orEmpty()

@@ -78,11 +78,7 @@ class ControlFlowDiagnostics(
     }
 
     private fun sourceLines(graph: ControlFlowGraph, block: BasicBlock): IntRange? {
-        val lines = graph.code.lineNumbers
-            .asSequence()
-            .filter { it.instructionIndex in block.startInstructionIndex until block.endInstructionIndexExclusive }
-            .map { it.line }
-            .toList()
+        val lines = graph.code.lineNumbers.asSequence().filter { it.instructionIndex in block.startInstructionIndex until block.endInstructionIndexExclusive }.map { it.line }.toList()
         if (lines.isEmpty()) return null
         return lines.min()..lines.max()
     }

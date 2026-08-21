@@ -2,6 +2,7 @@ package io.github.relvl.deobscura.resolution
 
 import io.github.relvl.deobscura.raw.JvmReferenceType
 import io.github.relvl.deobscura.raw.JvmType
+import io.github.relvl.deobscura.raw.isReferenceType
 import java.lang.classfile.ClassFile
 import java.util.concurrent.ConcurrentHashMap
 
@@ -47,8 +48,7 @@ class ClassHierarchy(
             if (isAssignable(JvmType.ObjectType(current), rightType, consumer, ResolutionPurpose.COMMON_SUPERTYPE) == true) {
                 return exactObject(current)
             }
-            current = node(current, ResolutionPurpose.COMMON_SUPERTYPE, consumer)?.superName
-                ?: if (current == OBJECT) null else return JvmReferenceType.Unknown
+            current = node(current, ResolutionPurpose.COMMON_SUPERTYPE, consumer)?.superName ?: if (current == OBJECT) null else return JvmReferenceType.Unknown
         }
         return exactObject(OBJECT)
     }
@@ -77,7 +77,7 @@ class ClassHierarchy(
         val leftComponent = left.componentType
         val rightComponent = right.componentType
         if (leftComponent == rightComponent) return JvmReferenceType.Exact(left)
-        if (!leftComponent.isReference || !rightComponent.isReference) return exactObject(OBJECT)
+        if (!leftComponent.isReferenceType || !rightComponent.isReferenceType) return exactObject(OBJECT)
 
         val component = commonSupertype(
             JvmReferenceType.Exact(leftComponent),
@@ -102,7 +102,7 @@ class ClassHierarchy(
             if (source !is JvmType.ArrayType) return false
             val targetComponent = target.componentType
             val sourceComponent = source.componentType
-            if (!targetComponent.isReference || !sourceComponent.isReference) return targetComponent == sourceComponent
+            if (!targetComponent.isReferenceType || !sourceComponent.isReferenceType) return targetComponent == sourceComponent
             return isAssignable(targetComponent, sourceComponent, consumer, purpose)
         }
         if (source is JvmType.ArrayType) {
@@ -182,9 +182,6 @@ class ClassHierarchy(
         get() = nodes.size
 
     private fun exactObject(internalName: String) = JvmReferenceType.Exact(JvmType.ObjectType(internalName))
-
-    private val JvmType.isReference: Boolean
-        get() = this is JvmType.ObjectType || this is JvmType.ArrayType
 
     private companion object {
         const val OBJECT = "java/lang/Object"

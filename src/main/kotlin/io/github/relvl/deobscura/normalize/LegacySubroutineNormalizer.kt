@@ -31,12 +31,8 @@ class LegacySubroutineNormalizer(
         val entryBlock = requireNotNull(graph.entryBlock) { "Legacy subroutine method has no entry block." }
         val blockByInstruction = blockByInstruction(graph, code.instructions.size)
         val labelPositions = code.labels.associate { it.id to it.instructionIndex }
-        val ordinaryEdgesByBlock = graph.edges
-            .filter { it.kind != ControlFlowEdgeKind.EXCEPTION }
-            .groupBy { it.from }
-        val exceptionEdgesByBlock = graph.edges
-            .filter { it.kind == ControlFlowEdgeKind.EXCEPTION }
-            .groupBy { it.from }
+        val ordinaryEdgesByBlock = graph.edges.filter { it.kind != ControlFlowEdgeKind.EXCEPTION }.groupBy { it.from }
+        val exceptionEdgesByBlock = graph.edges.filter { it.kind == ControlFlowEdgeKind.EXCEPTION }.groupBy { it.from }
 
         val root = BlockInstance(entryBlock, LegacyContext.EMPTY)
         val discovered = linkedSetOf(root)
@@ -70,10 +66,9 @@ class LegacySubroutineNormalizer(
             val block = graph.block(instance.block)
             when (val terminator = code.instructions[block.endInstructionIndexExclusive - 1]) {
                 is RawRetInstruction -> {
-                    val frame = instance.context.current
-                        ?: throw LegacySubroutineNormalizationException(
-                            "RET in block ${block.id.value} executes outside a JSR context.",
-                        )
+                    val frame = instance.context.current ?: throw LegacySubroutineNormalizationException(
+                        "RET in block ${block.id.value} executes outside a JSR context.",
+                    )
                     discover(BlockInstance(blockForInstruction(frame.returnInstructionIndex), instance.context.exit()))
                 }
 
@@ -123,8 +118,7 @@ class LegacySubroutineNormalizer(
             }
         }
 
-        fun ordinaryEdges(instance: BlockInstance): List<ControlFlowEdge> =
-            ordinaryEdgesByBlock[instance.block].orEmpty()
+        fun ordinaryEdges(instance: BlockInstance): List<ControlFlowEdge> = ordinaryEdgesByBlock[instance.block].orEmpty()
 
         fun recordOrigin(
             instance: BlockInstance,
@@ -158,10 +152,9 @@ class LegacySubroutineNormalizer(
 
                 val rewritten = when {
                     instruction is RawRetInstruction -> {
-                        val frame = instance.context.current
-                            ?: throw LegacySubroutineNormalizationException(
-                                "RET at instruction $originalIndex executes outside a JSR context.",
-                            )
+                        val frame = instance.context.current ?: throw LegacySubroutineNormalizationException(
+                            "RET at instruction $originalIndex executes outside a JSR context.",
+                        )
                         val destination = BlockInstance(
                             block = blockForInstruction(frame.returnInstructionIndex),
                             context = instance.context.exit(),
@@ -170,10 +163,9 @@ class LegacySubroutineNormalizer(
                     }
 
                     instruction is RawBranchInstruction && instruction.opcode.mnemonic in LEGACY_JSR_OPCODES -> {
-                        val directEdge = ordinaryEdges(instance).singleOrNull { it.kind == ControlFlowEdgeKind.JUMP }
-                            ?: throw LegacySubroutineNormalizationException(
-                                "JSR block ${block.id.value} does not have exactly one direct subroutine edge.",
-                            )
+                        val directEdge = ordinaryEdges(instance).singleOrNull { it.kind == ControlFlowEdgeKind.JUMP } ?: throw LegacySubroutineNormalizationException(
+                            "JSR block ${block.id.value} does not have exactly one direct subroutine edge.",
+                        )
                         val nestedContext = instance.context.enter(
                             LegacyFrame(callSiteInstructionIndex = originalIndex, returnInstructionIndex = block.endInstructionIndexExclusive),
                         )
@@ -239,15 +231,12 @@ class LegacySubroutineNormalizer(
         orderedInstances.forEach { instance ->
             val block = graph.block(instance.block)
             val range = emittedRanges.getValue(instance)
-            handlers.asSequence()
-                .filter { block.startInstructionIndex >= it.start && block.endInstructionIndexExclusive <= it.endExclusive }
-                .forEach { handler ->
+            handlers.asSequence().filter { block.startInstructionIndex >= it.start && block.endInstructionIndexExclusive <= it.endExclusive }.forEach { handler ->
                     val handlerBlock = blockForInstruction(handler.handlerInstructionIndex)
                     val handlerInstance = BlockInstance(handlerBlock, instance.context)
-                    val handlerLabel = instanceLabels[handlerInstance]
-                        ?: throw LegacySubroutineNormalizationException(
-                            "Exception handler block ${handlerBlock.value} was not discovered for context ${instance.context}.",
-                        )
+                    val handlerLabel = instanceLabels[handlerInstance] ?: throw LegacySubroutineNormalizationException(
+                        "Exception handler block ${handlerBlock.value} was not discovered for context ${instance.context}.",
+                    )
                     exceptionHandlers += RawExceptionHandler(
                         tryStart = labelAt(range.start),
                         tryEnd = labelAt(range.originalEndExclusive),
@@ -275,11 +264,7 @@ class LegacySubroutineNormalizer(
         return LegacySubroutineNormalizationResult(
             code = normalized,
             jsrCallSiteCount = jsrCallSiteCount,
-            clonedBlockCount = orderedInstances
-                .groupingBy { it.block }
-                .eachCount()
-                .values
-                .sumOf { count -> (count - 1).coerceAtLeast(0) },
+            clonedBlockCount = orderedInstances.groupingBy { it.block }.eachCount().values.sumOf { count -> (count - 1).coerceAtLeast(0) },
             normalizedInstructionCount = normalized.instructions.size,
             provenance = LegacySubroutineProvenance(instructionOrigins),
         )
@@ -297,8 +282,7 @@ class LegacySubroutineNormalizer(
             is RawRetInstruction -> error("RET must already be normalized.")
             is RawBranchInstruction -> {
                 if (originalTerminator.opcode.mnemonic in UNCONDITIONAL_JUMPS) return
-                val fallthrough = ordinaryEdges.singleOrNull { it.kind == ControlFlowEdgeKind.FALLTHROUGH }
-                    ?: return
+                val fallthrough = ordinaryEdges.singleOrNull { it.kind == ControlFlowEdgeKind.FALLTHROUGH } ?: return
                 instructions += RawBranchInstruction(
                     JvmOpcode("goto"),
                     instanceLabels.getValue(BlockInstance(fallthrough.to, instance.context)),
@@ -306,8 +290,7 @@ class LegacySubroutineNormalizer(
             }
 
             else -> {
-                val fallthrough = ordinaryEdges.singleOrNull { it.kind == ControlFlowEdgeKind.FALLTHROUGH }
-                    ?: return
+                val fallthrough = ordinaryEdges.singleOrNull { it.kind == ControlFlowEdgeKind.FALLTHROUGH } ?: return
                 instructions += RawBranchInstruction(
                     JvmOpcode("goto"),
                     instanceLabels.getValue(BlockInstance(fallthrough.to, instance.context)),
@@ -328,18 +311,16 @@ class LegacySubroutineNormalizer(
         }
     }
 
-    private fun blockByInstruction(graph: ControlFlowGraph, instructionCount: Int): IntArray =
-        IntArray(instructionCount).also { result ->
-            graph.blocks.forEach { block ->
-                for (index in block.startInstructionIndex until block.endInstructionIndexExclusive) {
-                    result[index] = block.id.value
-                }
+    private fun blockByInstruction(graph: ControlFlowGraph, instructionCount: Int): IntArray = IntArray(instructionCount).also { result ->
+        graph.blocks.forEach { block ->
+            for (index in block.startInstructionIndex until block.endInstructionIndexExclusive) {
+                result[index] = block.id.value
             }
         }
+    }
 
     private fun RawCode.hasLegacySubroutines(): Boolean = instructions.any { instruction ->
-        instruction is RawRetInstruction ||
-            instruction is RawBranchInstruction && instruction.opcode.mnemonic in LEGACY_JSR_OPCODES
+        instruction is RawRetInstruction || instruction is RawBranchInstruction && instruction.opcode.mnemonic in LEGACY_JSR_OPCODES
     }
 
     private data class BlockInstance(
@@ -448,8 +429,5 @@ data class LegacySubroutineFrame(
 )
 
 enum class LegacySyntheticInstructionKind {
-    JSR_NULL_SEED,
-    JSR_GOTO,
-    RET_GOTO,
-    EXPLICIT_FALLTHROUGH_GOTO,
+    JSR_NULL_SEED, JSR_GOTO, RET_GOTO, EXPLICIT_FALLTHROUGH_GOTO,
 }

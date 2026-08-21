@@ -8,6 +8,7 @@ import io.github.relvl.deobscura.raw.RawClass
 import io.github.relvl.deobscura.raw.RawImportResult
 import io.github.relvl.deobscura.raw.RawMethod
 import io.github.relvl.deobscura.source.SourceOutputService
+import io.github.relvl.deobscura.util.formatElapsedSeconds
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.util.concurrent.Callable
@@ -97,9 +98,7 @@ class AnalysisDiagnostics(
             val analysis = methodResult.analysis
             if (analysis != null) {
                 SourceOutputService.captureMethod(result.rawClass.internalName, analysis)
-                analysis.structuredControlFlow.unstructured
-                    .filter { it.kind == UnstructuredControlFlowKind.SWITCH }
-                    .forEach { diagnostic ->
+                analysis.structuredControlFlow.unstructured.filter { it.kind == UnstructuredControlFlowKind.SWITCH }.forEach { diagnostic ->
                         logger.warn(
                             "Unstructured switch in '{}': B{} ({}).{}",
                             methodName,
@@ -108,9 +107,7 @@ class AnalysisDiagnostics(
                             TechnicalIrService.methodHint(result.rawClass.internalName, method.name, method.descriptor),
                         )
                     }
-                analysis.structuredControlFlow.unstructured
-                    .filter { it.kind == UnstructuredControlFlowKind.EXCEPTION }
-                    .forEach { diagnostic ->
+                analysis.structuredControlFlow.unstructured.filter { it.kind == UnstructuredControlFlowKind.EXCEPTION }.forEach { diagnostic ->
                         logger.warn(
                             "Unstructured exception region in '{}': B{} protected={}..<{} ({}){}.{}",
                             methodName,
@@ -254,7 +251,6 @@ class AnalysisDiagnostics(
     }
 }
 
-
 private class MethodAnalysisProgressLogger(
     private val totalMethodCount: Int,
     private val technicalIrEnabled: Boolean,
@@ -304,7 +300,7 @@ private class MethodAnalysisProgressLogger(
             "Method analysis pipeline completed: {}/{} method(s) processed in {}.",
             completedMethodCount,
             totalMethodCount,
-            formatElapsed(nanoTime() - startedAt),
+            formatElapsedSeconds(nanoTime() - startedAt),
         )
     }
 
@@ -312,9 +308,6 @@ private class MethodAnalysisProgressLogger(
         const val PROGRESS_INTERVAL_NANOS = 5_000_000_000L
     }
 }
-
-private fun formatElapsed(nanos: Long): String =
-    String.format(java.util.Locale.ROOT, "%.1f s", nanos / 1_000_000_000.0)
 
 internal fun analysisWorkerCount(availableProcessors: Int): Int {
     val processors = availableProcessors.coerceAtLeast(1)

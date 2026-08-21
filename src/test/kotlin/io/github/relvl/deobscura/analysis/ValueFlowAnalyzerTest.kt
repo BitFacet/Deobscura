@@ -78,7 +78,6 @@ class ValueFlowAnalyzerTest {
         assertTrue(analysis.operations.none { it.instruction is RawStackInstruction })
     }
 
-
     @Test
     fun `preserves precise value types into SSA`() {
         val rawClass = importFixture()
@@ -89,9 +88,7 @@ class ValueFlowAnalyzerTest {
         val valueFlow = analyzer.analyze(graph, frames)
         val ssa = SsaAnalyzer().analyze(graph, valueFlow)
 
-        val parameters = ssa.values.values.filterIsInstance<SsaValueDefinition.Root>()
-            .filter { it.origin is ValueOrigin.Parameter }
-            .associateBy { (it.origin as ValueOrigin.Parameter).index }
+        val parameters = ssa.values.values.filterIsInstance<SsaValueDefinition.Root>().filter { it.origin is ValueOrigin.Parameter }.associateBy { (it.origin as ValueOrigin.Parameter).index }
 
         assertEquals(JvmValueType.Computational(JvmComputationalType.BOOLEAN), parameters.getValue(0).type)
         assertEquals(JvmValueType.Computational(JvmComputationalType.BYTE), parameters.getValue(1).type)
@@ -107,7 +104,6 @@ class ValueFlowAnalyzerTest {
         )
     }
 
-
     @Test
     fun `keeps intrinsic instruction type when a frame merge widens it`() {
         val rawClass = importFixture()
@@ -120,8 +116,7 @@ class ValueFlowAnalyzerTest {
         val getIndex = code.instructions.indexOfFirst {
             it is RawInvokeInstruction && it.owner == "java/nio/ByteBuffer" && it.name == "get" && it.descriptor == "()B"
         }
-        val getValue = analysis.values.values.filterIsInstance<ValueDefinition.Instruction>()
-            .single { it.instructionIndex == getIndex }
+        val getValue = analysis.values.values.filterIsInstance<ValueDefinition.Instruction>().single { it.instructionIndex == getIndex }
 
         assertEquals(JvmValueType.Computational(JvmComputationalType.BYTE), getValue.type)
         assertTrue(
@@ -143,8 +138,7 @@ class ValueFlowAnalyzerTest {
         val instanceOfIndex = code.instructions.indexOfFirst {
             it is RawTypeCheckInstruction && it.opcode.mnemonic == "instanceof"
         }
-        val value = analysis.values.values.filterIsInstance<ValueDefinition.Instruction>()
-            .single { it.instructionIndex == instanceOfIndex }
+        val value = analysis.values.values.filterIsInstance<ValueDefinition.Instruction>().single { it.instructionIndex == instanceOfIndex }
 
         assertEquals(JvmValueType.Computational(JvmComputationalType.BOOLEAN), value.type)
     }
@@ -158,8 +152,7 @@ class ValueFlowAnalyzerTest {
         val frames = frameAnalyzer.analyze(rawClass.internalName, method, graph)
 
         val analysis = analyzer.analyze(graph, frames)
-        val instructionValues = analysis.values.values.filterIsInstance<ValueDefinition.Instruction>()
-            .associateBy { it.instructionIndex }
+        val instructionValues = analysis.values.values.filterIsInstance<ValueDefinition.Instruction>().associateBy { it.instructionIndex }
         val stringIndex = code.instructions.indexOfFirst {
             it is RawConstantInstruction && it.opcode.mnemonic == "ldc" && it.value.javaClass == String::class.java
         }

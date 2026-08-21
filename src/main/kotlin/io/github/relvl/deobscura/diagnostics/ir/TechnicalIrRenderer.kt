@@ -25,14 +25,10 @@ class TechnicalIrRenderer(
         val stats = analysis.optimization.stats
         appendLine("  optimizer-iterations: ${stats.iterationCount}")
         appendLine(
-            "  ssa-size: " +
-                "initial=${analysis.initialSsa.values.size} values/${analysis.initialSsa.operations.size} ops/${analysis.initialSsa.phiNodes.size} phi, " +
-                "final=${analysis.ssa.values.size} values/${analysis.ssa.operations.size} ops/${analysis.ssa.phiNodes.size} phi",
+            "  ssa-size: " + "initial=${analysis.initialSsa.values.size} values/${analysis.initialSsa.operations.size} ops/${analysis.initialSsa.phiNodes.size} phi, " + "final=${analysis.ssa.values.size} values/${analysis.ssa.operations.size} ops/${analysis.ssa.phiNodes.size} phi",
         )
         appendLine(
-            "  optimization: cfg-pruned-ops=${stats.removedOperationCount}, dead-ops=${stats.deadOperationCount}, " +
-                "dead-values=${stats.deadValueCount}, passthrough-blocks=${stats.canonicalizedPassthroughBlockCount}, " +
-                "control-flow-ops=${stats.removedControlFlowOperationCount}",
+            "  optimization: cfg-pruned-ops=${stats.removedOperationCount}, dead-ops=${stats.deadOperationCount}, " + "dead-values=${stats.deadValueCount}, passthrough-blocks=${stats.canonicalizedPassthroughBlockCount}, " + "control-flow-ops=${stats.removedControlFlowOperationCount}",
         )
         appendLine()
 
@@ -78,10 +74,9 @@ class TechnicalIrRenderer(
             appendLine("    B${block.value}:")
             phiByBlock[block].orEmpty().forEach { phi ->
                 appendLine(
-                    "      v${phi.output.value}:${formatValueType(analysis.ssa.typeOf(phi.output))} = phi ${formatPhiLocation(phi.location)} " +
-                        phi.inputs.joinToString(prefix = "[", postfix = "]") { input ->
-                            input.predecessor?.let { "B${it.value}=v${input.value.value}" } ?: "origin=v${input.value.value}"
-                        },
+                    "      v${phi.output.value}:${formatValueType(analysis.ssa.typeOf(phi.output))} = phi ${formatPhiLocation(phi.location)} " + phi.inputs.joinToString(prefix = "[", postfix = "]") { input ->
+                        input.predecessor?.let { "B${it.value}=v${input.value.value}" } ?: "origin=v${input.value.value}"
+                    },
                 )
             }
             operationsByBlock[block].orEmpty().sortedBy { it.instructionIndex }.forEach { operation ->
@@ -105,10 +100,7 @@ class TechnicalIrRenderer(
         appendLine()
 
         appendLine("  roots:")
-        analysis.ssa.values.values
-            .filterIsInstance<SsaValueDefinition.Root>()
-            .sortedBy { it.id.value }
-            .forEach { appendLine("    v${it.id.value}: ${formatValueType(it.type)} ${it.origin}") }
+        analysis.ssa.values.values.filterIsInstance<SsaValueDefinition.Root>().sortedBy { it.id.value }.forEach { appendLine("    v${it.id.value}: ${formatValueType(it.type)} ${it.origin}") }
         appendLine()
 
         if (analysis.ssa.constants.isNotEmpty()) {
@@ -143,30 +135,7 @@ class TechnicalIrRenderer(
 
     private fun formatFrameValue(value: FrameValue): String = formatValueType(value.type)
 
-    private fun formatValueType(type: JvmValueType): String = when (type) {
-        is JvmValueType.Reference -> formatReferenceType(type.referenceType)
-        is JvmValueType.Computational -> type.type.name.lowercase()
-    }
-
-    private fun formatReferenceType(type: JvmReferenceType): String = when (type) {
-        JvmReferenceType.Null -> "null"
-        JvmReferenceType.Unknown -> "reference?"
-        is JvmReferenceType.Exact -> formatJvmType(type.type)
-    }
-
-    private fun formatJvmType(type: JvmType): String = when (type) {
-        JvmType.BooleanType -> "boolean"
-        JvmType.ByteType -> "byte"
-        JvmType.CharType -> "char"
-        JvmType.ShortType -> "short"
-        JvmType.IntType -> "int"
-        JvmType.LongType -> "long"
-        JvmType.FloatType -> "float"
-        JvmType.DoubleType -> "double"
-        JvmType.VoidType -> "void"
-        is JvmType.ObjectType -> type.internalName
-        is JvmType.ArrayType -> "${formatJvmType(type.componentType)}[]"
-    }
+    private fun formatValueType(type: JvmValueType): String = type.formatTypeName({ it }, nullTypeName = "null", unknownReferenceName = "reference?")
 
     private fun formatEdge(edge: ControlFlowEdge): String = buildString {
         append("B${edge.to.value} ${edge.kind}")
@@ -174,16 +143,7 @@ class TechnicalIrRenderer(
         edge.catchType?.let { append(" catch=$it") }
     }
 
-    private fun formatPhiLocation(location: SsaPhiLocation): String = when (location) {
-        is SsaPhiLocation.Local -> "local[${location.slot}]"
-        is SsaPhiLocation.Stack -> "stack[${location.index}]"
-    }
-
-    private fun formatConstant(value: Any): String = value.toString()
-        .replace("\\", "\\\\")
-        .replace("\r", "\\r")
-        .replace("\n", "\\n")
-        .replace("\t", "\\t")
+    private fun formatConstant(value: Any): String = value.toString().replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
 
     private fun formatInstruction(instruction: RawInstruction): String = when (instruction) {
         is RawConstantInstruction -> "${instruction.opcode.mnemonic} ${formatConstant(instruction.value)}"
@@ -200,19 +160,15 @@ class TechnicalIrRenderer(
             instruction.cases.forEach { append(" ${it.value}:L${it.target.value}") }
         }
 
-        is RawFieldInstruction ->
-            "${instruction.opcode.mnemonic} ${instruction.owner}.${instruction.name}:${instruction.descriptor}"
+        is RawFieldInstruction -> "${instruction.opcode.mnemonic} ${instruction.owner}.${instruction.name}:${instruction.descriptor}"
 
-        is RawInvokeInstruction ->
-            "${instruction.opcode.mnemonic} ${instruction.owner}.${instruction.name}${instruction.descriptor}"
+        is RawInvokeInstruction -> "${instruction.opcode.mnemonic} ${instruction.owner}.${instruction.name}${instruction.descriptor}"
 
-        is RawInvokeDynamicInstruction ->
-            "${instruction.opcode.mnemonic} ${instruction.name}${instruction.descriptor}"
+        is RawInvokeDynamicInstruction -> "${instruction.opcode.mnemonic} ${instruction.name}${instruction.descriptor}"
 
         is RawNewObjectInstruction -> "${instruction.opcode.mnemonic} ${instruction.internalName}"
         is RawNewArrayInstruction -> "${instruction.opcode.mnemonic} ${instruction.componentType.descriptor}"
-        is RawNewMultiArrayInstruction ->
-            "${instruction.opcode.mnemonic} ${instruction.arrayType.descriptor} dimensions=${instruction.dimensions}"
+        is RawNewMultiArrayInstruction -> "${instruction.opcode.mnemonic} ${instruction.arrayType.descriptor} dimensions=${instruction.dimensions}"
 
         is RawTypeCheckInstruction -> "${instruction.opcode.mnemonic} ${instruction.type.descriptor}"
         is RawReturnInstruction -> instruction.opcode.mnemonic

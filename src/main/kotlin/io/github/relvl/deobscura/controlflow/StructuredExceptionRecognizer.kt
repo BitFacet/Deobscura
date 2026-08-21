@@ -15,10 +15,7 @@ internal class StructuredExceptionRecognizer {
 
     /** Reconstructs all exception constructs for one method without weakening failed proofs. */
     fun recognize(
-        graph: ControlFlowGraph,
-        facts: ControlFlowFacts,
-        legacySubroutineNormalized: Boolean,
-        legacySubroutineProvenance: LegacySubroutineProvenance? = null
+        graph: ControlFlowGraph, facts: ControlFlowFacts, legacySubroutineNormalized: Boolean, legacySubroutineProvenance: LegacySubroutineProvenance? = null
     ): ExceptionRecognition {
         if (graph.code.exceptionHandlers.isEmpty()) return ExceptionRecognition(emptyList(), emptyMap(), 0)
 
@@ -149,8 +146,7 @@ internal class StructuredExceptionRecognizer {
             val finallyRegion = ModernFinallyRecognizer.recognize(
                 graph = graph,
                 topology = topology,
-                header = header,
-                // Unlike catches, finally must keep source-terminal transfer blocks outside the
+                header = header, // Unlike catches, finally must keep source-terminal transfer blocks outside the
                 // physical try range: those blocks can contain the duplicated cleanup before return.
                 protectedBlocks = topology.protectedBlocks,
                 groupedHandlers = groupedHandlers,
@@ -202,19 +198,14 @@ internal class StructuredExceptionRecognizer {
         return ExceptionRecognition(regions, rejections, groupTopologies.size, legacyRejectionDetails, residualFamilies)
     }
 
-
 }
-
 
 private fun synchronizedResidualContext(
     topology: ExceptionGroupTopology,
     regions: List<StructuredRegion>,
 ): String? {
     val range = topology.group.envelope
-    val candidates = regions.asSequence()
-        .filterIsInstance<StructuredRegion.Synchronized>()
-        .filter { region -> region.monitorEnterInstructionIndex < range.endExclusive }
-        .map { region ->
+    val candidates = regions.asSequence().filterIsInstance<StructuredRegion.Synchronized>().filter { region -> region.monitorEnterInstructionIndex < range.endExclusive }.map { region ->
             val lastNormalExit = region.normalMonitorExitInstructionIndices.maxOrNull() ?: return@map null
             val bodyOverlap = topology.protectedBlocks.count { block -> block in region.bodyBlocks }
             val handlerOverlap = topology.protectedBlocks.count { block -> block in region.handlerBlocks }
@@ -232,11 +223,7 @@ private fun synchronizedResidualContext(
                 handlerEntryOverlap = handlerEntryOverlap,
                 distance = distance,
             )
-        }
-        .filterNotNull()
-        .sortedWith(compareBy<SynchronizedResidualContext> { context -> context.distance }.thenByDescending { context -> context.region.monitorEnterInstructionIndex })
-        .take(2)
-        .toList()
+        }.filterNotNull().sortedWith(compareBy<SynchronizedResidualContext> { context -> context.distance }.thenByDescending { context -> context.region.monitorEnterInstructionIndex }).take(2).toList()
     if (candidates.isEmpty()) return null
 
     return candidates.joinToString(";") { context ->

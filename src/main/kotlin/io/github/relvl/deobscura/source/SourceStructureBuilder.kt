@@ -76,9 +76,7 @@ class SourceStructureBuilder {
 
         fun directChildRegions(ownedBlocks: Set<BasicBlockId>, excluded: Set<StructuredRegion>): List<StructuredRegion> {
             val candidates = regions.filter { candidate ->
-                candidate !in excluded &&
-                    candidate.header in ownedBlocks &&
-                    candidate !in suppressedRegions
+                candidate !in excluded && candidate.header in ownedBlocks && candidate !in suppressedRegions
             }
             return candidates.filter { child ->
                 candidates.none { possibleParent ->
@@ -99,8 +97,7 @@ class SourceStructureBuilder {
                 val sameHeader = regionsByHeader[block].orEmpty()
                 if (sameHeader.isNotEmpty()) {
                     val region = sameHeader.maxWithOrNull(
-                        compareBy<StructuredRegion> { it.coveredBlocks.size }
-                            .thenBy { regionPriority(it) },
+                        compareBy<StructuredRegion> { it.coveredBlocks.size }.thenBy { regionPriority(it) },
                     ) ?: return@forEach
                     if (!emittedRegions.add(region)) return@forEach
 
@@ -176,9 +173,7 @@ class SourceStructureBuilder {
             projectedRoot
         } else {
             projectedRoot.copy(
-                nodes = projectedRoot.nodes + missing
-                    .sortedBy { blockOrder[it] ?: Int.MAX_VALUE }
-                    .map { block ->
+                nodes = projectedRoot.nodes + missing.sortedBy { blockOrder[it] ?: Int.MAX_VALUE }.map { block ->
                         SourceNode.ProjectionFallback(
                             block = block,
                             reason = SourceProjectionIssueReason.UNACCOUNTED_REACHABLE_BLOCK,
@@ -229,11 +224,8 @@ class SourceStructureBuilder {
         }
 
         val directSourceBlocks = blocksOverlappingRanges(graph, reachable, finallyBodyRanges)
-        val nestedSourceBlocks = regions.asSequence()
-            .filter { it.header in directSourceBlocks && it.header != owner }
-            .filter { it.coveredBlocks.all { block -> block in handlerBlocks } }
-            .flatMap { it.coveredBlocks.asSequence() }
-            .toSet()
+        val nestedSourceBlocks =
+            regions.asSequence().filter { it.header in directSourceBlocks && it.header != owner }.filter { it.coveredBlocks.all { block -> block in handlerBlocks } }.flatMap { it.coveredBlocks.asSequence() }.toSet()
         (handlerBlocks - directSourceBlocks - nestedSourceBlocks).forEach {
             record(it, SourceConsumptionReason.FINALLY_EXCEPTIONAL_SCAFFOLDING, owner)
         }
@@ -264,9 +256,7 @@ class SourceStructureBuilder {
         graph: ControlFlowGraph,
         reachable: Set<BasicBlockId>,
         ranges: List<IntRange>,
-    ): Set<BasicBlockId> = graph.blocks.asSequence()
-        .filter { it.id in reachable }
-        .filter { block -> ranges.any { range -> block.startInstructionIndex <= range.last && block.endInstructionIndexExclusive > range.first } }
+    ): Set<BasicBlockId> = graph.blocks.asSequence().filter { it.id in reachable }.filter { block -> ranges.any { range -> block.startInstructionIndex <= range.last && block.endInstructionIndexExclusive > range.first } }
         .mapTo(linkedSetOf()) { it.id }
 
     private fun blockInstructionRange(graph: ControlFlowGraph, block: BasicBlockId): IntRange? {

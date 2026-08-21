@@ -29,12 +29,7 @@ class SsaSimplifier {
             changed = false
             analysis.phiNodes.forEach { phi ->
                 if (phi.output in aliases) return@forEach
-                val distinctInputs = phi.inputs
-                    .asSequence()
-                    .map { resolve(it.value) }
-                    .filter { it != phi.output }
-                    .distinct()
-                    .toList()
+                val distinctInputs = phi.inputs.asSequence().map { resolve(it.value) }.filter { it != phi.output }.distinct().toList()
                 if (distinctInputs.size == 1) {
                     aliases[phi.output] = distinctInputs.single()
                     changed = true
@@ -54,11 +49,7 @@ class SsaSimplifier {
         // definition instead of retaining an alias chain.
         aliases.keys.toList().forEach { id -> aliases[id] = resolve(id) }
 
-        val phiNodes = analysis.phiNodes
-            .asSequence()
-            .filterNot { it.output in aliases }
-            .map { phi -> phi.copy(inputs = phi.inputs.map { it.copy(value = resolve(it.value)) }) }
-            .toList()
+        val phiNodes = analysis.phiNodes.asSequence().filterNot { it.output in aliases }.map { phi -> phi.copy(inputs = phi.inputs.map { it.copy(value = resolve(it.value)) }) }.toList()
 
         phiNodes.firstOrNull { phi ->
             phi.inputs.asSequence().map { it.value }.filter { it != phi.output }.distinct().count() <= 1

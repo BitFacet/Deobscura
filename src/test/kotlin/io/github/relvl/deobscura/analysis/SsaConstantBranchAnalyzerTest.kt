@@ -70,7 +70,6 @@ class SsaConstantBranchAnalyzerTest {
         assertTrue(result.reachableBlocks.contains(BasicBlockId(2)))
     }
 
-
     @Test
     fun `keeps previously eliminated edges pruned on later analysis`() {
         val condition = ValueId(0)
@@ -106,19 +105,17 @@ class SsaConstantBranchAnalyzerTest {
         eliminatedLocalInstructionCount = 0,
     )
 
-    private fun graph(instructions: List<RawInstruction>, blocks: List<BasicBlock>, edges: List<ControlFlowEdge>) =
-        ControlFlowGraph(
-            code = RawCode(null, null, null, instructions, emptyList(), emptyList(), emptyList()),
-            blocks = blocks,
-            edges = edges,
-            entryBlock = BasicBlockId(0),
-        )
+    private fun graph(instructions: List<RawInstruction>, blocks: List<BasicBlock>, edges: List<ControlFlowEdge>) = ControlFlowGraph(
+        code = RawCode(null, null, null, instructions, emptyList(), emptyList(), emptyList()),
+        blocks = blocks,
+        edges = edges,
+        entryBlock = BasicBlockId(0),
+    )
 
     private fun block(id: Int, start: Int, end: Int, predecessors: List<Int> = emptyList(), successors: List<Int> = emptyList()) =
         BasicBlock(BasicBlockId(id), start, end, predecessors.map(::BasicBlockId), successors.map(::BasicBlockId))
 
-    private fun edge(from: Int, to: Int, kind: ControlFlowEdgeKind) =
-        ControlFlowEdge(BasicBlockId(from), BasicBlockId(to), kind)
+    private fun edge(from: Int, to: Int, kind: ControlFlowEdgeKind) = ControlFlowEdge(BasicBlockId(from), BasicBlockId(to), kind)
 
     private fun nop() = RawNopInstruction(JvmOpcode("nop"))
 }

@@ -36,11 +36,10 @@ class JavaLikeSourceRenderer(
         append(classKind(rawClass.accessFlags))
         append(' ')
         append(simpleName)
-        rawClass.superName?.takeUnless { it == "java/lang/Object" || rawClass.accessFlags and ACC_INTERFACE != 0 }
-            ?.let { append(" extends ${sourceName(it)}") }
+        rawClass.superName?.takeUnless { it == "java/lang/Object" || rawClass.accessFlags and ACC_INTERFACE != 0 }?.let { append(" extends ${deobfuscation.sourceClassName(it)}") }
         if (rawClass.interfaces.isNotEmpty()) {
             append(if (rawClass.accessFlags and ACC_INTERFACE != 0) " extends " else " implements ")
-            append(rawClass.interfaces.joinToString { sourceName(it) })
+            append(rawClass.interfaces.joinToString { deobfuscation.sourceClassName(it) })
         }
         appendLine(" {")
 
@@ -52,9 +51,7 @@ class JavaLikeSourceRenderer(
         }
         if (rawClass.fields.isNotEmpty() && rawClass.methods.isNotEmpty()) appendLine()
 
-        val trivialNoArgConstructor = rawClass.methods
-            .firstOrNull { it.name == "<init>" && it.descriptor == "()V" }
-            ?.takeIf { it.isTrivialConstructor(rawClass) }
+        val trivialNoArgConstructor = rawClass.methods.firstOrNull { it.name == "<init>" && it.descriptor == "()V" }?.takeIf { it.isTrivialConstructor(rawClass) }
 
         rawClass.methods.forEachIndexed { index, method ->
             val analysis = analyses[SourceMethodKey(method.name, method.descriptor)]
@@ -96,9 +93,7 @@ class JavaLikeSourceRenderer(
             return@buildString
         }
 
-        if (method.name != "<init>" && method.accessFlags and ACC_BRIDGE == 0 &&
-            methodOverrides.overridesSuperMethod(methodOwnerInternalName, method.name, method.descriptor)
-        ) {
+        if (method.name != "<init>" && method.accessFlags and ACC_BRIDGE == 0 && methodOverrides.overridesSuperMethod(methodOwnerInternalName, method.name, method.descriptor)) {
             appendLine("@Override")
         }
 
@@ -115,7 +110,7 @@ class JavaLikeSourceRenderer(
         append(')')
         if (method.exceptions.isNotEmpty()) {
             append(" throws ")
-            append(method.exceptions.joinToString { sourceName(it) })
+            append(method.exceptions.joinToString { deobfuscation.sourceClassName(it) })
         }
 
         if (method.code == null) {
@@ -243,15 +238,13 @@ class JavaLikeSourceRenderer(
             is StructuredRegion.Switch -> {
                 renderPhysicalBlock(region.header, context, bindings, indent, out, includeControl = false)
                 appendIndented(out, indent, "switch (${expressionRenderer(bindings).renderValue(region.selector, context.analysis.expression)}) {")
-                node.parts.filter { it.kind == SourceRegionPartKind.SWITCH_CASE }
-                    .sortedBy { it.ordinal }
-                    .forEach { part ->
-                        val case = region.cases[part.ordinal]
-                        case.labels.forEach { appendIndented(out, indent + 1, "case $it:") }
-                        if (case.isDefault) appendIndented(out, indent + 1, "default:")
-                        renderSourceBlock(part.body, context, bindings, indent + 2, out)
-                        renderSwitchTransfers(case.transfers, indent + 2, out)
-                    }
+                node.parts.filter { it.kind == SourceRegionPartKind.SWITCH_CASE }.sortedBy { it.ordinal }.forEach { part ->
+                    val case = region.cases[part.ordinal]
+                    case.labels.forEach { appendIndented(out, indent + 1, "case $it:") }
+                    if (case.isDefault) appendIndented(out, indent + 1, "default:")
+                    renderSourceBlock(part.body, context, bindings, indent + 2, out)
+                    renderSwitchTransfers(case.transfers, indent + 2, out)
+                }
                 appendIndented(out, indent, "}")
             }
 
@@ -264,7 +257,7 @@ class JavaLikeSourceRenderer(
                         context.analysis.graph.block(catch.entry).startInstructionIndex,
                         parameterName,
                     )
-                    appendIndented(out, indent, "} catch (${catch.catchTypes.joinToString(" | ") { sourceName(it) }} $parameterName) {")
+                    appendIndented(out, indent, "} catch (${catch.catchTypes.joinToString(" | ") { deobfuscation.sourceClassName(it) }} $parameterName) {")
                     renderPart(
                         node,
                         SourceRegionPartKind.CATCH_BODY,
@@ -296,7 +289,7 @@ class JavaLikeSourceRenderer(
                         context.analysis.graph.block(catch.entry).startInstructionIndex,
                         parameterName,
                     )
-                    appendIndented(out, indent, "} catch (${catch.catchTypes.joinToString(" | ") { sourceName(it) }} $parameterName) {")
+                    appendIndented(out, indent, "} catch (${catch.catchTypes.joinToString(" | ") { deobfuscation.sourceClassName(it) }} $parameterName) {")
                     renderPart(node, SourceRegionPartKind.CATCH_BODY, index, context, catchBindings, indent + 1, out)
                 }
                 appendIndented(out, indent, "} finally {")
@@ -322,29 +315,10 @@ class JavaLikeSourceRenderer(
         }
     }
 
-    private fun renderPart(
-        node: SourceNode.Structured,
-        kind: SourceRegionPartKind,
-        ordinal: Int,
-        context: RenderContext,
-        bindings: SourceValueBindings,
-        indent: Int,
-        out: StringBuilder,
-        tailPosition: Boolean = false,
-    ) {
-        node.parts.firstOrNull { it.kind == kind && it.ordinal == ordinal }
-            ?.let {
-                renderSourceBlock(
-                    it.body,
-                    context,
-                    bindings,
-                    indent,
-                    out,
-                    it.instructionRanges,
-                    kind == SourceRegionPartKind.SYNCHRONIZED_BODY,
-                    tailPosition,
-                )
-            }
+    private fun renderPart(node: SourceNode.Structured, kind: SourceRegionPartKind, ordinal: Int, context: RenderContext, bindings: SourceValueBindings, indent: Int, out: StringBuilder, tailPosition: Boolean = false) {
+        node.parts.firstOrNull { it.kind == kind && it.ordinal == ordinal }?.let {
+            renderSourceBlock(it.body, context, bindings, indent, out, it.instructionRanges, kind == SourceRegionPartKind.SYNCHRONIZED_BODY, tailPosition)
+        }
     }
 
     private fun renderPhysicalBlock(
@@ -362,9 +336,7 @@ class JavaLikeSourceRenderer(
         if (fallback) appendIndented(out, indent, "B${block.value}:")
         val contentIndent = indent + if (fallback) 1 else 0
         context.phisByBlock[block].orEmpty().forEach phiLoop@{ value ->
-            if (value.id in context.analysis.sourceLocals.conditionalAssignments ||
-                value.id in context.analysis.sourceLocals.twoArmAssignments
-            ) return@phiLoop
+            if (value.id in context.analysis.sourceLocals.conditionalAssignments || value.id in context.analysis.sourceLocals.twoArmAssignments) return@phiLoop
             val conditional = context.analysis.sourceLocals.conditionalValues[value.id]
             val rendered = if (conditional == null) {
                 expressionRenderer(bindings).renderDefinition(value, context.analysis.expression)
@@ -380,8 +352,7 @@ class JavaLikeSourceRenderer(
             }
             appendIndented(out, contentIndent, "$rendered;")
         }
-        val events = context.eventsByBlock[block].orEmpty()
-            .filter { event -> instructionRanges.isEmpty() || instructionRanges.any { event.instructionIndex in it } }
+        val events = context.eventsByBlock[block].orEmpty().filter { event -> instructionRanges.isEmpty() || instructionRanges.any { event.instructionIndex in it } }
         events.forEachIndexed eventLoop@{ index, event ->
             when (event) {
                 is BlockEvent.Value -> {
@@ -426,12 +397,7 @@ class JavaLikeSourceRenderer(
                     if (!includeControl && event.statement.isStructuralControl()) return@eventLoop
                     if (suppressMonitor && event.statement is ExpressionStatement.Monitor) return@eventLoop
                     if (event.statement.isRedundantConstructorInvocation(context)) return@eventLoop
-                    if (
-                        tailPosition &&
-                        index == events.lastIndex &&
-                        event.statement is ExpressionStatement.Return &&
-                        event.statement.value == null
-                    ) return@eventLoop
+                    if (tailPosition && index == events.lastIndex && event.statement is ExpressionStatement.Return && event.statement.value == null) return@eventLoop
                     val rendered = renderStatement(event.statement, block, context, bindings)
                     appendIndented(out, contentIndent, rendered + ";")
                 }
@@ -461,8 +427,7 @@ class JavaLikeSourceRenderer(
             }
 
             is ExpressionStatement.Switch -> {
-                val cases = outgoing.filter { it.kind == ControlFlowEdgeKind.SWITCH }
-                    .joinToString { edge -> edge.switchValue?.let { "$it: B${edge.to.value}" } ?: "default: B${edge.to.value}" }
+                val cases = outgoing.filter { it.kind == ControlFlowEdgeKind.SWITCH }.joinToString { edge -> edge.switchValue?.let { "$it: B${edge.to.value}" } ?: "default: B${edge.to.value}" }
                 "switch (${expressionRenderer(bindings).renderValue(statement.selector, context.analysis.expression)}) -> [$cases]"
             }
 
@@ -478,8 +443,7 @@ class JavaLikeSourceRenderer(
         val outgoing = context.outgoingByBlock[block].orEmpty()
         val terminalControl = context.eventsByBlock[block].orEmpty().lastOrNull()?.let { it as? BlockEvent.Statement }?.statement
         if (terminalControl is ExpressionStatement.Branch || terminalControl is ExpressionStatement.Switch) return
-        outgoing.filter { it.to in context.analysis.optimization.controlFlow.blocks }
-            .forEach { edge -> appendIndented(out, indent, "goto B${edge.to.value};") }
+        outgoing.filter { it.to in context.analysis.optimization.controlFlow.blocks }.forEach { edge -> appendIndented(out, indent, "goto B${edge.to.value};") }
     }
 
     private fun renderArmExit(exit: StructuredArmExit, indent: Int, out: StringBuilder) {
@@ -495,8 +459,7 @@ class JavaLikeSourceRenderer(
             when (transfer.kind) {
                 StructuredRegionTransferKind.BREAK_SWITCH, StructuredRegionTransferKind.BREAK_LOOP -> appendIndented(out, indent, "break;")
                 StructuredRegionTransferKind.CONTINUE_LOOP -> appendIndented(out, indent, "continue;")
-                StructuredRegionTransferKind.CASE_FALLTHROUGH, StructuredRegionTransferKind.NORMAL_SWITCH_COMPLETION,
-                StructuredRegionTransferKind.RETURN_OR_THROW -> Unit
+                StructuredRegionTransferKind.CASE_FALLTHROUGH, StructuredRegionTransferKind.NORMAL_SWITCH_COMPLETION, StructuredRegionTransferKind.RETURN_OR_THROW -> Unit
             }
         }
     }
@@ -531,8 +494,7 @@ class JavaLikeSourceRenderer(
         ComparisonOperator.GE -> ComparisonOperator.LT
     }
 
-    private fun ExpressionStatement.isStructuralControl(): Boolean =
-        this is ExpressionStatement.Branch || this is ExpressionStatement.Switch || this is ExpressionStatement.Monitor
+    private fun ExpressionStatement.isStructuralControl(): Boolean = this is ExpressionStatement.Branch || this is ExpressionStatement.Switch || this is ExpressionStatement.Monitor
 
     private fun ExpressionStatement.isRedundantConstructorInvocation(context: RenderContext): Boolean {
         val call = this as? ExpressionStatement.Call ?: return false
@@ -540,9 +502,7 @@ class JavaLikeSourceRenderer(
             return false
         }
         if (call.arguments.isNotEmpty() || call.method.descriptor != "()V") return false
-        val receiverOrigin = call.receiver
-            ?.let { context.analysis.expression.values[it]?.node as? ExpressionNode.Root }
-            ?.origin
+        val receiverOrigin = call.receiver?.let { context.analysis.expression.values[it]?.node as? ExpressionNode.Root }?.origin
         if (receiverOrigin !is io.github.relvl.deobscura.analysis.ValueOrigin.This) return false
 
         return if (call.method.ownerInternalName == context.method.ownerInternalName) {
@@ -558,14 +518,7 @@ class JavaLikeSourceRenderer(
         val loadThis = instructions[0] as? RawLocalInstruction ?: return false
         val superCall = instructions[1] as? RawInvokeInstruction ?: return false
         val returnInstruction = instructions[2] as? RawReturnInstruction ?: return false
-        return loadThis.operation == LocalOperation.LOAD &&
-            loadThis.slot == 0 &&
-            loadThis.type == JvmComputationalType.REFERENCE &&
-            superCall.opcode.mnemonic == "invokespecial" &&
-            superCall.owner == owner.superName &&
-            superCall.name == "<init>" &&
-            superCall.descriptor == "()V" &&
-            returnInstruction.type == JvmComputationalType.VOID
+        return loadThis.operation == LocalOperation.LOAD && loadThis.slot == 0 && loadThis.type == JvmComputationalType.REFERENCE && superCall.opcode.mnemonic == "invokespecial" && superCall.owner == owner.superName && superCall.name == "<init>" && superCall.descriptor == "()V" && returnInstruction.type == JvmComputationalType.VOID
     }
 
     private fun appendIndented(out: StringBuilder, indent: Int, line: String) {
@@ -599,21 +552,7 @@ class JavaLikeSourceRenderer(
         else -> "class"
     }
 
-    private fun formatType(type: JvmType): String = when (type) {
-        JvmType.BooleanType -> "boolean"
-        JvmType.ByteType -> "byte"
-        JvmType.CharType -> "char"
-        JvmType.ShortType -> "short"
-        JvmType.IntType -> "int"
-        JvmType.LongType -> "long"
-        JvmType.FloatType -> "float"
-        JvmType.DoubleType -> "double"
-        JvmType.VoidType -> "void"
-        is JvmType.ObjectType -> sourceName(type.internalName)
-        is JvmType.ArrayType -> "${formatType(type.componentType)}[]"
-    }
-
-    private fun sourceName(internalName: String): String = deobfuscation.classInternalName(internalName).replace('/', '.')
+    private fun formatType(type: JvmType): String = type.formatTypeName(deobfuscation::sourceClassName)
 
     private data class RenderMethodContext(
         val ownerInternalName: String,
@@ -624,19 +563,13 @@ class JavaLikeSourceRenderer(
             get() = raw.name == "<init>" || raw.name == "<clinit>" || raw.type.returnType == JvmType.VoidType
     }
 
-    private class RenderContext(
-        val analysis: MethodAnalysis,
-        val method: RenderMethodContext,
-    ) {
+    private class RenderContext(val analysis: MethodAnalysis, val method: RenderMethodContext) {
         val outgoingByBlock: Map<BasicBlockId, List<ControlFlowEdge>> = analysis.optimization.controlFlow.edges.groupBy { it.from }
-        val phisByBlock: Map<BasicBlockId, List<ExpressionValue>> = analysis.expression.values.values
-            .filter { it.node is ExpressionNode.Phi }
-            .groupBy { (it.node as ExpressionNode.Phi).blockId }
+        val phisByBlock: Map<BasicBlockId, List<ExpressionValue>> = analysis.expression.values.values.filter { it.node is ExpressionNode.Phi }.groupBy { (it.node as ExpressionNode.Phi).blockId }
         val eventsByBlock: Map<BasicBlockId, List<BlockEvent>> = buildEvents(analysis)
-        val localDeclarationByInitializer: Map<ValueId, Pair<ValueId, SourceConditionalAssignment>> =
-            analysis.sourceLocals.conditionalAssignments.entries.associate { (phi, assignment) ->
-                assignment.initialValue to (phi to assignment)
-            }
+        val localDeclarationByInitializer: Map<ValueId, Pair<ValueId, SourceConditionalAssignment>> = analysis.sourceLocals.conditionalAssignments.entries.associate { (phi, assignment) ->
+            assignment.initialValue to (phi to assignment)
+        }
         val localAssignmentByValue: Map<ValueId, ValueId> = buildMap {
             analysis.sourceLocals.conditionalAssignments.forEach { (phi, assignment) ->
                 put(assignment.assignedValue, phi)
@@ -646,11 +579,10 @@ class JavaLikeSourceRenderer(
                 put(assignment.elseValue, phi)
             }
         }
-        val twoArmAssignmentsByHeader: Map<BasicBlockId, List<ValueId>> =
-            analysis.sourceLocals.twoArmAssignments.entries.groupBy(
-                keySelector = { it.value.header },
-                valueTransform = { it.key },
-            )
+        val twoArmAssignmentsByHeader: Map<BasicBlockId, List<ValueId>> = analysis.sourceLocals.twoArmAssignments.entries.groupBy(
+            keySelector = { it.value.header },
+            valueTransform = { it.key },
+        )
 
         companion object {
             private fun buildEvents(analysis: MethodAnalysis): Map<BasicBlockId, List<BlockEvent>> {
@@ -660,12 +592,10 @@ class JavaLikeSourceRenderer(
                     }
                 }
                 return buildMap<BasicBlockId, MutableList<BlockEvent>> {
-                    analysis.expression.values.values
-                        .filter { it.instructionIndices.isNotEmpty() && it.id !in analysis.expression.materialization.inlineValues }
-                        .forEach { value ->
-                            val index = value.instructionIndices.last()
-                            instructionToBlock[index]?.let { block -> getOrPut(block) { mutableListOf() } += BlockEvent.Value(index, value) }
-                        }
+                    analysis.expression.values.values.filter { it.instructionIndices.isNotEmpty() && it.id !in analysis.expression.materialization.inlineValues }.forEach { value ->
+                        val index = value.instructionIndices.last()
+                        instructionToBlock[index]?.let { block -> getOrPut(block) { mutableListOf() } += BlockEvent.Value(index, value) }
+                    }
                     analysis.expression.statements.forEach { statement ->
                         instructionToBlock[statement.instructionIndex]?.let { block ->
                             getOrPut(block) { mutableListOf() } += BlockEvent.Statement(statement.instructionIndex, statement)
@@ -689,7 +619,6 @@ class JavaLikeSourceRenderer(
             override val order = 1
         }
     }
-
 
     private companion object {
         const val ACC_PUBLIC = 0x0001

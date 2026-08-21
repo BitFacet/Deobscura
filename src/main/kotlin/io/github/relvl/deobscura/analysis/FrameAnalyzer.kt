@@ -59,9 +59,7 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
         }
 
         fun propagateOrdinarySuccessors(location: FrameLocation, output: FrameState) {
-            graph.edges.asSequence()
-                .filter { it.from == location.block && it.kind != ControlFlowEdgeKind.EXCEPTION }
-                .forEach { edge ->
+            graph.edges.asSequence().filter { it.from == location.block && it.kind != ControlFlowEdgeKind.EXCEPTION }.forEach { edge ->
                     mergeInto(
                         FrameLocation(edge.to, location.context),
                         output,
@@ -78,12 +76,9 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
             val input = requireNotNull(contextualEntryFrames[location])
             val mutable = MutableFrame(input.locals.toMutableList(), input.stack.toMutableList())
 
-            for (instructionIndex in block.startInstructionIndex until block.endInstructionIndexExclusive) {
-                // Any instruction inside a protected range is conservatively treated as a potential throw site.
+            for (instructionIndex in block.startInstructionIndex until block.endInstructionIndexExclusive) { // Any instruction inside a protected range is conservatively treated as a potential throw site.
                 // An exception raised inside a JSR subroutine stays in the same subroutine invocation context.
-                handlers.asSequence()
-                    .filter { instructionIndex >= it.start && instructionIndex < it.endExclusive }
-                    .forEach { handler ->
+                handlers.asSequence().filter { instructionIndex >= it.start && instructionIndex < it.endExclusive }.forEach { handler ->
                         val exceptionFrame = FrameState(
                             locals = mutable.locals.toList(),
                             stack = listOf(
@@ -113,17 +108,13 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
             when (val terminator = code.instructions[block.endInstructionIndexExclusive - 1]) {
                 is RawRetInstruction -> {
                     val returnAddress = mutable.requireLocal(terminator.slot, FrameValueKind.RETURN_ADDRESS)
-                    val expectedReturnSite = location.context.currentReturnSite
-                        ?: throw StackInconsistencyException(
-                            "RET in block ${block.id.value} executes outside a JSR subroutine context.",
-                        )
-                    val returnSites = returnAddress.origins
-                        .filterIsInstance<ValueOrigin.ReturnAddress>()
-                        .mapTo(linkedSetOf()) { it.returnInstructionIndex }
+                    val expectedReturnSite = location.context.currentReturnSite ?: throw StackInconsistencyException(
+                        "RET in block ${block.id.value} executes outside a JSR subroutine context.",
+                    )
+                    val returnSites = returnAddress.origins.filterIsInstance<ValueOrigin.ReturnAddress>().mapTo(linkedSetOf()) { it.returnInstructionIndex }
                     if (expectedReturnSite !in returnSites) {
                         throw StackInconsistencyException(
-                            "RET in block ${block.id.value} uses return-address local ${terminator.slot} for " +
-                                "$returnSites, expected $expectedReturnSite.",
+                            "RET in block ${block.id.value} uses return-address local ${terminator.slot} for " + "$returnSites, expected $expectedReturnSite.",
                         )
                     }
                     val returnBlock = blockForInstruction(graph, expectedReturnSite)
@@ -140,12 +131,9 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
                         require(returnSite in code.instructions.indices) {
                             "JSR at the end of method has no return site."
                         }
-                        val subroutineContext = location.context.enterSubroutine(returnSite)
-                        // The CFG keeps the post-JSR block reachable for structural diagnostics, but execution
+                        val subroutineContext = location.context.enterSubroutine(returnSite) // The CFG keeps the post-JSR block reachable for structural diagnostics, but execution
                         // reaches it only through RET. Enter only the actual subroutine target here.
-                        graph.edges.asSequence()
-                            .filter { it.from == blockId && it.kind == ControlFlowEdgeKind.JUMP }
-                            .forEach { edge ->
+                        graph.edges.asSequence().filter { it.from == blockId && it.kind == ControlFlowEdgeKind.JUMP }.forEach { edge ->
                                 mergeInto(
                                     FrameLocation(edge.to, subroutineContext),
                                     output,
@@ -271,8 +259,7 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
         when (instruction.operation) {
             LocalOperation.LOAD -> frame.push(frame.requireLocal(instruction.slot, kind))
             LocalOperation.STORE -> {
-                if (kind == FrameValueKind.REFERENCE) {
-                    // JVMS permits astore to store either a reference or the returnAddress produced by JSR.
+                if (kind == FrameValueKind.REFERENCE) { // JVMS permits astore to store either a reference or the returnAddress produced by JSR.
                     val value = frame.popAny()
                     if (value.kind != FrameValueKind.REFERENCE && value.kind != FrameValueKind.RETURN_ADDRESS) {
                         throw StackInconsistencyException(
@@ -416,23 +403,18 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
         if (type != JvmType.VoidType) frame.push(value(type, index))
     }
 
-    private fun value(type: JvmType, instructionIndex: Int): FrameValue =
-        FrameValue.of(type, ValueOrigin.Instruction(instructionIndex))
+    private fun value(type: JvmType, instructionIndex: Int): FrameValue = FrameValue.of(type, ValueOrigin.Instruction(instructionIndex))
 
-    private fun value(type: JvmComputationalType, instructionIndex: Int): FrameValue =
-        FrameValue.of(type, ValueOrigin.Instruction(instructionIndex))
+    private fun value(type: JvmComputationalType, instructionIndex: Int): FrameValue = FrameValue.of(type, ValueOrigin.Instruction(instructionIndex))
 
-    private fun value(kind: FrameValueKind, instructionIndex: Int): FrameValue =
-        FrameValue.of(kind, ValueOrigin.Instruction(instructionIndex))
+    private fun value(kind: FrameValueKind, instructionIndex: Int): FrameValue = FrameValue.of(kind, ValueOrigin.Instruction(instructionIndex))
 
-    private fun referenceValue(type: JvmReferenceType, instructionIndex: Int): FrameValue =
-        FrameValue.reference(type, ValueOrigin.Instruction(instructionIndex))
+    private fun referenceValue(type: JvmReferenceType, instructionIndex: Int): FrameValue = FrameValue.reference(type, ValueOrigin.Instruction(instructionIndex))
 
     private fun arrayComponentType(type: JvmReferenceType?): JvmReferenceType {
-        val array = (type as? JvmReferenceType.Exact)?.type as? JvmType.ArrayType
-            ?: return JvmReferenceType.Unknown
+        val array = (type as? JvmReferenceType.Exact)?.type as? JvmType.ArrayType ?: return JvmReferenceType.Unknown
         val component = array.componentType
-        return if (component is JvmType.ObjectType || component is JvmType.ArrayType) {
+        return if (component.isReferenceType) {
             JvmReferenceType.Exact(component)
         } else {
             JvmReferenceType.Unknown
@@ -477,8 +459,7 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
         counters: MergeCounters,
         context: String,
         consumer: String,
-    ): FrameValue? {
-        // A local slot is allowed to have unrelated types on different control-flow paths as long as
+    ): FrameValue? { // A local slot is allowed to have unrelated types on different control-flow paths as long as
         // the value is not used after those paths merge. In verifier terminology the merged slot
         // becomes TOP/unavailable. Operand-stack values are different: their kinds must still agree.
         if (current == incoming) return current
@@ -527,8 +508,7 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
         if (left.kind != right.kind) error("Cannot merge value types with different frame kinds: $left vs $right")
         if (left.kind == FrameValueKind.REFERENCE) {
             return JvmValueType.Reference(requireNotNull(mergedReferenceType))
-        }
-        // The verifier collapses boolean/byte/char/short/int to the INT computational category.
+        } // The verifier collapses boolean/byte/char/short/int to the INT computational category.
         // Preserve a narrow primitive only while all incoming values agree on it.
         return JvmValueType.of(left.kind)
     }
@@ -545,15 +525,11 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
 
     private fun rootContextFrames(
         contextualFrames: Map<FrameLocation, FrameState>,
-    ): Map<BasicBlockId, FrameState> = contextualFrames
-        .asSequence()
-        .filter { (location, _) -> location.context == LegacySubroutineContext.EMPTY }
-        .associate { (location, frame) -> location.block to frame }
+    ): Map<BasicBlockId, FrameState> = contextualFrames.asSequence().filter { (location, _) -> location.context == LegacySubroutineContext.EMPTY }.associate { (location, frame) -> location.block to frame }
 
-    private fun blockForInstruction(graph: ControlFlowGraph, instructionIndex: Int): BasicBlockId =
-        graph.blocks.firstOrNull {
-            instructionIndex >= it.startInstructionIndex && instructionIndex < it.endInstructionIndexExclusive
-        }?.id ?: error("No basic block contains instruction $instructionIndex.")
+    private fun blockForInstruction(graph: ControlFlowGraph, instructionIndex: Int): BasicBlockId = graph.blocks.firstOrNull {
+        instructionIndex >= it.startInstructionIndex && instructionIndex < it.endInstructionIndexExclusive
+    }?.id ?: error("No basic block contains instruction $instructionIndex.")
 
     private fun requireCategory(value: FrameValue, category: Int, mnemonic: String): FrameValue {
         if (value.kind.category != category) {
@@ -562,10 +538,9 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
         return value
     }
 
-    private fun unsupported(instruction: RawInstruction, index: Int): Nothing =
-        throw UnsupportedFrameInstructionException(
-            "Unsupported instruction '${instruction.opcode.mnemonic}' at instruction $index (${instruction::class.simpleName}).",
-        )
+    private fun unsupported(instruction: RawInstruction, index: Int): Nothing = throw UnsupportedFrameInstructionException(
+        "Unsupported instruction '${instruction.opcode.mnemonic}' at instruction $index (${instruction::class.simpleName}).",
+    )
 
     private data class FrameLocation(
         val block: BasicBlockId,
@@ -628,12 +603,10 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
             return value
         }
 
-        fun popAny(): FrameValue = stack.removeLastOrNull()
-            ?: throw StackInconsistencyException("Operand stack underflow.")
+        fun popAny(): FrameValue = stack.removeLastOrNull() ?: throw StackInconsistencyException("Operand stack underflow.")
 
         fun requireLocal(slot: Int, expected: FrameValueKind): FrameValue {
-            val value = locals.getOrNull(slot)
-                ?: throw StackInconsistencyException("Local slot $slot is unavailable.")
+            val value = locals.getOrNull(slot) ?: throw StackInconsistencyException("Local slot $slot is unavailable.")
             if (value.kind != expected) {
                 throw StackInconsistencyException("Expected $expected in local slot $slot, got ${value.kind}.")
             }

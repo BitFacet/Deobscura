@@ -2,11 +2,11 @@ package io.github.relvl.deobscura.diagnostics.ir
 
 import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
 import io.github.relvl.deobscura.raw.RawClass
+import io.github.relvl.deobscura.util.formatElapsedSeconds
 import org.slf4j.LoggerFactory
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.*
 
 /** Collects optional technical-IR snapshots during analysis and writes them after the pipeline completes. */
 object TechnicalIrService {
@@ -35,7 +35,6 @@ object TechnicalIrService {
         currentLocator = TechnicalIrLocator(outputDirectory, deobfuscation::classInternalName)
     }
 
-
     fun setDeobfuscation(plan: DeobfuscationPlan) {
         deobfuscation = plan
         currentLocator = root?.let { TechnicalIrLocator(it, plan::classInternalName) }
@@ -49,15 +48,13 @@ object TechnicalIrService {
     /** Stores a completed method-local trace after analysis; callers control deterministic order. */
     internal fun captureMethod(ownerInternalName: String, trace: MethodAnalysisTrace) {
         if (!enabled) return
-        val owner = classes[ownerInternalName]
-            ?: error("Technical IR class '$ownerInternalName' was not captured before method analysis.")
+        val owner = classes[ownerInternalName] ?: error("Technical IR class '$ownerInternalName' was not captured before method analysis.")
         owner.methods[MethodKey(trace.originalMethod.name, trace.originalMethod.descriptor)] = trace
     }
 
     fun rootHint(): String = locator?.let { " Technical IR root: ${it.rootLocation()}." } ?: ""
 
-    fun methodHint(ownerInternalName: String, methodName: String, descriptor: String): String =
-        locator?.let { " Technical IR: ${it.methodLocation(ownerInternalName, methodName, descriptor)}." } ?: ""
+    fun methodHint(ownerInternalName: String, methodName: String, descriptor: String): String = locator?.let { " Technical IR: ${it.methodLocation(ownerInternalName, methodName, descriptor)}." } ?: ""
 
     fun consumerLocations(consumers: Iterable<String>): List<String> {
         val currentLocator = locator ?: return emptyList()
@@ -91,7 +88,7 @@ object TechnicalIrService {
             "Technical IR written for {} class(es) to {} in {}.",
             written,
             outputDirectory,
-            formatElapsed(System.nanoTime() - startedAt),
+            formatElapsedSeconds(System.nanoTime() - startedAt),
         )
     }
 
@@ -136,9 +133,6 @@ object TechnicalIrService {
         )
     }
 
-    private fun formatElapsed(nanos: Long): String =
-        String.format(Locale.ROOT, "%.1f s", nanos / 1_000_000_000.0)
-
     const val FORMAT_VERSION = 13
     const val MANIFEST_FILE = "_manifest.txt"
     private const val PROGRESS_INTERVAL_NANOS = 5_000_000_000L
@@ -180,10 +174,7 @@ internal fun String.escapeMalformedUtf16(): String {
         var cursor = firstMalformed
         while (cursor < this@escapeMalformedUtf16.length) {
             val char = this@escapeMalformedUtf16[cursor]
-            if (char.isHighSurrogate() &&
-                cursor + 1 < this@escapeMalformedUtf16.length &&
-                this@escapeMalformedUtf16[cursor + 1].isLowSurrogate()
-            ) {
+            if (char.isHighSurrogate() && cursor + 1 < this@escapeMalformedUtf16.length && this@escapeMalformedUtf16[cursor + 1].isLowSurrogate()) {
                 append(char)
                 append(this@escapeMalformedUtf16[cursor + 1])
                 cursor += 2

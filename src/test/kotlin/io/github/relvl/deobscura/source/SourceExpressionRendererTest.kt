@@ -125,7 +125,6 @@ class SourceExpressionRendererTest {
         assertEquals("super()", rendered)
     }
 
-
     @Test
     fun `renders integer constants as booleans only in boolean field context`() {
         val valueId = ValueId(1)

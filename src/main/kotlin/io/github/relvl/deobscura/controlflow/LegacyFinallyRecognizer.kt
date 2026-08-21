@@ -37,38 +37,28 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
      * exceptional copy, equivalent normal copies, and their common continuation.
      */
     private fun analyzeLegacyFinallyShape(
-        graph: ControlFlowGraph,
-        handlerInstructionIndex: Int,
-        facts: ControlFlowFacts,
-        provenance: LegacySubroutineProvenance?,
-        rejectionTrace: MutableList<String>?
+        graph: ControlFlowGraph, handlerInstructionIndex: Int, facts: ControlFlowFacts, provenance: LegacySubroutineProvenance?, rejectionTrace: MutableList<String>?
     ): LegacyFinallyShape? {
-        val handlerEntry = facts.instructionToBlock.getOrNull(handlerInstructionIndex)
-            ?: return rejectLegacy(rejectionTrace, "handler-entry")
+        val handlerEntry = facts.instructionToBlock.getOrNull(handlerInstructionIndex) ?: return rejectLegacy(rejectionTrace, "handler-entry")
         val handlerInstructions = graph.instructions(graph.block(handlerEntry))
         if (handlerInstructions.size != 3) return rejectLegacy(rejectionTrace, "handler-size")
 
-        val store = handlerInstructions[0] as? RawLocalInstruction
-            ?: return rejectLegacy(rejectionTrace, "exception-store")
+        val store = handlerInstructions[0] as? RawLocalInstruction ?: return rejectLegacy(rejectionTrace, "exception-store")
         if (store.operation != LocalOperation.STORE || store.type != JvmComputationalType.REFERENCE) {
             return rejectLegacy(rejectionTrace, "exception-store-shape")
         }
-        val nullSeed = handlerInstructions[1] as? RawConstantInstruction
-            ?: return rejectLegacy(rejectionTrace, "null-seed")
+        val nullSeed = handlerInstructions[1] as? RawConstantInstruction ?: return rejectLegacy(rejectionTrace, "null-seed")
         if (nullSeed.opcode.mnemonic != "aconst_null") return rejectLegacy(rejectionTrace, "null-seed-opcode")
-        val trampoline = handlerInstructions[2] as? RawBranchInstruction
-            ?: return rejectLegacy(rejectionTrace, "handler-goto")
+        val trampoline = handlerInstructions[2] as? RawBranchInstruction ?: return rejectLegacy(rejectionTrace, "handler-goto")
         if (trampoline.opcode.mnemonic !in setOf("goto", "goto_w")) {
             return rejectLegacy(rejectionTrace, "handler-goto-opcode")
         }
 
-        val bodyEntry = facts.outgoing[handlerEntry].orEmpty()
-            .filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION }
-            .map { edge -> edge.to }
-            .distinct()
-            .singleOrNull() ?: return rejectLegacy(rejectionTrace, "handler-successor")
-        val reachable = collectAcyclicNormalRegion(bodyEntry, facts)
-            ?: return rejectLegacy(rejectionTrace, "cyclic-finally-body")
+        val bodyEntry = facts.outgoing[handlerEntry].orEmpty().filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION }.map { edge -> edge.to }.distinct().singleOrNull() ?: return rejectLegacy(
+            rejectionTrace,
+            "handler-successor"
+        )
+        val reachable = collectAcyclicNormalRegion(bodyEntry, facts) ?: return rejectLegacy(rejectionTrace, "cyclic-finally-body")
         val rethrowBlocks = reachable.filter { block -> isCanonicalRethrowBlock(graph, block, store.slot) }
         if (rethrowBlocks.size != 1) return rejectLegacy(rejectionTrace, "rethrow-count=${rethrowBlocks.size}")
         val rethrow = rethrowBlocks.single()
@@ -92,11 +82,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
             addAll(bodyBlocks)
             add(rethrow)
         }
-        val candidateEntries = graph.blocks.asSequence()
-            .map { it.id }
-            .filter { it !in handlerBlocks }
-            .filter { candidate -> hasLegacyFinallyCallSite(candidate, graph, facts, provenance) }
-            .toList()
+        val candidateEntries = graph.blocks.asSequence().map { it.id }.filter { it !in handlerBlocks }.filter { candidate -> hasLegacyFinallyCallSite(candidate, graph, facts, provenance) }.toList()
         val normalCopies = candidateEntries.mapNotNull { candidate ->
             FinallyBodyMatcher.match(
                 graph = graph,
@@ -203,9 +189,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
         val family = requireNotNull(familyBuild.topology)
         if (family.mixedGroups.isEmpty()) return rejectLegacy(rejectionTrace, "no-mixed-peers")
 
-        val mixedSignatures = family.mixedGroups
-            .map { candidate -> exceptionHandlerSignature(candidate.group.handlers, labelPositions) }
-            .distinct()
+        val mixedSignatures = family.mixedGroups.map { candidate -> exceptionHandlerSignature(candidate.group.handlers, labelPositions) }.distinct()
         if (typedHandlers.isEmpty() || mixedSignatures.size > 1) {
             return recognizeLegacyNestedTryCatchFinally(
                 graph = graph,
@@ -222,8 +206,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
         // Identical mixed signatures represent one source typed-catch scope under the outer finally.
         // Reuse the same typed-scope proof as ordinary and nested catches instead of rebuilding the
         // handler topology and validation locally in the direct try/catch/finally path.
-        val sourceScope = family.typedTopology.scopes.singleOrNull()
-            ?: return rejectLegacy(rejectionTrace, "typed-scope-count=${family.typedTopology.scopes.size}")
+        val sourceScope = family.typedTopology.scopes.singleOrNull() ?: return rejectLegacy(rejectionTrace, "typed-scope-count=${family.typedTopology.scopes.size}")
         val sourceTryBlocks = family.mixedGroups.flatMapTo(linkedSetOf()) { candidate ->
             extendExceptionProtectedScopeWithTerminalTransfers(candidate.protectedBlocks, facts)
         } - finallyHandlerBlocks
@@ -265,8 +248,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
                 TypedCatchScopeFailure.EMPTY_HANDLER_REGION -> "empty-catch-body"
                 TypedCatchScopeFailure.OVERLAPPING_HANDLER_REGIONS -> "overlapping-catch-bodies"
                 TypedCatchScopeFailure.HANDLER_EXTERNAL_ENTRY -> "catch-external-entry"
-                TypedCatchScopeFailure.NO_COMMON_CONTINUATION,
-                TypedCatchScopeFailure.UNSUPPORTED_HANDLER_EXIT -> "catch-body-shape"
+                TypedCatchScopeFailure.NO_COMMON_CONTINUATION, TypedCatchScopeFailure.UNSUPPORTED_HANDLER_EXIT -> "catch-body-shape"
             }
             return rejectLegacy(rejectionTrace, reason)
         }
@@ -307,8 +289,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
         facts: ControlFlowFacts,
         provenance: LegacySubroutineProvenance?,
         rejectionTrace: MutableList<String>?,
-    ): LegacyTryCatchFinallyRecognition? {
-        // Typed catches are reconstructed independently from the outer catch-all family. The
+    ): LegacyTryCatchFinallyRecognition? { // Typed catches are reconstructed independently from the outer catch-all family. The
         // exception table may split the outer finally around each nested catch, but those physical
         // fragments are not separate source try/finally constructs.
         val handlerEntry = finallyShape.handlerEntry
@@ -316,8 +297,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
         val matches = finallyShape.normalCopies
         val continuation = finallyShape.continuation
         val finallyCopyBlocks = matches.flatMapTo(linkedSetOf()) { it.blocks }
-        val typedHandlerEntries = family.typedTopology.scopes
-            .flatMapTo(linkedSetOf()) { it.handlersByEntry.keys }
+        val typedHandlerEntries = family.typedTopology.scopes.flatMapTo(linkedSetOf()) { it.handlersByEntry.keys }
         if (typedHandlerEntries.isEmpty()) return rejectLegacy(rejectionTrace, "mixed-handler-signature")
 
         val nestedRegions = mutableListOf<StructuredRegion>()
@@ -338,8 +318,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
                         facts = facts,
                     )?.let { blocks -> TypedCatchHandlerCollection(blocks, null) }
                 },
-                hasExternalCatchEntry = { entry, blocks, scopeHandlerEntries ->
-                    // Only handlers belonging to this typed scope are legitimate peer entries.
+                hasExternalCatchEntry = { entry, blocks, scopeHandlerEntries -> // Only handlers belonging to this typed scope are legitimate peer entries.
                     // The global handler set remains a traversal boundary above, but trusting a
                     // handler from another nested/sibling scope here would hide a real external
                     // entry into this catch body.
@@ -351,8 +330,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
                 val reason = when (typedScope.failure) {
                     TypedCatchScopeFailure.PROTECTED_EXTERNAL_ENTRY -> "nested-try-external-entry"
                     TypedCatchScopeFailure.CATCH_BODY_SHAPE -> "nested-catch-body-shape"
-                    TypedCatchScopeFailure.EMPTY_HANDLER_REGION,
-                    TypedCatchScopeFailure.OVERLAPPING_HANDLER_REGIONS -> "nested-catch-overlap"
+                    TypedCatchScopeFailure.EMPTY_HANDLER_REGION, TypedCatchScopeFailure.OVERLAPPING_HANDLER_REGIONS -> "nested-catch-overlap"
 
                     TypedCatchScopeFailure.HANDLER_EXTERNAL_ENTRY -> "nested-catch-external-entry"
                     TypedCatchScopeFailure.NO_COMMON_CONTINUATION -> "nested-catch-no-common-continuation"
@@ -363,8 +341,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
             nestedRegions += requireNotNull(typedScope.proof).toRegion()
         }
 
-        val outerHeader = facts.instructionToBlock.getOrNull(family.protectedRanges.first().startInstructionIndex)
-            ?: return rejectLegacy(rejectionTrace, "outer-finally-header")
+        val outerHeader = facts.instructionToBlock.getOrNull(family.protectedRanges.first().startInstructionIndex) ?: return rejectLegacy(rejectionTrace, "outer-finally-header")
         val finallyCopyOwnership = collectExceptionRegionClosure(
             seedBlocks = finallyCopyBlocks,
             allGroups = allGroups,
@@ -404,7 +381,6 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
             },
         )
     }
-
 
     /**
      * Recognizes the characteristic shape left by `LegacySubroutineNormalizer` for old javac
@@ -454,9 +430,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
         if (header !in protectedBlocks) return rejectLegacy(rejectionTrace, "header-not-in-protected-blocks")
 
         val handlerRanges = finallyShape.bodyInstructionRanges
-        val protectedRanges = family
-            .flatMap { candidate -> candidate.group.segments }
-            .sortedWith(compareBy<ExceptionTableSegment> { it.range.start }.thenBy { it.range.endExclusive })
+        val protectedRanges = family.flatMap { candidate -> candidate.group.segments }.sortedWith(compareBy<ExceptionTableSegment> { it.range.start }.thenBy { it.range.endExclusive })
             .map { segment -> StructuredProtectedRange(segment.range.start, segment.range.endExclusive) }
         val firstRange = protectedRanges.first()
         val lastRange = protectedRanges.last()
@@ -526,10 +500,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
         fun prove(block: BasicBlockId): Boolean {
             if (block in proven) return true
             if (!visiting.add(block)) return false
-            val normalTargets = facts.outgoing[block].orEmpty()
-                .filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION }
-                .map { edge -> edge.to }
-                .distinct()
+            val normalTargets = facts.outgoing[block].orEmpty().filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION }.map { edge -> edge.to }.distinct()
             val result = if (normalTargets.isEmpty()) {
                 when (graph.instructions(graph.block(block)).lastOrNull()) {
                     is RawReturnInstruction, is RawThrowInstruction -> true
@@ -628,12 +599,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
         hasExternalEntry(blocks, facts) { target, source -> target == header || source in externalOwnership }
 
     private fun hasExternalLegacyHandlerEntry(
-        entry: BasicBlockId,
-        blocks: Set<BasicBlockId>,
-        handlerEntries: Set<BasicBlockId>,
-        facts: ControlFlowFacts,
-        graph: ControlFlowGraph,
-        provenance: LegacySubroutineProvenance?
+        entry: BasicBlockId, blocks: Set<BasicBlockId>, handlerEntries: Set<BasicBlockId>, facts: ControlFlowFacts, graph: ControlFlowGraph, provenance: LegacySubroutineProvenance?
     ): Boolean = hasExternalEntry(blocks, facts) { target, source ->
         if (isHandlerPeerEntryTransfer(entry, target, source, handlerEntries)) {
             return@hasExternalEntry true
@@ -650,8 +616,7 @@ internal class LegacyFinallyRecognizer(private val typedCatchRecognizer: TypedCa
         return contextsRelated(transfer.context, target.context)
     }
 
-    private fun contextsRelated(left: LegacySubroutineContext, right: LegacySubroutineContext): Boolean =
-        left == right || left.parent == right || right.parent == left
+    private fun contextsRelated(left: LegacySubroutineContext, right: LegacySubroutineContext): Boolean = left == right || left.parent == right || right.parent == left
 }
 
 /** Legacy composite recognition may emit nested typed regions and consume several table groups. */

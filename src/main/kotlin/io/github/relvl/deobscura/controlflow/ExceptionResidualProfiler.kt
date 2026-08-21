@@ -25,10 +25,7 @@ internal object ExceptionResidualProfiler {
             val catchAllCount = group.handlers.count { it.catchType == null }
             val typedCount = group.handlers.size - catchAllCount
             val entries = groupedHandlers.keys.filterNotNull()
-            val entryShapes = entries
-                .map { entry -> classifyLegacyHandlerEntry(graph, entry) }
-                .distinct()
-                .sorted()
+            val entryShapes = entries.map { entry -> classifyLegacyHandlerEntry(graph, entry) }.distinct().sorted()
 
             return buildString {
                 append("legacy [").append(legacyDetail).append(']')
@@ -43,9 +40,7 @@ internal object ExceptionResidualProfiler {
         val typedHandlerCount = group.handlers.size - catchAllHandlers.size
         val boundaryCount = normalBoundaryTargets(protectedBlocks, topology.handlerEntries, facts).size
         val nestedGroupCount = exceptionTopology.groups.count { candidate ->
-            candidate !== topology &&
-                candidate.group.envelope.start >= group.envelope.start &&
-                candidate.group.envelope.endExclusive <= group.envelope.endExclusive
+            candidate !== topology && candidate.group.envelope.start >= group.envelope.start && candidate.group.envelope.endExclusive <= group.envelope.endExclusive
         }
         val peerCount = catchAllHandlers.maxOfOrNull { handler ->
             val handlerIndex = exceptionLabelPosition(exceptionTopology.labelPositions, handler.handler)
@@ -72,24 +67,16 @@ internal object ExceptionResidualProfiler {
 
         val store = instructions.firstOrNull() as? RawLocalInstruction
         if (store?.operation == LocalOperation.STORE && store.type == JvmComputationalType.REFERENCE) {
-            if (instructions.size == 3 &&
-                (instructions[1] as? RawConstantInstruction)?.opcode?.mnemonic == "aconst_null" &&
-                (instructions[2] as? RawBranchInstruction)?.opcode?.mnemonic in setOf("goto", "goto_w")
-            ) {
+            if (instructions.size == 3 && (instructions[1] as? RawConstantInstruction)?.opcode?.mnemonic == "aconst_null" && (instructions[2] as? RawBranchInstruction)?.opcode?.mnemonic in setOf("goto", "goto_w")) {
                 return "legacy-jsr-entry"
             }
 
             val reload = instructions.getOrNull(instructions.lastIndex - 1) as? RawLocalInstruction
-            if (instructions.lastOrNull() is RawThrowInstruction &&
-                reload?.operation == LocalOperation.LOAD &&
-                reload.slot == store.slot
-            ) {
+            if (instructions.lastOrNull() is RawThrowInstruction && reload?.operation == LocalOperation.LOAD && reload.slot == store.slot) {
                 if (instructions.size == 3) return "linear-rethrow"
                 val monitorExit = instructions.getOrNull(instructions.lastIndex - 2) as? RawMonitorInstruction
                 val monitorLoad = instructions.getOrNull(instructions.lastIndex - 3) as? RawLocalInstruction
-                if (monitorExit?.opcode?.mnemonic == "monitorexit" &&
-                    monitorLoad?.operation == LocalOperation.LOAD
-                ) {
+                if (monitorExit?.opcode?.mnemonic == "monitorexit" && monitorLoad?.operation == LocalOperation.LOAD) {
                     return "monitor-rethrow"
                 }
                 return "store-prefix-rethrow"
@@ -115,10 +102,7 @@ internal object ExceptionResidualProfiler {
         if (instructions.size == 1) return "exception-store-only"
 
         val reload = instructions.getOrNull(instructions.lastIndex - 1) as? RawLocalInstruction
-        if (instructions.lastOrNull() is RawThrowInstruction &&
-            reload?.operation == LocalOperation.LOAD &&
-            reload.slot == first.slot
-        ) {
+        if (instructions.lastOrNull() is RawThrowInstruction && reload?.operation == LocalOperation.LOAD && reload.slot == first.slot) {
             return "linear-rethrow"
         }
         return "exception-store-prefix"

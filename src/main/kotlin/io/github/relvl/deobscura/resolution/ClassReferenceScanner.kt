@@ -82,7 +82,5 @@ data class ClassReference(
 )
 
 enum class ReferenceKind(val priority: Int) {
-    CONSTANT_POOL(0),
-    SIGNATURE(1),
-    STRUCTURAL(2),
+    CONSTANT_POOL(0), SIGNATURE(1), STRUCTURAL(2),
 }

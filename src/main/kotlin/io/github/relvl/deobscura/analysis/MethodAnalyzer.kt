@@ -28,8 +28,7 @@ class MethodAnalyzer(
     private val sourceStructureBuilder: SourceStructureBuilder = SourceStructureBuilder(),
     private val sourceLocalAnalyzer: SourceLocalAnalyzer = SourceLocalAnalyzer(),
 ) {
-    fun analyze(ownerInternalName: String, method: RawMethod): MethodAnalysis =
-        analyze(ownerInternalName, method, null)
+    fun analyze(ownerInternalName: String, method: RawMethod): MethodAnalysis = analyze(ownerInternalName, method, null)
 
     internal fun analyze(
         ownerInternalName: String,
@@ -206,13 +205,7 @@ data class MethodAnalysis(
 }
 
 enum class MethodAnalysisStage {
-    PREPARATION,
-    FRAME,
-    VALUE_FLOW,
-    SSA,
-    EXPRESSION,
-    STRUCTURED_CONTROL_FLOW,
-    SOURCE_STRUCTURE,
+    PREPARATION, FRAME, VALUE_FLOW, SSA, EXPRESSION, STRUCTURED_CONTROL_FLOW, SOURCE_STRUCTURE,
 }
 
 class MethodAnalysisException(

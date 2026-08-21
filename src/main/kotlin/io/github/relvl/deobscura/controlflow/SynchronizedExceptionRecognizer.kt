@@ -38,13 +38,11 @@ internal object SynchronizedExceptionRecognizer {
         val start = group.envelope.start
         if (start < 2) return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
         val monitorEnterInstructionIndex = start - 1
-        val monitorEnter = instructions.getOrNull(monitorEnterInstructionIndex) as? RawMonitorInstruction
-            ?: return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
+        val monitorEnter = instructions.getOrNull(monitorEnterInstructionIndex) as? RawMonitorInstruction ?: return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
         if (monitorEnter.opcode.mnemonic != "monitorenter") {
             return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
         }
-        val monitorSlot = monitorSlotBeforeEnter(instructions, monitorEnterInstructionIndex)
-            ?: return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
+        val monitorSlot = monitorSlotBeforeEnter(instructions, monitorEnterInstructionIndex) ?: return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
 
         val handlerEntry = groupedHandlers.keys.single() ?: return null
         val handlerStart = graph.block(handlerEntry).startInstructionIndex
@@ -78,8 +76,7 @@ internal object SynchronizedExceptionRecognizer {
             facts = facts,
         )
         if (bodyBlocks.isEmpty()) return null
-        if (hasExternalProtectedEntry(header, bodyBlocks, facts)) {
-            // A nested catch may rejoin the synchronized body and therefore look like an external
+        if (hasExternalProtectedEntry(header, bodyBlocks, facts)) { // A nested catch may rejoin the synchronized body and therefore look like an external
             // normal predecessor to the strict single-range proof. The fragmented recognizer owns
             // the exception-aware closure needed for that shape.
             return FragmentedSynchronizedRecognizer.recognize(graph, topology, allGroups, facts, rejectionTrace)
@@ -87,12 +84,9 @@ internal object SynchronizedExceptionRecognizer {
 
         val monitorEnterBlock = facts.instructionToBlock.getOrNull(monitorEnterInstructionIndex) ?: return null
         val cleanupCompanions = allGroups.filter { candidate ->
-            candidate !== topology &&
-                candidate.group.handlers.size == 1 &&
-                candidate.group.handlers.single().catchType == null &&
-                candidate.group.envelope.start == handlerStart &&
-                candidate.group.envelope.endExclusive == handlerShape.monitorExitInstructionIndex + 1 &&
-                candidate.handlerEntries == setOf(handlerEntry)
+            candidate !== topology && candidate.group.handlers.size == 1 && candidate.group.handlers.single().catchType == null && candidate.group.envelope.start == handlerStart && candidate.group.envelope.endExclusive == handlerShape.monitorExitInstructionIndex + 1 && candidate.handlerEntries == setOf(
+                handlerEntry
+            )
         }
         if (cleanupCompanions.size > 1) return null
         val cleanupRanges = cleanupCompanions.flatMap { companion ->
@@ -126,12 +120,8 @@ internal object SynchronizedExceptionRecognizer {
         )
     }
 
-
     private fun collectBodyBlocks(
-        header: BasicBlockId,
-        protectedBlocks: Set<BasicBlockId>,
-        normalMonitorExitInstructionIndices: List<Int>,
-        facts: ControlFlowFacts
+        header: BasicBlockId, protectedBlocks: Set<BasicBlockId>, normalMonitorExitInstructionIndices: List<Int>, facts: ControlFlowFacts
     ): Set<BasicBlockId> {
         val normalExitBlocks = normalMonitorExitInstructionIndices.mapNotNullTo(linkedSetOf()) { index ->
             facts.instructionToBlock.getOrNull(index)
@@ -150,10 +140,7 @@ internal object SynchronizedExceptionRecognizer {
             // synchronized statement. Do not absorb successor blocks from that point onward.
             if (block in normalExitBlocks) continue
 
-            facts.outgoing[block].orEmpty()
-                .asSequence()
-                .filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION && edge.to in protectedBlocks }
-                .mapTo(pending) { edge -> edge.to }
+            facts.outgoing[block].orEmpty().asSequence().filter { edge -> edge.kind != ControlFlowEdgeKind.EXCEPTION && edge.to in protectedBlocks }.mapTo(pending) { edge -> edge.to }
         }
         return result
     }

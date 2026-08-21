@@ -45,8 +45,7 @@ internal fun branch(instructionIndex: Int): ExpressionStatement.Branch = Express
     BranchCondition(ComparisonOperator.NE, ValueId(0), BranchOperand.Zero),
 )
 
-internal fun unconditionalBranch(instructionIndex: Int): ExpressionStatement.Branch =
-    ExpressionStatement.Branch(instructionIndex, null)
+internal fun unconditionalBranch(instructionIndex: Int): ExpressionStatement.Branch = ExpressionStatement.Branch(instructionIndex, null)
 
 internal fun blocks(count: Int): List<BasicBlock> = List(count) { index ->
     BasicBlock(BasicBlockId(index), index, index + 1, emptyList(), emptyList())
@@ -94,11 +93,8 @@ internal fun exceptionHandler(
     catchType = catchType,
 )
 
-internal fun exceptionEdge(from: BasicBlockId, to: BasicBlockId, catchType: String?) =
-    ControlFlowEdge(from, to, ControlFlowEdgeKind.EXCEPTION, catchType = catchType)
+internal fun exceptionEdge(from: BasicBlockId, to: BasicBlockId, catchType: String?) = ControlFlowEdge(from, to, ControlFlowEdgeKind.EXCEPTION, catchType = catchType)
 
-internal fun switchEdge(from: BasicBlockId, to: BasicBlockId, value: Int?) =
-    ControlFlowEdge(from, to, ControlFlowEdgeKind.SWITCH, switchValue = value)
+internal fun switchEdge(from: BasicBlockId, to: BasicBlockId, value: Int?) = ControlFlowEdge(from, to, ControlFlowEdgeKind.SWITCH, switchValue = value)
 
-internal fun edge(from: BasicBlockId, to: BasicBlockId, kind: ControlFlowEdgeKind) =
-    ControlFlowEdge(from, to, kind)
+internal fun edge(from: BasicBlockId, to: BasicBlockId, kind: ControlFlowEdgeKind) = ControlFlowEdge(from, to, kind)

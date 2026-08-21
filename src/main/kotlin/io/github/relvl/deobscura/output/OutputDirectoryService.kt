@@ -25,9 +25,7 @@ object OutputDirectoryService {
         if (Files.notExists(path)) return
 
         Files.walk(path).use { paths ->
-            paths
-                .sorted(Comparator.reverseOrder())
-                .forEach(Files::deleteIfExists)
+            paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
         }
     }
 }

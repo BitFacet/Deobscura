@@ -4,14 +4,7 @@ import io.github.relvl.deobscura.raw.*
 
 /** Observable effects relevant to SSA rewrites and later expression reconstruction. */
 enum class OperationEffect {
-    MAY_THROW,
-    READS_MEMORY,
-    WRITES_MEMORY,
-    CALLS_CODE,
-    ALLOCATES,
-    SYNCHRONIZES,
-    CONTROL_FLOW,
-    UNKNOWN,
+    MAY_THROW, READS_MEMORY, WRITES_MEMORY, CALLS_CODE, ALLOCATES, SYNCHRONIZES, CONTROL_FLOW, UNKNOWN,
 }
 
 data class OperationSemantics(
@@ -83,8 +76,7 @@ class SsaOperationSemantics {
         is RawUnknownInstruction -> UNKNOWN
     }
 
-    fun canDiscardWhenResultUnused(instruction: RawInstruction): Boolean =
-        classify(instruction).canDiscardWhenResultUnused
+    fun canDiscardWhenResultUnused(instruction: RawInstruction): Boolean = classify(instruction).canDiscardWhenResultUnused
 
     private fun classifyOperator(mnemonic: String): OperationSemantics = when (mnemonic) {
         "idiv", "irem", "ldiv", "lrem" -> effects(OperationEffect.MAY_THROW)

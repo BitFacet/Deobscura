@@ -128,7 +128,6 @@ class SsaDeadValueEliminatorTest {
         assertTrue(result.analysis.constants.isEmpty())
     }
 
-
     @Test
     fun `removes a dead self-referential phi cycle`() {
         val seed = ValueId(0)

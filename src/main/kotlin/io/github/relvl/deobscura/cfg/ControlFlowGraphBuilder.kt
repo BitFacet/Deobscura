@@ -35,8 +35,7 @@ class ControlFlowGraphBuilder {
                     addLeaderAfterTerminator(index, code.instructions.size, leaders)
                 }
 
-                is RawReturnInstruction, is RawThrowInstruction, is RawRetInstruction ->
-                    addLeaderAfterTerminator(index, code.instructions.size, leaders)
+                is RawReturnInstruction, is RawThrowInstruction, is RawRetInstruction -> addLeaderAfterTerminator(index, code.instructions.size, leaders)
 
                 else -> Unit
             }
@@ -133,8 +132,7 @@ class ControlFlowGraphBuilder {
                             kind = directKind,
                         ),
                     )
-                    if (mnemonic !in NON_RETURNING_JUMPS) {
-                        // JSR eventually returns to the following instruction through RET. Keeping the
+                    if (mnemonic !in NON_RETURNING_JUMPS) { // JSR eventually returns to the following instruction through RET. Keeping the
                         // return site reachable is conservative until legacy subroutines are analyzed.
                         addFallthrough(blockIndex, mutableBlocks, block.id, ::addEdge)
                     }

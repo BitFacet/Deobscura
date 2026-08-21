@@ -53,25 +53,19 @@ internal data class ControlFlowFacts(
     }
 }
 
-private fun instructionToBlock(graph: ControlFlowGraph): Array<BasicBlockId?> =
-    arrayOfNulls<BasicBlockId>(graph.code.instructions.size).also { result ->
-        graph.blocks.forEach { block ->
-            for (index in block.startInstructionIndex until block.endInstructionIndexExclusive) {
-                result[index] = block.id
-            }
+private fun instructionToBlock(graph: ControlFlowGraph): Array<BasicBlockId?> = arrayOfNulls<BasicBlockId>(graph.code.instructions.size).also { result ->
+    graph.blocks.forEach { block ->
+        for (index in block.startInstructionIndex until block.endInstructionIndexExclusive) {
+            result[index] = block.id
         }
     }
+}
 
 private fun branchesByBlock(expression: ExpressionAnalysis, blocks: Set<BasicBlockId>, instructionToBlock: Array<BasicBlockId?>): Map<BasicBlockId, ExpressionStatement.Branch> =
-    expression.statements.asSequence()
-        .filterIsInstance<ExpressionStatement.Branch>()
-        .filter { it.condition != null }
-        .mapNotNull { statement ->
+    expression.statements.asSequence().filterIsInstance<ExpressionStatement.Branch>().filter { it.condition != null }.mapNotNull { statement ->
             val block = instructionToBlock.getOrNull(statement.instructionIndex) ?: return@mapNotNull null
             block.takeIf { it in blocks }?.let { it to statement }
-        }
-        .groupBy({ it.first }, { it.second })
-        .mapValues { (block, statements) ->
+        }.groupBy({ it.first }, { it.second }).mapValues { (block, statements) ->
             if (statements.size != 1) {
                 throw StructuredControlFlowInconsistencyException("Basic block B${block.value} contains ${statements.size} conditional branch statements.")
             }
@@ -79,14 +73,10 @@ private fun branchesByBlock(expression: ExpressionAnalysis, blocks: Set<BasicBlo
         }
 
 private fun switchesByBlock(expression: ExpressionAnalysis, blocks: Set<BasicBlockId>, instructionToBlock: Array<BasicBlockId?>): Map<BasicBlockId, ExpressionStatement.Switch> =
-    expression.statements.asSequence()
-        .filterIsInstance<ExpressionStatement.Switch>()
-        .mapNotNull { statement ->
+    expression.statements.asSequence().filterIsInstance<ExpressionStatement.Switch>().mapNotNull { statement ->
             val block = instructionToBlock.getOrNull(statement.instructionIndex) ?: return@mapNotNull null
             block.takeIf { it in blocks }?.let { it to statement }
-        }
-        .groupBy({ it.first }, { it.second })
-        .mapValues { (block, statements) ->
+        }.groupBy({ it.first }, { it.second }).mapValues { (block, statements) ->
             if (statements.size != 1) {
                 throw StructuredControlFlowInconsistencyException(
                     "Basic block B${block.value} contains ${statements.size} switch statements.",
@@ -96,15 +86,10 @@ private fun switchesByBlock(expression: ExpressionAnalysis, blocks: Set<BasicBlo
         }
 
 private fun explicitTerminalBlocks(
-    expression: ExpressionAnalysis,
-    blocks: Set<BasicBlockId>,
-    instructionToBlock: Array<BasicBlockId?>,
-    outgoing: Map<BasicBlockId, List<ControlFlowEdge>>
-): Set<BasicBlockId> = expression.statements.asSequence()
-    .filter { it is ExpressionStatement.Return || it is ExpressionStatement.Throw }
-    .mapNotNull { statement -> instructionToBlock.getOrNull(statement.instructionIndex) }
-    .filter { it in blocks && outgoing[it].orEmpty().isEmpty() }
-    .toCollection(linkedSetOf())
+    expression: ExpressionAnalysis, blocks: Set<BasicBlockId>, instructionToBlock: Array<BasicBlockId?>, outgoing: Map<BasicBlockId, List<ControlFlowEdge>>
+): Set<BasicBlockId> =
+    expression.statements.asSequence().filter { it is ExpressionStatement.Return || it is ExpressionStatement.Throw }.mapNotNull { statement -> instructionToBlock.getOrNull(statement.instructionIndex) }
+        .filter { it in blocks && outgoing[it].orEmpty().isEmpty() }.toCollection(linkedSetOf())
 
 internal fun dominators(blocks: Set<BasicBlockId>, entry: BasicBlockId, predecessors: Map<BasicBlockId, List<BasicBlockId>>): Map<BasicBlockId, Set<BasicBlockId>> {
     val all = blocks.toSet()
