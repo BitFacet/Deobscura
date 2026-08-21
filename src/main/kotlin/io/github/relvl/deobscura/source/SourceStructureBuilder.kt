@@ -3,7 +3,8 @@ package io.github.relvl.deobscura.source
 import io.github.relvl.deobscura.analysis.SsaControlFlowGraph
 import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
-import io.github.relvl.deobscura.controlflow.*
+import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
+import io.github.relvl.deobscura.controlflow.StructuredRegion
 
 /** Builds an ordered source-composition view without re-proving any control-flow structure. */
 class SourceStructureBuilder {

@@ -2,7 +2,6 @@ package io.github.relvl.deobscura.output
 
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.Comparator
 
 object OutputDirectoryService {
     fun recreate(

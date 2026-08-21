@@ -182,6 +182,131 @@ class SourceLocalAnalyzerTest {
     }
 
     @Test
+    fun `projects two arm local phi into source assignments`() {
+        val header = BasicBlockId(0)
+        val thenBlock = BasicBlockId(1)
+        val elseBlock = BasicBlockId(2)
+        val continuation = BasicBlockId(3)
+        val conditionValue = ValueId(1)
+        val thenValue = ValueId(2)
+        val elseValue = ValueId(3)
+        val phiValue = ValueId(4)
+        val type = JvmValueType.Computational(JvmComputationalType.INT)
+        val region = StructuredRegion.If(
+            header,
+            StructuredCondition.Atomic(BranchCondition(ComparisonOperator.NE, conditionValue, BranchOperand.Zero)),
+            thenBlock,
+            setOf(thenBlock),
+            elseBlock,
+            setOf(elseBlock),
+            continuation,
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                conditionValue to ExpressionValue(conditionValue, type, ExpressionNode.Root(ValueOrigin.Parameter(0))),
+                thenValue to ExpressionValue(thenValue, type, ExpressionNode.Constant(constantDesc(1)), listOf(1)),
+                elseValue to ExpressionValue(elseValue, type, ExpressionNode.Constant(constantDesc(0)), listOf(2)),
+                phiValue to ExpressionValue(
+                    phiValue,
+                    type,
+                    ExpressionNode.Phi(
+                        continuation,
+                        SsaPhiLocation.Local(1),
+                        listOf(SsaPhiInput(thenValue, thenBlock), SsaPhiInput(elseValue, elseBlock)),
+                    ),
+                ),
+            ),
+            statements = listOf(ExpressionStatement.Monitor(1, MonitorOperation.ENTER, conditionValue)),
+        )
+        val ssa = SsaAnalysis(
+            values = emptyMap(),
+            operations = emptyList(),
+            phiNodes = emptyList(),
+            uses = mapOf(
+                thenValue to listOf(SsaValueUse.Phi(phiValue, thenBlock, 0)),
+                elseValue to listOf(SsaValueUse.Phi(phiValue, elseBlock, 1)),
+            ),
+            eliminatedLocalInstructionCount = 0,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph(header.value, thenBlock.value, elseBlock.value, continuation.value),
+            ssa,
+            expression,
+            StructuredControlFlowAnalysis(listOf(region), 1, 0),
+        )
+
+        assertEquals(SourceTwoArmAssignment(header, thenValue, elseValue), analysis.twoArmAssignments[phiValue])
+        assertTrue(analysis.conditionalValues.isEmpty())
+        assertTrue(analysis.consumedIfHeaders.isEmpty())
+    }
+
+    @Test
+    fun `projects two arm stack phi into source assignments`() {
+        val header = BasicBlockId(0)
+        val thenBlock = BasicBlockId(1)
+        val elseBlock = BasicBlockId(2)
+        val continuation = BasicBlockId(3)
+        val conditionValue = ValueId(1)
+        val thenValue = ValueId(2)
+        val elseValue = ValueId(3)
+        val phiValue = ValueId(4)
+        val type = JvmValueType.Computational(JvmComputationalType.INT)
+        val region = StructuredRegion.If(
+            header,
+            StructuredCondition.Atomic(BranchCondition(ComparisonOperator.NE, conditionValue, BranchOperand.Zero)),
+            thenBlock,
+            setOf(thenBlock),
+            elseBlock,
+            setOf(elseBlock),
+            continuation,
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                conditionValue to ExpressionValue(conditionValue, type, ExpressionNode.Root(ValueOrigin.Parameter(0))),
+                thenValue to ExpressionValue(
+                    thenValue,
+                    JvmValueType.Computational(JvmComputationalType.BYTE),
+                    ExpressionNode.Constant(constantDesc(1)),
+                    listOf(1),
+                ),
+                elseValue to ExpressionValue(elseValue, type, ExpressionNode.Constant(constantDesc(0)), listOf(2)),
+                phiValue to ExpressionValue(
+                    phiValue,
+                    type,
+                    ExpressionNode.Phi(
+                        continuation,
+                        SsaPhiLocation.Stack(0),
+                        listOf(SsaPhiInput(thenValue, thenBlock), SsaPhiInput(elseValue, elseBlock)),
+                    ),
+                ),
+            ),
+            statements = listOf(ExpressionStatement.Monitor(1, MonitorOperation.ENTER, conditionValue)),
+        )
+        val ssa = SsaAnalysis(
+            values = emptyMap(),
+            operations = emptyList(),
+            phiNodes = emptyList(),
+            uses = mapOf(
+                thenValue to listOf(SsaValueUse.Phi(phiValue, thenBlock, 0)),
+                elseValue to listOf(SsaValueUse.Phi(phiValue, elseBlock, 1)),
+            ),
+            eliminatedLocalInstructionCount = 0,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph(header.value, thenBlock.value, elseBlock.value, continuation.value),
+            ssa,
+            expression,
+            StructuredControlFlowAnalysis(listOf(region), 1, 0),
+        )
+
+        assertEquals(SourceTwoArmAssignment(header, thenValue, elseValue), analysis.twoArmAssignments[phiValue])
+        assertTrue(analysis.conditionalValues.isEmpty())
+        assertTrue(analysis.consumedIfHeaders.isEmpty())
+    }
+
+    @Test
     fun `does not project inherited stack phi as source local`() {
         val header = BasicBlockId(0)
         val thenBlock = BasicBlockId(1)

@@ -245,7 +245,6 @@ internal object FragmentedSynchronizedRecognizer {
     }
 
 
-
     /**
      * A physical range already owned by the synchronized body may still carry legacy exception-table
      * entries after normalization. It is redundant only when handler lookup starts with one of the
@@ -392,6 +391,7 @@ internal object FragmentedSynchronizedRecognizer {
                         )
                         return null
                     }
+
                     else -> pending += edge.to
                 }
             }

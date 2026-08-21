@@ -1,10 +1,6 @@
 package io.github.relvl.deobscura.deobfuscation
 
-import io.github.relvl.deobscura.raw.JvmMethodDescriptor
-import io.github.relvl.deobscura.raw.JvmType
-import io.github.relvl.deobscura.raw.RawClass
-import io.github.relvl.deobscura.raw.RawField
-import io.github.relvl.deobscura.raw.RawMethod
+import io.github.relvl.deobscura.raw.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 

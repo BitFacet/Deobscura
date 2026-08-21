@@ -1,10 +1,6 @@
 package io.github.relvl.deobscura.source
 
-import io.github.relvl.deobscura.analysis.JvmValueType
-import io.github.relvl.deobscura.analysis.SsaAnalysis
-import io.github.relvl.deobscura.analysis.SsaPhiLocation
-import io.github.relvl.deobscura.analysis.SsaValueUse
-import io.github.relvl.deobscura.analysis.ValueId
+import io.github.relvl.deobscura.analysis.*
 import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.controlflow.StructuredCondition
@@ -21,6 +17,7 @@ import io.github.relvl.deobscura.raw.JvmReferenceType
 data class SourceLocalAnalysis(
     val conditionalValues: Map<ValueId, SourceConditionalValue> = emptyMap(),
     val conditionalAssignments: Map<ValueId, SourceConditionalAssignment> = emptyMap(),
+    val twoArmAssignments: Map<ValueId, SourceTwoArmAssignment> = emptyMap(),
     val suppressedDefinitions: Set<ValueId> = emptySet(),
     val consumedIfHeaders: Set<BasicBlockId> = emptySet(),
 )
@@ -35,6 +32,13 @@ data class SourceConditionalValue(
 data class SourceConditionalAssignment(
     val initialValue: ValueId,
     val assignedValue: ValueId,
+)
+
+/** A local phi declared before an if/else and assigned independently in both arms. */
+data class SourceTwoArmAssignment(
+    val header: BasicBlockId,
+    val thenValue: ValueId,
+    val elseValue: ValueId,
 )
 
 /**
@@ -72,6 +76,7 @@ class SourceLocalAnalyzer {
 
         val conditionalValues = linkedMapOf<ValueId, SourceConditionalValue>()
         val conditionalAssignments = linkedMapOf<ValueId, SourceConditionalAssignment>()
+        val twoArmAssignments = linkedMapOf<ValueId, SourceTwoArmAssignment>()
         val suppressedDefinitions = linkedSetOf<ValueId>()
         val consumedIfHeaders = linkedSetOf<BasicBlockId>()
 
@@ -90,21 +95,39 @@ class SourceLocalAnalyzer {
                     if (!isSingleUseConstant(elseInput, phiValue.id, ssa, expression)) return@mapNotNull null
                     phiValue.id to SourceConditionalValue(region.condition, thenInput, elseInput)
                 }.toMap()
-                if (candidates.isEmpty()) return@forEach
 
-                val candidateInputs = candidates.values.flatMapTo(linkedSetOf()) { listOf(it.thenValue, it.elseValue) }
-                val armBlocks = region.thenBlocks + region.elseBlocks
-                val emittedArmValues = armBlocks.flatMap { materializedValuesByBlock[it].orEmpty() }.toSet()
-                if (emittedArmValues != candidateInputs) return@forEach
-                val hasSemanticStatement = armBlocks
-                    .flatMap { statementsByBlock[it].orEmpty() }
-                    .any { it !is ExpressionStatement.Branch }
-                if (hasSemanticStatement) return@forEach
-                if (armBlocks.any { phisByBlock[it].orEmpty().isNotEmpty() }) return@forEach
+                if (candidates.isNotEmpty()) {
+                    val candidateInputs = candidates.values.flatMapTo(linkedSetOf()) { listOf(it.thenValue, it.elseValue) }
+                    val armBlocks = region.thenBlocks + region.elseBlocks
+                    val emittedArmValues = armBlocks.flatMap { materializedValuesByBlock[it].orEmpty() }.toSet()
+                    val hasSemanticStatement = armBlocks
+                        .flatMap { statementsByBlock[it].orEmpty() }
+                        .any { it !is ExpressionStatement.Branch }
+                    val hasArmPhi = armBlocks.any { phisByBlock[it].orEmpty().isNotEmpty() }
+                    if (emittedArmValues == candidateInputs && !hasSemanticStatement && !hasArmPhi) {
+                        conditionalValues.putAll(candidates)
+                        suppressedDefinitions += candidateInputs
+                        consumedIfHeaders += region.header
+                        return@forEach
+                    }
+                }
 
-                conditionalValues.putAll(candidates)
-                suppressedDefinitions += candidateInputs
-                consumedIfHeaders += region.header
+                phisByBlock[region.continuation].orEmpty().forEach phiLoop@{ phiValue ->
+                    if (!canDeclareSourceLocal(phiValue)) return@phiLoop
+                    val phi = phiValue.node as ExpressionNode.Phi
+                    // A complete two-arm merge is source-local regardless of whether the JVM
+                    // verifier carried the value in a local slot or on the operand stack. Both
+                    // structured arms assign it before the common continuation.
+                    if (phi.inputs.size != 2 || phi.inputs.any { it.predecessor == null }) return@phiLoop
+                    val thenInput = phi.inputs.singleOrNull { it.predecessor in region.thenBlocks }?.value ?: return@phiLoop
+                    val elseInput = phi.inputs.singleOrNull { it.predecessor in region.elseBlocks }?.value ?: return@phiLoop
+                    if (materializedValueBlocks[thenInput] !in region.thenBlocks) return@phiLoop
+                    if (materializedValueBlocks[elseInput] !in region.elseBlocks) return@phiLoop
+                    if (!isSingleUsePhiInput(thenInput, phiValue.id, ssa, expression)) return@phiLoop
+                    if (!isSingleUsePhiInput(elseInput, phiValue.id, ssa, expression)) return@phiLoop
+
+                    twoArmAssignments[phiValue.id] = SourceTwoArmAssignment(region.header, thenInput, elseInput)
+                }
                 return@forEach
             }
 
@@ -131,7 +154,7 @@ class SourceLocalAnalyzer {
             }
         }
 
-        return SourceLocalAnalysis(conditionalValues, conditionalAssignments, suppressedDefinitions, consumedIfHeaders)
+        return SourceLocalAnalysis(conditionalValues, conditionalAssignments, twoArmAssignments, suppressedDefinitions, consumedIfHeaders)
     }
 
     private fun canDeclareSourceLocal(value: ExpressionValue): Boolean = when (val type = value.type) {

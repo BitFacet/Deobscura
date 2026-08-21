@@ -1,7 +1,7 @@
 package io.github.relvl.deobscura.source
 
-import io.github.relvl.deobscura.analysis.ValueId
 import io.github.relvl.deobscura.analysis.JvmValueType
+import io.github.relvl.deobscura.analysis.ValueId
 import io.github.relvl.deobscura.analysis.ValueOrigin
 import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
 import io.github.relvl.deobscura.expression.*
@@ -44,6 +44,9 @@ internal class SourceExpressionRenderer(
         expression: ExpressionAnalysis,
     ): String = "${formatValueType(target.type)} v${target.id.value} = ${renderValueForType(initializer, target.type, expression)}"
 
+    fun renderLocalDeclaration(target: ExpressionValue): String =
+        "${formatValueType(target.type)} v${target.id.value}"
+
     fun renderLocalAssignment(target: ValueId, value: ValueId, targetType: JvmValueType, expression: ExpressionAnalysis): String =
         "v${target.value} = ${renderValueForType(value, targetType, expression)}"
 
@@ -52,9 +55,9 @@ internal class SourceExpressionRenderer(
 
         val left = expression.values[condition.left]
         val isBoolean = condition.left in expression.materialization.booleanValues ||
-            left?.type == io.github.relvl.deobscura.analysis.JvmValueType.Computational(
-                io.github.relvl.deobscura.raw.JvmComputationalType.BOOLEAN,
-            )
+            left?.type == JvmValueType.Computational(
+            JvmComputationalType.BOOLEAN,
+        )
         if (isBoolean && condition.right == BranchOperand.Zero) {
             return when (condition.operator) {
                 ComparisonOperator.EQ -> "!${parenthesizeBoolean(condition.left, expression)}"
@@ -89,23 +92,28 @@ internal class SourceExpressionRenderer(
                 ?: "${sourceName(statement.field.ownerInternalName)}.$fieldName"
             "$target = ${renderValue(statement.value, expression, statement.field.type)}"
         }
+
         is ExpressionStatement.ArrayWrite -> {
             val componentType = arrayComponentType(statement.array, expression)
             val value = componentType?.let { renderValue(statement.value, expression, it) }
                 ?: renderValue(statement.value, expression)
             "${renderValue(statement.array, expression)}[${renderValue(statement.index, expression)}] = $value"
         }
+
         is ExpressionStatement.Call -> renderCall(statement.method, statement.receiver, statement.arguments, expression)
         is ExpressionStatement.DynamicCall ->
             renderStringConcat(statement.callSite, statement.arguments, expression)
                 ?: "/* invokedynamic ${statement.callSite.name} */ (${renderArguments(statement.arguments, statement.callSite.type.parameterTypes, expression)})"
+
         is ExpressionStatement.Return -> statement.value?.let { value ->
             val rendered = methodReturnType?.let { renderValue(value, expression, it) } ?: renderValue(value, expression)
             "return $rendered"
         } ?: "return"
+
         is ExpressionStatement.Throw -> "throw ${renderValue(statement.value, expression)}"
         is ExpressionStatement.Monitor ->
             "/* ${if (statement.operation == MonitorOperation.ENTER) "monitor-enter" else "monitor-exit"} ${renderValue(statement.value, expression)} */"
+
         is ExpressionStatement.Branch -> "/* branch */"
         is ExpressionStatement.Switch -> "/* switch ${renderValue(statement.selector, expression)} */"
         is ExpressionStatement.Raw ->
@@ -114,32 +122,38 @@ internal class SourceExpressionRenderer(
 
     private fun renderNode(node: ExpressionNode, expression: ExpressionAnalysis): String = when (node) {
         is ExpressionNode.Root -> when (val origin = node.origin) {
-            is io.github.relvl.deobscura.analysis.ValueOrigin.This -> "this"
-            is io.github.relvl.deobscura.analysis.ValueOrigin.Parameter -> "arg${origin.index}"
-            is io.github.relvl.deobscura.analysis.ValueOrigin.ExceptionHandler -> bindings.exceptionParameter(origin.handlerInstructionIndex) ?: "caught"
-            is io.github.relvl.deobscura.analysis.ValueOrigin.ReturnAddress -> "/* return-address@${origin.returnInstructionIndex} */ null"
-            is io.github.relvl.deobscura.analysis.ValueOrigin.Instruction -> "v${origin.index}"
+            is ValueOrigin.This -> "this"
+            is ValueOrigin.Parameter -> "arg${origin.index}"
+            is ValueOrigin.ExceptionHandler -> bindings.exceptionParameter(origin.handlerInstructionIndex) ?: "caught"
+            is ValueOrigin.ReturnAddress -> "/* return-address@${origin.returnInstructionIndex} */ null"
+            is ValueOrigin.Instruction -> "v${origin.index}"
         }
+
         is ExpressionNode.Phi -> node.inputs.joinToString(prefix = "phi(", postfix = ")") { "v${it.value.value}" }
         is ExpressionNode.Constant -> formatConstant(node.value)
         is ExpressionNode.Unary, is ExpressionNode.Binary, is ExpressionNode.Increment, is ExpressionNode.Conversion ->
             renderInlineNode(node, expression, precedence(node))
+
         is ExpressionNode.ThreeWayCompare ->
             "cmp(${renderValue(node.left, expression)}, ${renderValue(node.right, expression)})"
+
         is ExpressionNode.FieldRead -> {
             val fieldName = deobfuscation.fieldName(node.field.ownerInternalName, node.field.name, node.field.descriptor)
             node.receiver?.let { "${renderValue(it, expression)}.$fieldName" }
                 ?: "${sourceName(node.field.ownerInternalName)}.$fieldName"
         }
+
         is ExpressionNode.ArrayRead -> "${renderValue(node.array, expression)}[${renderValue(node.index, expression)}]"
         is ExpressionNode.ArrayLength -> "${renderValue(node.array, expression)}.length"
         is ExpressionNode.Call -> renderCall(node.method, node.receiver, node.arguments, expression)
         is ExpressionNode.DynamicCall ->
             renderStringConcat(node.callSite, node.arguments, expression)
                 ?: "/* invokedynamic ${node.callSite.name} */ (${renderArguments(node.arguments, node.callSite.type.parameterTypes, expression)})"
+
         is ExpressionNode.NewObject -> "new ${sourceName(node.internalName)} /* uninitialized */"
         is ExpressionNode.ConstructObject ->
             "new ${sourceName(node.internalName)}(${renderArguments(node.arguments, node.constructor.type.parameterTypes, expression)})"
+
         is ExpressionNode.NewArray -> renderNewArray(node, expression)
         is ExpressionNode.Cast -> "(${formatType(node.targetType)}) ${renderValue(node.operand, expression)}"
         is ExpressionNode.InstanceOf -> "${renderValue(node.operand, expression)} instanceof ${formatType(node.targetType)}"
@@ -172,17 +186,21 @@ internal class SourceExpressionRenderer(
                 ComparisonOperator.NE,
                 ComparisonOperator.GT,
                 ComparisonOperator.GE -> condition.operator
+
                 ComparisonOperator.LT -> null
                 ComparisonOperator.LE -> null
             }
+
             1 -> when (condition.operator) {
                 ComparisonOperator.EQ,
                 ComparisonOperator.NE,
                 ComparisonOperator.LT,
                 ComparisonOperator.LE -> condition.operator
+
                 ComparisonOperator.GT -> null
                 ComparisonOperator.GE -> null
             }
+
             else -> return null
         }
         if (directOperator != null) return "$left ${directOperator.symbol} $right"
@@ -238,10 +256,12 @@ internal class SourceExpressionRenderer(
             val right = renderValue(node.right, expression, ownPrecedence + 1)
             "$left ${node.operator.symbol} $right"
         }
+
         is ExpressionNode.Increment -> {
             val operand = renderValue(node.operand, expression, PRECEDENCE_ADDITIVE)
             if (node.amount >= 0) "$operand + ${node.amount}" else "$operand - ${-node.amount}"
         }
+
         is ExpressionNode.Conversion -> "(${formatValueType(node.targetType)}) ${renderValue(node.operand, expression, PRECEDENCE_UNARY)}"
         else -> renderNode(node, expression)
     }
@@ -255,6 +275,7 @@ internal class SourceExpressionRenderer(
             BinaryOperator.BIT_XOR -> PRECEDENCE_BIT_XOR
             BinaryOperator.BIT_OR -> PRECEDENCE_BIT_OR
         }
+
         is ExpressionNode.Increment -> PRECEDENCE_ADDITIVE
         is ExpressionNode.DynamicCall -> if (isStringConcatCallSite(node.callSite)) PRECEDENCE_ADDITIVE else PRECEDENCE_PRIMARY
         is ExpressionNode.Unary, is ExpressionNode.Conversion -> PRECEDENCE_UNARY
@@ -297,12 +318,14 @@ internal class SourceExpressionRenderer(
                     parts += StringConcatPart.Expression(rendered)
                     argumentIndex++
                 }
+
                 '\u0002' -> {
                     val constant = constants.getOrNull(constantIndex) ?: return null
                     val rendered = renderStringConcatConstant(constant) ?: return null
                     literal.append(rendered)
                     constantIndex++
                 }
+
                 else -> literal.append(character)
             }
         }
@@ -419,12 +442,12 @@ internal class SourceExpressionRenderer(
         return "${renderSourceLocalValue(id, expression, PRECEDENCE_EQUALITY)} != 0"
     }
 
-    private fun formatValueType(type: io.github.relvl.deobscura.analysis.JvmValueType): String = when (type) {
-        is io.github.relvl.deobscura.analysis.JvmValueType.Computational -> type.type.name.lowercase()
-        is io.github.relvl.deobscura.analysis.JvmValueType.Reference -> when (val reference = type.referenceType) {
-            is io.github.relvl.deobscura.raw.JvmReferenceType.Exact -> formatType(reference.type)
-            io.github.relvl.deobscura.raw.JvmReferenceType.Null,
-            io.github.relvl.deobscura.raw.JvmReferenceType.Unknown -> "Object"
+    private fun formatValueType(type: JvmValueType): String = when (type) {
+        is JvmValueType.Computational -> type.type.name.lowercase()
+        is JvmValueType.Reference -> when (val reference = type.referenceType) {
+            is JvmReferenceType.Exact -> formatType(reference.type)
+            JvmReferenceType.Null,
+            JvmReferenceType.Unknown -> "Object"
         }
     }
 
@@ -450,11 +473,13 @@ internal class SourceExpressionRenderer(
                 value.forEach { appendJavaCharacter(it, quote = '"') }
                 append('"')
             }
+
             is Char -> buildString {
                 append('\'')
                 appendJavaCharacter(value, quote = '\'')
                 append('\'')
             }
+
             else -> value.toString()
         }
     }

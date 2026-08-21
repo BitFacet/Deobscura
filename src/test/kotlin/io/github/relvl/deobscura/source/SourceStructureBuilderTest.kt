@@ -7,7 +7,9 @@ import io.github.relvl.deobscura.controlflow.*
 import io.github.relvl.deobscura.expression.BranchCondition
 import io.github.relvl.deobscura.expression.BranchOperand
 import io.github.relvl.deobscura.expression.ComparisonOperator
-import io.github.relvl.deobscura.raw.*
+import io.github.relvl.deobscura.raw.JvmOpcode
+import io.github.relvl.deobscura.raw.RawCode
+import io.github.relvl.deobscura.raw.RawNopInstruction
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs

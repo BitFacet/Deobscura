@@ -2,13 +2,13 @@ package io.github.relvl.deobscura.source
 
 import io.github.relvl.deobscura.analysis.MethodAnalysis
 import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
-import io.github.relvl.deobscura.resolution.MethodOverrideAnalysis
 import io.github.relvl.deobscura.raw.RawClass
+import io.github.relvl.deobscura.resolution.MethodOverrideAnalysis
 import org.slf4j.LoggerFactory
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.Locale
+import java.util.*
 
 /** Collects completed analyses and writes the first Java-like source projection after analysis. */
 object SourceOutputService {

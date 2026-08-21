@@ -1,6 +1,8 @@
 package io.github.relvl.deobscura.diagnostics.ir
 
-import io.github.relvl.deobscura.controlflow.*
+import io.github.relvl.deobscura.controlflow.StructuredRegion
+import io.github.relvl.deobscura.controlflow.UnstructuredControlFlowDiagnostic
+import io.github.relvl.deobscura.controlflow.UnstructuredControlFlowKind
 import io.github.relvl.deobscura.source.*
 
 /** Compact diagnostic projection of proven control-flow regions into their prospective source nesting. */

@@ -509,6 +509,7 @@ internal object ModernFinallyRecognizer {
                 continuations.size == 1 -> continuations.single()
                 allowDivergentNormalContinuations &&
                     (continuations.size > 1 || matches.all { it.continuation == null }) -> null
+
                 else -> return reject("continuation-count=${continuations.size}")
             }
         } else {
@@ -587,7 +588,6 @@ internal object ModernFinallyRecognizer {
             continuation = continuation,
         )
     }
-
 
 
     private fun describeCleanupGaps(

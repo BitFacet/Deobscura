@@ -1,8 +1,8 @@
 package io.github.relvl.deobscura.source
 
 import io.github.relvl.deobscura.analysis.MethodAnalyzer
-import io.github.relvl.deobscura.resolution.MethodOverrideAnalyzer
 import io.github.relvl.deobscura.raw.*
+import io.github.relvl.deobscura.resolution.MethodOverrideAnalyzer
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertFalse

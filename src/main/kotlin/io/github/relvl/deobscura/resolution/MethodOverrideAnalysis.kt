@@ -175,8 +175,8 @@ class MethodOverrideAnalyzer private constructor(
     }
 
     private fun returnsAreOverrideCompatible(childDescriptor: String, parentDescriptor: String, consumer: String): Boolean {
-        val child = io.github.relvl.deobscura.raw.JvmMethodDescriptor.parse(childDescriptor).returnType
-        val parent = io.github.relvl.deobscura.raw.JvmMethodDescriptor.parse(parentDescriptor).returnType
+        val child = JvmMethodDescriptor.parse(childDescriptor).returnType
+        val parent = JvmMethodDescriptor.parse(parentDescriptor).returnType
         if (child == parent) return true
         if (!child.isReference || !parent.isReference) return false
         return returnAssignable(parent, child, consumer) == true

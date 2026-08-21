@@ -1,11 +1,7 @@
 package io.github.relvl.deobscura.resolution
 
 import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
-import io.github.relvl.deobscura.raw.JvmMethodDescriptor
-import io.github.relvl.deobscura.raw.JvmType
-import io.github.relvl.deobscura.raw.RawClass
-import io.github.relvl.deobscura.raw.RawImportResult
-import io.github.relvl.deobscura.raw.RawMethod
+import io.github.relvl.deobscura.raw.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -101,7 +97,7 @@ class MethodOverrideAnalysisTest {
         returnAssignable: (JvmType, JvmType, String) -> Boolean? = { target, source, _ -> target == source },
     ) = MethodOverrideAnalyzer(external, returnAssignable)
 
-    private fun covariantStrings(target: JvmType, source: JvmType, @Suppress("UNUSED_PARAMETER") consumer: String): Boolean? =
+    private fun covariantStrings(target: JvmType, source: JvmType, @Suppress("UNUSED_PARAMETER") consumer: String): Boolean =
         target == source || target == JvmType.ObjectType("java/lang/Object") && source == JvmType.ObjectType("java/lang/String")
 
     private fun rawImport(vararg classes: RawClass) = RawImportResult(

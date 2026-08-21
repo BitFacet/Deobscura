@@ -3,18 +3,8 @@ package io.github.relvl.deobscura.source
 import io.github.relvl.deobscura.analysis.JvmValueType
 import io.github.relvl.deobscura.analysis.ValueId
 import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
-import io.github.relvl.deobscura.expression.ExpressionAnalysis
-import io.github.relvl.deobscura.expression.ExpressionMaterialization
-import io.github.relvl.deobscura.expression.ExpressionNode
-import io.github.relvl.deobscura.expression.ExpressionValue
-import io.github.relvl.deobscura.expression.FieldSymbol
-import io.github.relvl.deobscura.expression.InvocationKind
-import io.github.relvl.deobscura.expression.MethodSymbol
-import io.github.relvl.deobscura.raw.JvmMethodDescriptor
-import io.github.relvl.deobscura.raw.JvmType
-import io.github.relvl.deobscura.raw.RawClass
-import io.github.relvl.deobscura.raw.RawField
-import io.github.relvl.deobscura.raw.RawMethod
+import io.github.relvl.deobscura.expression.*
+import io.github.relvl.deobscura.raw.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 

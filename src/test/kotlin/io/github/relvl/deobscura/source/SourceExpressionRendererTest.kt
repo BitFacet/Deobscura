@@ -378,8 +378,8 @@ class SourceExpressionRendererTest {
                     phiId,
                     JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT),
                     ExpressionNode.Phi(
-                        io.github.relvl.deobscura.cfg.BasicBlockId(3),
-                        io.github.relvl.deobscura.analysis.SsaPhiLocation.Local(1),
+                        BasicBlockId(3),
+                        SsaPhiLocation.Local(1),
                         emptyList(),
                     ),
                 ),
@@ -502,6 +502,19 @@ class SourceExpressionRendererTest {
         val renderer = SourceExpressionRenderer()
         assertEquals("long v2 = 0", renderer.renderLocalDeclaration(expression.values.getValue(target), initializer, expression))
         assertEquals("v2 = 0", renderer.renderLocalAssignment(target, initializer, longType, expression))
+    }
+
+    @Test
+    fun `renders uninitialized reconstructed local with explicit phi type`() {
+        val target = ValueId(2)
+        val longType = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.LONG)
+        val value = ExpressionValue(
+            target,
+            longType,
+            ExpressionNode.Phi(BasicBlockId(1), SsaPhiLocation.Local(0), emptyList()),
+        )
+
+        assertEquals("long v2", SourceExpressionRenderer().renderLocalDeclaration(value))
     }
 
     @Test

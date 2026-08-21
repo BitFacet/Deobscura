@@ -76,6 +76,7 @@ class TechnicalIrServiceTest {
         assertTrue(locator.classFile("odd/CON").endsWith(Path.of("odd", "%43ON.ir")))
         assertTrue(locator.classFile("odd/a:b").endsWith(Path.of("odd", "a%3Ab.ir")))
     }
+
     @Test
     fun `deobfuscation maps IR path beside source path`() {
         val root = Files.createTempDirectory("deobscura-ir-deobfuscation-test")
