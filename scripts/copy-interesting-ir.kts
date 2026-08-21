@@ -9,6 +9,7 @@ val interestingFiles = listOf(
     "package_class/ZM4cSqt3bl.ir",
     "package_class/GkJmVtjv0Y.java",
     "package_class/GkJmVtjv0Y.ir",
+    "com/sun/javafx/iio/jpeg/JPEGImageLoader.ir"
 )
 val zip = interestingFiles.size > 10
 

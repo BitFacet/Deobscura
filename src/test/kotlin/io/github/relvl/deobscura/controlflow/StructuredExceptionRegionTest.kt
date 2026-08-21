@@ -49,6 +49,59 @@ class StructuredExceptionRegionTest {
         assertEquals(0, result.unstructuredExceptionRegionCount)
     }
 
+    // A terminal-continuation if must not absorb normal flow beyond a structured exception boundary.
+    @Test
+    fun `terminal continuation if does not cross a structured catch region`() {
+        val header = BasicBlockId(0)
+        val protectedArm = BasicBlockId(1)
+        val terminalContinuation = BasicBlockId(2)
+        val protectedTail = BasicBlockId(3)
+        val afterTry = BasicBlockId(4)
+        val terminalSideExit = BasicBlockId(5)
+        val catchEntry = BasicBlockId(6)
+        val edges = listOf(
+            edge(header, terminalContinuation, ControlFlowEdgeKind.CONDITIONAL),
+            edge(header, protectedArm, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(header, catchEntry, "java/io/IOException"),
+            edge(protectedArm, terminalContinuation, ControlFlowEdgeKind.CONDITIONAL),
+            edge(protectedArm, protectedTail, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(protectedArm, catchEntry, "java/io/IOException"),
+            edge(protectedTail, afterTry, ControlFlowEdgeKind.FALLTHROUGH),
+            exceptionEdge(protectedTail, catchEntry, "java/io/IOException"),
+            edge(afterTry, terminalSideExit, ControlFlowEdgeKind.FALLTHROUGH),
+        )
+        val graph = exceptionGraph(
+            blockCount = 7,
+            edges = edges,
+            handlers = listOf(exceptionHandler(0, 4, 6, "java/io/IOException")),
+        )
+        val result = analyzer.analyze(
+            graph,
+            SsaControlFlowGraph(
+                setOf(header, protectedArm, terminalContinuation, protectedTail, afterTry, terminalSideExit, catchEntry),
+                edges,
+                header,
+            ),
+            ExpressionAnalysis(
+                emptyMap(),
+                listOf(
+                    branch(0),
+                    // Keep the protected arm source-visible so the short-circuit pass cannot fold
+                    // it into the header before terminal-continuation recognition runs.
+                    ExpressionStatement.Raw(1, "side-effect", emptyList()),
+                    branch(1),
+                    ExpressionStatement.Return(2, null),
+                    ExpressionStatement.Return(5, null),
+                    ExpressionStatement.Return(6, null),
+                ),
+            ),
+        )
+
+        val exceptionRegion = result.regions.filterIsInstance<StructuredRegion.TryCatch>().single()
+        assertEquals(afterTry, exceptionRegion.continuation)
+        assertTrue(result.regions.filterIsInstance<StructuredRegion.If>().none { it.header == header })
+    }
+
     // Pseudocode: try { if (...) return; BODY } catch (E e) { ... }
     @Test
     fun `coalesces source try split around terminal control transfer`() {

@@ -16,6 +16,7 @@ internal class StructuredConditionalRecognizer {
         excludedHeaders: Set<BasicBlockId>,
         loopContexts: List<LoopFlowContext>,
         shortCircuitByRoot: Map<BasicBlockId, ShortCircuitConditionFold>,
+        exceptionRegions: List<StructuredRegion>,
     ): IfRecognition {
         val blocks = facts.blocks
         val outgoing = facts.outgoing
@@ -103,8 +104,20 @@ internal class StructuredConditionalRecognizer {
                     explicitTerminalBlocks = explicitTerminalBlocks,
                     ignoredPredecessors = ignoredArmPredecessors,
                 )
-                if (terminalRegion != null) {
-                    regions += terminalRegion
+                val terminalContinuationRegion = terminalRegion ?: recognizeTerminalContinuationIf(
+                    header = header,
+                    condition = condition,
+                    conditionalTarget = conditionalTarget,
+                    fallthroughTarget = fallthroughTarget,
+                    blocks = blocks,
+                    outgoing = outgoing,
+                    predecessors = predecessors,
+                    explicitTerminalBlocks = explicitTerminalBlocks,
+                    ignoredPredecessors = ignoredArmPredecessors,
+                    exceptionRegions = exceptionRegions,
+                )
+                if (terminalContinuationRegion != null) {
+                    regions += terminalContinuationRegion
                     terminalIfRegionCount++
                 } else {
                     rejections[header] = UnstructuredControlFlowReason.NO_COMMON_POST_DOMINATOR
@@ -462,6 +475,93 @@ internal class StructuredConditionalRecognizer {
     }
 
     /**
+     * Recognizes an `if` whose linear continuation is itself terminal while the other arm can either
+     * reach that continuation or terminate earlier. This covers source shapes such as
+     * `if (condition) { if (nested) return A } return B`, where the outer header has no common
+     * post-dominator even though its source ownership is still single-entry and well-defined.
+     */
+    private fun recognizeTerminalContinuationIf(
+        header: BasicBlockId,
+        condition: StructuredCondition,
+        conditionalTarget: BasicBlockId,
+        fallthroughTarget: BasicBlockId,
+        blocks: Set<BasicBlockId>,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        predecessors: Map<BasicBlockId, List<BasicBlockId>>,
+        explicitTerminalBlocks: Set<BasicBlockId>,
+        ignoredPredecessors: Set<BasicBlockId>,
+        exceptionRegions: List<StructuredRegion>,
+    ): StructuredRegion.If? {
+        val candidates = buildList {
+            if (conditionalTarget in explicitTerminalBlocks) {
+                add(Triple(fallthroughTarget, conditionalTarget, condition.negated()))
+            }
+            if (fallthroughTarget in explicitTerminalBlocks) {
+                add(Triple(conditionalTarget, fallthroughTarget, condition))
+            }
+        }
+        for ((armStart, continuation, sourceCondition) in candidates) {
+            val arm = collectArmWithTerminalSideExits(
+                start = armStart,
+                continuation = continuation,
+                header = header,
+                blocks = blocks,
+                outgoing = outgoing,
+                explicitTerminalBlocks = explicitTerminalBlocks,
+            )
+            if (arm !is ArmCollection.Success || arm.blocks.isEmpty()) continue
+            if (!singleEntryArm(arm.blocks, header, predecessors, ignoredPredecessors)) continue
+            val coveredBlocks = arm.blocks + header
+            if (exceptionRegions.any { coveredBlocks.crosses(it.coveredBlocks) }) continue
+            return StructuredRegion.If(
+                header = header,
+                condition = sourceCondition,
+                thenEntry = armStart,
+                thenBlocks = arm.blocks,
+                elseEntry = null,
+                elseBlocks = emptySet(),
+                continuation = continuation,
+            )
+        }
+        return null
+    }
+
+    private fun collectArmWithTerminalSideExits(
+        start: BasicBlockId,
+        continuation: BasicBlockId,
+        header: BasicBlockId,
+        blocks: Set<BasicBlockId>,
+        outgoing: Map<BasicBlockId, List<ControlFlowEdge>>,
+        explicitTerminalBlocks: Set<BasicBlockId>,
+    ): ArmCollection {
+        val result = linkedSetOf<BasicBlockId>()
+        val queue = ArrayDeque<BasicBlockId>()
+        var continuationSeen = false
+        var terminalSideExitSeen = false
+        queue.addLast(start)
+        while (queue.isNotEmpty()) {
+            val block = queue.removeFirst()
+            if (block == continuation) {
+                continuationSeen = true
+                continue
+            }
+            if (block == header) return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_REENTERS_HEADER)
+            if (block !in blocks) return ArmCollection.Rejected(UnstructuredControlFlowReason.ARM_LEAVES_REACHABLE_FLOW)
+            if (!result.add(block)) continue
+
+            val successors = outgoing[block].orEmpty().distinctTargets().map { it.to }
+            if (successors.isEmpty()) {
+                if (block !in explicitTerminalBlocks) return ArmCollection.Rejected(UnstructuredControlFlowReason.TERMINAL_ARM)
+                terminalSideExitSeen = true
+                continue
+            }
+            successors.forEach(queue::addLast)
+        }
+        if (!continuationSeen || !terminalSideExitSeen) return ArmCollection.Rejected(UnstructuredControlFlowReason.UNSUPPORTED_SHAPE)
+        return ArmCollection.Success(result)
+    }
+
+    /**
      * Recognizes `if (condition) { return/throw ... } continuation` when the two successors cannot
      * have a common post-dominator precisely because one side is a closed terminal region.
      */
@@ -622,6 +722,11 @@ internal class StructuredConditionalRecognizer {
         val exit: StructuredArmExit,
         val usedContinuationSpine: Boolean,
     )
+
+    private fun Set<BasicBlockId>.crosses(other: Set<BasicBlockId>): Boolean {
+        if (intersect(other).isEmpty()) return false
+        return !containsAll(other) && !other.containsAll(this)
+    }
 
     private sealed interface ArmCollection {
         data class Success(val blocks: Set<BasicBlockId>) : ArmCollection

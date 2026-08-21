@@ -150,6 +150,53 @@ class StructuredConditionalLoopTest {
         assertEquals(0, result.unstructuredConditionalCount)
     }
 
+    // Pseudocode: if (!outer) { if (inner) return true }; return false
+    @Test
+    fun `recognizes an arm with a terminal side exit before a terminal continuation`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val b3 = BasicBlockId(3)
+        val edges = listOf(
+            edge(b0, b3, ControlFlowEdgeKind.CONDITIONAL),
+            edge(b0, b1, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(b1, b3, ControlFlowEdgeKind.CONDITIONAL),
+            edge(b1, b2, ControlFlowEdgeKind.FALLTHROUGH),
+        )
+        val condition = ValueId(0)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                condition to ExpressionValue(
+                    condition,
+                    JvmValueType.of(JvmComputationalType.BOOLEAN),
+                    ExpressionNode.Root(ValueOrigin.Parameter(0)),
+                ),
+            ),
+            statements = listOf(
+                branch(0),
+                // Keep B1 source-visible so this test exercises terminal-continuation recognition
+                // rather than the earlier short-circuit folding pass.
+                ExpressionStatement.Raw(1, "side-effect", emptyList()),
+                branch(1),
+                ExpressionStatement.Return(2, condition),
+                ExpressionStatement.Return(3, condition),
+            ),
+        )
+        val result = analyzer.analyze(
+            graph(blocks(4), edges),
+            SsaControlFlowGraph(setOf(b0, b1, b2, b3), edges, b0),
+            expression,
+        )
+
+        val outer = assertIs<StructuredRegion.If>(result.regions.single { it.header == b0 })
+        assertEquals(ComparisonOperator.EQ, assertIs<StructuredCondition.Atomic>(outer.condition).condition.operator)
+        assertEquals(setOf(b1, b2), outer.thenBlocks)
+        assertEquals(b3, outer.continuation)
+        assertNull(outer.thenExit)
+        assertIs<StructuredRegion.If>(result.regions.single { it.header == b1 })
+        assertEquals(0, result.unstructuredConditionalCount)
+    }
+
     // Pseudocode: if (!cond) return; BODY
     @Test
     fun `inverts condition when the fallthrough arm terminates`() {

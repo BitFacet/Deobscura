@@ -75,6 +75,7 @@ class StructuredControlFlowAnalyzer {
             excludedHeaders = loopHeaders + shortCircuitFoldedHeaders + assertRecognition.consumedHeaders,
             loopContexts = loopContexts.values.toList(),
             shortCircuitByRoot = shortCircuitByRoot,
+            exceptionRegions = exceptionRecognition.regions,
         )
         val regions = (loopRecognition.regions + switchRecognition.regions + ifRecognition.regions + assertRecognition.regions + exceptionRecognition.regions).sortedWith(
             compareBy<StructuredRegion> { it.header.value }.thenBy {
