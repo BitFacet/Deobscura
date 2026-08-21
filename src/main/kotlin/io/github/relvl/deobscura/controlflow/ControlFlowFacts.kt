@@ -63,27 +63,27 @@ private fun instructionToBlock(graph: ControlFlowGraph): Array<BasicBlockId?> = 
 
 private fun branchesByBlock(expression: ExpressionAnalysis, blocks: Set<BasicBlockId>, instructionToBlock: Array<BasicBlockId?>): Map<BasicBlockId, ExpressionStatement.Branch> =
     expression.statements.asSequence().filterIsInstance<ExpressionStatement.Branch>().filter { it.condition != null }.mapNotNull { statement ->
-            val block = instructionToBlock.getOrNull(statement.instructionIndex) ?: return@mapNotNull null
-            block.takeIf { it in blocks }?.let { it to statement }
-        }.groupBy({ it.first }, { it.second }).mapValues { (block, statements) ->
-            if (statements.size != 1) {
-                throw StructuredControlFlowInconsistencyException("Basic block B${block.value} contains ${statements.size} conditional branch statements.")
-            }
-            statements.single()
+        val block = instructionToBlock.getOrNull(statement.instructionIndex) ?: return@mapNotNull null
+        block.takeIf { it in blocks }?.let { it to statement }
+    }.groupBy({ it.first }, { it.second }).mapValues { (block, statements) ->
+        if (statements.size != 1) {
+            throw StructuredControlFlowInconsistencyException("Basic block B${block.value} contains ${statements.size} conditional branch statements.")
         }
+        statements.single()
+    }
 
 private fun switchesByBlock(expression: ExpressionAnalysis, blocks: Set<BasicBlockId>, instructionToBlock: Array<BasicBlockId?>): Map<BasicBlockId, ExpressionStatement.Switch> =
     expression.statements.asSequence().filterIsInstance<ExpressionStatement.Switch>().mapNotNull { statement ->
-            val block = instructionToBlock.getOrNull(statement.instructionIndex) ?: return@mapNotNull null
-            block.takeIf { it in blocks }?.let { it to statement }
-        }.groupBy({ it.first }, { it.second }).mapValues { (block, statements) ->
-            if (statements.size != 1) {
-                throw StructuredControlFlowInconsistencyException(
-                    "Basic block B${block.value} contains ${statements.size} switch statements.",
-                )
-            }
-            statements.single()
+        val block = instructionToBlock.getOrNull(statement.instructionIndex) ?: return@mapNotNull null
+        block.takeIf { it in blocks }?.let { it to statement }
+    }.groupBy({ it.first }, { it.second }).mapValues { (block, statements) ->
+        if (statements.size != 1) {
+            throw StructuredControlFlowInconsistencyException(
+                "Basic block B${block.value} contains ${statements.size} switch statements.",
+            )
         }
+        statements.single()
+    }
 
 private fun explicitTerminalBlocks(
     expression: ExpressionAnalysis, blocks: Set<BasicBlockId>, instructionToBlock: Array<BasicBlockId?>, outgoing: Map<BasicBlockId, List<ControlFlowEdge>>

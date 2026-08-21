@@ -206,24 +206,24 @@ private fun synchronizedResidualContext(
 ): String? {
     val range = topology.group.envelope
     val candidates = regions.asSequence().filterIsInstance<StructuredRegion.Synchronized>().filter { region -> region.monitorEnterInstructionIndex < range.endExclusive }.map { region ->
-            val lastNormalExit = region.normalMonitorExitInstructionIndices.maxOrNull() ?: return@map null
-            val bodyOverlap = topology.protectedBlocks.count { block -> block in region.bodyBlocks }
-            val handlerOverlap = topology.protectedBlocks.count { block -> block in region.handlerBlocks }
-            val handlerEntryOverlap = topology.handlerEntries.count { block -> block in region.handlerBlocks }
-            val distance = when {
-                range.endExclusive <= region.monitorEnterInstructionIndex -> region.monitorEnterInstructionIndex - range.endExclusive
-                range.start > lastNormalExit -> range.start - lastNormalExit
-                else -> 0
-            }
-            SynchronizedResidualContext(
-                region = region,
-                lastNormalExit = lastNormalExit,
-                bodyOverlap = bodyOverlap,
-                handlerOverlap = handlerOverlap,
-                handlerEntryOverlap = handlerEntryOverlap,
-                distance = distance,
-            )
-        }.filterNotNull().sortedWith(compareBy<SynchronizedResidualContext> { context -> context.distance }.thenByDescending { context -> context.region.monitorEnterInstructionIndex }).take(2).toList()
+        val lastNormalExit = region.normalMonitorExitInstructionIndices.maxOrNull() ?: return@map null
+        val bodyOverlap = topology.protectedBlocks.count { block -> block in region.bodyBlocks }
+        val handlerOverlap = topology.protectedBlocks.count { block -> block in region.handlerBlocks }
+        val handlerEntryOverlap = topology.handlerEntries.count { block -> block in region.handlerBlocks }
+        val distance = when {
+            range.endExclusive <= region.monitorEnterInstructionIndex -> region.monitorEnterInstructionIndex - range.endExclusive
+            range.start > lastNormalExit -> range.start - lastNormalExit
+            else -> 0
+        }
+        SynchronizedResidualContext(
+            region = region,
+            lastNormalExit = lastNormalExit,
+            bodyOverlap = bodyOverlap,
+            handlerOverlap = handlerOverlap,
+            handlerEntryOverlap = handlerEntryOverlap,
+            distance = distance,
+        )
+    }.filterNotNull().sortedWith(compareBy<SynchronizedResidualContext> { context -> context.distance }.thenByDescending { context -> context.region.monitorEnterInstructionIndex }).take(2).toList()
     if (candidates.isEmpty()) return null
 
     return candidates.joinToString(";") { context ->

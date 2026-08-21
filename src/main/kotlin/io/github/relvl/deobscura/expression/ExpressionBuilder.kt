@@ -47,8 +47,8 @@ class ExpressionBuilder(
 
         val consumedConstructors = mutableSetOf<Int>()
         ssa.operations.asSequence().filter { it.output == null }.forEach { operation ->
-                if (attachConstructor(operation, values)) consumedConstructors += operation.instructionIndex
-            }
+            if (attachConstructor(operation, values)) consumedConstructors += operation.instructionIndex
+        }
 
         val statements = ssa.operations.asSequence().filter { it.output == null && it.instructionIndex !in consumedConstructors }.map(::liftStatement).toList()
 

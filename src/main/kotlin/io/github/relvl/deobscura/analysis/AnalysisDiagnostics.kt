@@ -99,26 +99,26 @@ class AnalysisDiagnostics(
             if (analysis != null) {
                 SourceOutputService.captureMethod(result.rawClass.internalName, analysis)
                 analysis.structuredControlFlow.unstructured.filter { it.kind == UnstructuredControlFlowKind.SWITCH }.forEach { diagnostic ->
-                        logger.warn(
-                            "Unstructured switch in '{}': B{} ({}).{}",
-                            methodName,
-                            diagnostic.header.value,
-                            diagnostic.reason.diagnosticName,
-                            TechnicalIrService.methodHint(result.rawClass.internalName, method.name, method.descriptor),
-                        )
-                    }
+                    logger.warn(
+                        "Unstructured switch in '{}': B{} ({}).{}",
+                        methodName,
+                        diagnostic.header.value,
+                        diagnostic.reason.diagnosticName,
+                        TechnicalIrService.methodHint(result.rawClass.internalName, method.name, method.descriptor),
+                    )
+                }
                 analysis.structuredControlFlow.unstructured.filter { it.kind == UnstructuredControlFlowKind.EXCEPTION }.forEach { diagnostic ->
-                        logger.warn(
-                            "Unstructured exception region in '{}': B{} protected={}..<{} ({}){}.{}",
-                            methodName,
-                            diagnostic.header.value,
-                            diagnostic.protectedStartInstructionIndex,
-                            diagnostic.protectedEndInstructionIndexExclusive,
-                            diagnostic.reason.diagnosticName,
-                            diagnostic.detail?.let { " [$it]" } ?: "",
-                            TechnicalIrService.methodHint(result.rawClass.internalName, method.name, method.descriptor),
-                        )
-                    }
+                    logger.warn(
+                        "Unstructured exception region in '{}': B{} protected={}..<{} ({}){}.{}",
+                        methodName,
+                        diagnostic.header.value,
+                        diagnostic.protectedStartInstructionIndex,
+                        diagnostic.protectedEndInstructionIndexExclusive,
+                        diagnostic.reason.diagnosticName,
+                        diagnostic.detail?.let { " [$it]" } ?: "",
+                        TechnicalIrService.methodHint(result.rawClass.internalName, method.name, method.descriptor),
+                    )
+                }
                 analysis.sourceStructure.issues.forEach { issue ->
                     logger.warn(
                         "Source-structure projection retained unresolved ownership in '{}': {} block(s) {}.{}",

@@ -174,15 +174,15 @@ class SourceStructureBuilder {
         } else {
             projectedRoot.copy(
                 nodes = projectedRoot.nodes + missing.sortedBy { blockOrder[it] ?: Int.MAX_VALUE }.map { block ->
-                        SourceNode.ProjectionFallback(
-                            block = block,
-                            reason = SourceProjectionIssueReason.UNACCOUNTED_REACHABLE_BLOCK,
-                            provenance = SourceProvenance(
-                                setOf(block),
-                                blockInstructionRange(graph, block)?.let(::listOf).orEmpty(),
-                            ),
-                        )
-                    },
+                    SourceNode.ProjectionFallback(
+                        block = block,
+                        reason = SourceProjectionIssueReason.UNACCOUNTED_REACHABLE_BLOCK,
+                        provenance = SourceProvenance(
+                            setOf(block),
+                            blockInstructionRange(graph, block)?.let(::listOf).orEmpty(),
+                        ),
+                    )
+                },
             )
         }
         val accounted = linkedSetOf<BasicBlockId>().apply {

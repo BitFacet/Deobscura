@@ -25,22 +25,22 @@ class ClassImporter(
         var unknownInstructionCount = 0L
 
         jarLoadResult.classes.values.asSequence().filter { it.origin.role == JarRole.INPUT }.forEach { loadedClass ->
-                try {
-                    val imported = importClass(loadedClass.bytes)
-                    classes[imported.internalName] = imported
-                    fieldCount += imported.fields.size
-                    methodCount += imported.methods.size
-                    methodsWithCode += imported.methods.count { it.code != null }
-                    imported.methods.forEach { method ->
-                        method.code?.let { code ->
-                            instructionCount += code.instructions.size
-                            unknownInstructionCount += code.instructions.count { it is RawUnknownInstruction }
-                        }
+            try {
+                val imported = importClass(loadedClass.bytes)
+                classes[imported.internalName] = imported
+                fieldCount += imported.fields.size
+                methodCount += imported.methods.size
+                methodsWithCode += imported.methods.count { it.code != null }
+                imported.methods.forEach { method ->
+                    method.code?.let { code ->
+                        instructionCount += code.instructions.size
+                        unknownInstructionCount += code.instructions.count { it is RawUnknownInstruction }
                     }
-                } catch (exception: Exception) {
-                    warnings += "Failed to import class '${loadedClass.internalName}' into raw model: ${exception.message}."
                 }
+            } catch (exception: Exception) {
+                warnings += "Failed to import class '${loadedClass.internalName}' into raw model: ${exception.message}."
             }
+        }
 
         return RawImportResult(
             classes = classes,
@@ -137,12 +137,12 @@ class ClassImporter(
 
         val codeAttribute = code as? CodeAttribute
         val rawLabels = labels.entries().map { (label, id) ->
-                RawLabel(
-                    id = id,
-                    instructionIndex = labelPositions[id] ?: instructions.size,
-                    bytecodeOffset = codeAttribute?.labelToBci(label),
-                )
-            }.sortedBy { it.id.value }
+            RawLabel(
+                id = id,
+                instructionIndex = labelPositions[id] ?: instructions.size,
+                bytecodeOffset = codeAttribute?.labelToBci(label),
+            )
+        }.sortedBy { it.id.value }
 
         return RawCode(
             maxStack = codeAttribute?.maxStack(),

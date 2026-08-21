@@ -155,9 +155,9 @@ internal fun <T> buildExceptionScopeNesting(scopes: List<T>, blocksOf: (T) -> Se
     for (scope in scopes) {
         val scopeBlocks = blocks.getValue(scope)
         val parent = scopes.asSequence().filter { candidate -> candidate != scope }.filter { candidate ->
-                val candidateBlocks = blocks.getValue(candidate)
-                candidateBlocks.size > scopeBlocks.size && candidateBlocks.containsAll(scopeBlocks)
-            }.minWithOrNull(compareBy<T> { candidate -> blocks.getValue(candidate).size }.thenBy { candidate -> scopes.indexOf(candidate) })
+            val candidateBlocks = blocks.getValue(candidate)
+            candidateBlocks.size > scopeBlocks.size && candidateBlocks.containsAll(scopeBlocks)
+        }.minWithOrNull(compareBy<T> { candidate -> blocks.getValue(candidate).size }.thenBy { candidate -> scopes.indexOf(candidate) })
         if (parent != null) parentByScope[scope] = parent
     }
 
@@ -330,11 +330,11 @@ internal object ExceptionTopologyBuilder {
     fun build(graph: ControlFlowGraph, facts: ControlFlowFacts): ExceptionTopology {
         val labelPositions = graph.code.labels.associate { it.id to it.instructionIndex }
         val segments = graph.code.exceptionHandlers.groupBy { handler ->
-                ProtectedRange(
-                    start = exceptionLabelPosition(labelPositions, handler.tryStart),
-                    endExclusive = exceptionLabelPosition(labelPositions, handler.tryEnd),
-                )
-            }.entries.map { (range, handlers) -> ExceptionTableSegment(range, handlers) }.sortedWith(compareBy<ExceptionTableSegment> { it.range.start }.thenBy { it.range.endExclusive })
+            ProtectedRange(
+                start = exceptionLabelPosition(labelPositions, handler.tryStart),
+                endExclusive = exceptionLabelPosition(labelPositions, handler.tryEnd),
+            )
+        }.entries.map { (range, handlers) -> ExceptionTableSegment(range, handlers) }.sortedWith(compareBy<ExceptionTableSegment> { it.range.start }.thenBy { it.range.endExclusive })
         val groups = coalesceSegments(segments, labelPositions, facts).map { group ->
             ExceptionGroupTopology(
                 group = group,

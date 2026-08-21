@@ -70,16 +70,16 @@ class StructuredControlFlowAnalyzer {
 
         val regions = (loopRecognition.regions + switchRecognition.regions + ifRecognition.regions + exceptionRecognition.regions).sortedWith(
             compareBy<StructuredRegion> { it.header.value }.thenBy {
-                    when (it) {
-                        is StructuredRegion.While -> 0
-                        is StructuredRegion.TryCatch -> 1
-                        is StructuredRegion.TryCatchFinally -> 2
-                        is StructuredRegion.TryFinally -> 3
-                        is StructuredRegion.Synchronized -> 4
-                        is StructuredRegion.Switch -> 5
-                        is StructuredRegion.If -> 6
-                    }
-                },
+                when (it) {
+                    is StructuredRegion.While -> 0
+                    is StructuredRegion.TryCatch -> 1
+                    is StructuredRegion.TryCatchFinally -> 2
+                    is StructuredRegion.TryFinally -> 3
+                    is StructuredRegion.Synchronized -> 4
+                    is StructuredRegion.Switch -> 5
+                    is StructuredRegion.If -> 6
+                }
+            },
         )
         val recognizedConditionalHeaders = linkedSetOf<BasicBlockId>().apply {
             addAll(loopRecognition.regions.map { it.header })

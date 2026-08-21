@@ -33,17 +33,17 @@ class ExpressionIrRenderer {
                 appendLine("      ${renderDefinition(value, expression)}")
             }
             eventsByBlock[block].orEmpty().sortedWith(compareBy<RenderEvent> { it.instructionIndex }.thenBy { it.order }).forEach { event ->
-                    val rendered = when (event) {
-                        is RenderEvent.Value -> if (event.value.id in expression.materialization.discardedResultValues) {
-                            renderNode(event.value.node, expression)
-                        } else {
-                            renderDefinition(event.value, expression)
-                        }
-
-                        is RenderEvent.Statement -> renderStatement(event.statement, outgoingByBlock[block].orEmpty(), expression)
+                val rendered = when (event) {
+                    is RenderEvent.Value -> if (event.value.id in expression.materialization.discardedResultValues) {
+                        renderNode(event.value.node, expression)
+                    } else {
+                        renderDefinition(event.value, expression)
                     }
-                    appendLine("      $rendered")
+
+                    is RenderEvent.Statement -> renderStatement(event.statement, outgoingByBlock[block].orEmpty(), expression)
                 }
+                appendLine("      $rendered")
+            }
         }
 
         val roots = expression.values.values.filter { it.node is ExpressionNode.Root }.sortedBy { it.id.value }

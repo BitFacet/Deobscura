@@ -39,23 +39,23 @@ class SsaControlFlowPruner {
         var conservativelyRetainedPhiCount = 0
 
         val reachablePhiNodes = analysis.phiNodes.asSequence().filter { it.blockId in reachableBlocks }.map { phi ->
-                if (!phi.isPredecessorAddressed) {
-                    conservativelyRetainedPhiCount++
-                    return@map phi
-                }
+            if (!phi.isPredecessorAddressed) {
+                conservativelyRetainedPhiCount++
+                return@map phi
+            }
 
-                val survivingPredecessors = controlFlow.edges.asSequence().filter { edge ->
-                        edge.to == phi.blockId && edge.kind != ControlFlowEdgeKind.EXCEPTION && edge !in eliminatedEdges && edge.from in reachableBlocks
-                    }.map { it.from }.toSet()
-                val inputs = phi.inputs.filter { it.predecessor in survivingPredecessors }
-                removedPhiInputCount += phi.inputs.size - inputs.size
-                if (inputs.isEmpty()) {
-                    throw SsaInconsistencyException(
-                        "Reachable phi ${phi.output.value} in block ${phi.blockId.value} lost all inputs after CFG pruning.",
-                    )
-                }
-                phi.copy(inputs = inputs)
-            }.toList()
+            val survivingPredecessors = controlFlow.edges.asSequence().filter { edge ->
+                edge.to == phi.blockId && edge.kind != ControlFlowEdgeKind.EXCEPTION && edge !in eliminatedEdges && edge.from in reachableBlocks
+            }.map { it.from }.toSet()
+            val inputs = phi.inputs.filter { it.predecessor in survivingPredecessors }
+            removedPhiInputCount += phi.inputs.size - inputs.size
+            if (inputs.isEmpty()) {
+                throw SsaInconsistencyException(
+                    "Reachable phi ${phi.output.value} in block ${phi.blockId.value} lost all inputs after CFG pruning.",
+                )
+            }
+            phi.copy(inputs = inputs)
+        }.toList()
 
         val operationsByOutput = analysis.operations.mapNotNull { operation -> operation.output?.let { it to operation } }.toMap()
         val phisByOutput = analysis.phiNodes.associateBy { it.output }

@@ -80,8 +80,8 @@ class SsaAnalyzer {
         }
 
         val operations = valueFlow.operations.asSequence().filterNot { it.instruction is RawLocalInstruction }.map { operation ->
-                operation.copy(inputs = operation.inputs.map(::resolve))
-            }.toList()
+            operation.copy(inputs = operation.inputs.map(::resolve))
+        }.toList()
         val eliminatedLocalInstructionCount = valueFlow.operations.size - operations.size
         val uses = rebuildSsaUses(values, operations, phiNodes, "Initial")
 

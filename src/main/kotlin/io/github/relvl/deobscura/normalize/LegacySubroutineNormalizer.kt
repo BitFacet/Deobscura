@@ -232,18 +232,18 @@ class LegacySubroutineNormalizer(
             val block = graph.block(instance.block)
             val range = emittedRanges.getValue(instance)
             handlers.asSequence().filter { block.startInstructionIndex >= it.start && block.endInstructionIndexExclusive <= it.endExclusive }.forEach { handler ->
-                    val handlerBlock = blockForInstruction(handler.handlerInstructionIndex)
-                    val handlerInstance = BlockInstance(handlerBlock, instance.context)
-                    val handlerLabel = instanceLabels[handlerInstance] ?: throw LegacySubroutineNormalizationException(
-                        "Exception handler block ${handlerBlock.value} was not discovered for context ${instance.context}.",
-                    )
-                    exceptionHandlers += RawExceptionHandler(
-                        tryStart = labelAt(range.start),
-                        tryEnd = labelAt(range.originalEndExclusive),
-                        handler = handlerLabel,
-                        catchType = handler.catchType,
-                    )
-                }
+                val handlerBlock = blockForInstruction(handler.handlerInstructionIndex)
+                val handlerInstance = BlockInstance(handlerBlock, instance.context)
+                val handlerLabel = instanceLabels[handlerInstance] ?: throw LegacySubroutineNormalizationException(
+                    "Exception handler block ${handlerBlock.value} was not discovered for context ${instance.context}.",
+                )
+                exceptionHandlers += RawExceptionHandler(
+                    tryStart = labelAt(range.start),
+                    tryEnd = labelAt(range.originalEndExclusive),
+                    handler = handlerLabel,
+                    catchType = handler.catchType,
+                )
+            }
         }
 
         val normalized = RawCode(

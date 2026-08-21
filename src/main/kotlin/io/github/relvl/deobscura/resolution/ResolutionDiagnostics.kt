@@ -18,27 +18,27 @@ class ResolutionDiagnostics(
         val warnings = mutableListOf<String>()
 
         jarLoadResult.classes.values.asSequence().filter { it.origin.role == JarRole.INPUT }.forEach { loadedClass ->
-                val references = try {
-                    scanner.scan(loadedClass)
-                } catch (exception: Exception) {
-                    warnings += "Failed to inspect class '${loadedClass.internalName}' for references: ${exception.message}."
-                    return@forEach
-                }
+            val references = try {
+                scanner.scan(loadedClass)
+            } catch (exception: Exception) {
+                warnings += "Failed to inspect class '${loadedClass.internalName}' for references: ${exception.message}."
+                return@forEach
+            }
 
-                for (reference in references) {
-                    if (resolver.findClass(reference.internalName) == null) {
-                        unresolvedReferences.getOrPut(reference.internalName) { MutableUnresolvedReference() }.add(loadedClass.internalName, reference.kind)
-                    }
+            for (reference in references) {
+                if (resolver.findClass(reference.internalName) == null) {
+                    unresolvedReferences.getOrPut(reference.internalName) { MutableUnresolvedReference() }.add(loadedClass.internalName, reference.kind)
                 }
             }
+        }
 
         val unresolved = unresolvedReferences.toSortedMap().map { (internalName, reference) ->
-                UnresolvedClassReference(
-                    internalName = internalName,
-                    kind = reference.strongestKind,
-                    referrers = reference.referrers.sorted(),
-                )
-            }
+            UnresolvedClassReference(
+                internalName = internalName,
+                kind = reference.strongestKind,
+                referrers = reference.referrers.sorted(),
+            )
+        }
 
         return ResolutionDiagnosticsResult(
             unresolved = unresolved,

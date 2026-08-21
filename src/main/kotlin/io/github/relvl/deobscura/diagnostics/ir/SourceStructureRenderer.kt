@@ -20,10 +20,10 @@ class SourceStructureRenderer {
         if (structure.consumptions.isNotEmpty()) {
             appendLine("    consumed-physical-blocks:")
             structure.consumptions.sortedWith(compareBy<SourceConsumption> { it.block.value }.thenBy { it.reason.name }).forEach { consumption ->
-                    appendLine(
-                        "      B${consumption.block.value} ${consumption.reason.name.lowercase().replace('_', '-')} " + "owner=B${consumption.ownerHeader.value}",
-                    )
-                }
+                appendLine(
+                    "      B${consumption.block.value} ${consumption.reason.name.lowercase().replace('_', '-')} " + "owner=B${consumption.ownerHeader.value}",
+                )
+            }
         }
     }
 

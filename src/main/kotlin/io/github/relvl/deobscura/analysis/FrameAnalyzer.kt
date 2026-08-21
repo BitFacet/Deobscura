@@ -60,12 +60,12 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
 
         fun propagateOrdinarySuccessors(location: FrameLocation, output: FrameState) {
             graph.edges.asSequence().filter { it.from == location.block && it.kind != ControlFlowEdgeKind.EXCEPTION }.forEach { edge ->
-                    mergeInto(
-                        FrameLocation(edge.to, location.context),
-                        output,
-                        "edge ${edge.from.value}->${edge.to.value}",
-                    )
-                }
+                mergeInto(
+                    FrameLocation(edge.to, location.context),
+                    output,
+                    "edge ${edge.from.value}->${edge.to.value}",
+                )
+            }
         }
 
         while (queue.isNotEmpty()) {
@@ -79,26 +79,26 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
             for (instructionIndex in block.startInstructionIndex until block.endInstructionIndexExclusive) { // Any instruction inside a protected range is conservatively treated as a potential throw site.
                 // An exception raised inside a JSR subroutine stays in the same subroutine invocation context.
                 handlers.asSequence().filter { instructionIndex >= it.start && instructionIndex < it.endExclusive }.forEach { handler ->
-                        val exceptionFrame = FrameState(
-                            locals = mutable.locals.toList(),
-                            stack = listOf(
-                                FrameValue.reference(
-                                    JvmReferenceType.Exact(
-                                        JvmType.ObjectType(handler.raw.catchType ?: "java/lang/Throwable"),
-                                    ),
-                                    ValueOrigin.ExceptionHandler(
-                                        handlerInstructionIndex = graph.block(handler.handlerBlock).startInstructionIndex,
-                                        catchType = handler.raw.catchType,
-                                    ),
+                    val exceptionFrame = FrameState(
+                        locals = mutable.locals.toList(),
+                        stack = listOf(
+                            FrameValue.reference(
+                                JvmReferenceType.Exact(
+                                    JvmType.ObjectType(handler.raw.catchType ?: "java/lang/Throwable"),
+                                ),
+                                ValueOrigin.ExceptionHandler(
+                                    handlerInstructionIndex = graph.block(handler.handlerBlock).startInstructionIndex,
+                                    catchType = handler.raw.catchType,
                                 ),
                             ),
-                        )
-                        mergeInto(
-                            FrameLocation(handler.handlerBlock, location.context),
-                            exceptionFrame,
-                            "exception handler for instruction $instructionIndex",
-                        )
-                    }
+                        ),
+                    )
+                    mergeInto(
+                        FrameLocation(handler.handlerBlock, location.context),
+                        exceptionFrame,
+                        "exception handler for instruction $instructionIndex",
+                    )
+                }
 
                 execute(code.instructions[instructionIndex], instructionIndex, mutable)
             }
@@ -134,12 +134,12 @@ class FrameAnalyzer(private val hierarchy: ClassHierarchy? = null) {
                         val subroutineContext = location.context.enterSubroutine(returnSite) // The CFG keeps the post-JSR block reachable for structural diagnostics, but execution
                         // reaches it only through RET. Enter only the actual subroutine target here.
                         graph.edges.asSequence().filter { it.from == blockId && it.kind == ControlFlowEdgeKind.JUMP }.forEach { edge ->
-                                mergeInto(
-                                    FrameLocation(edge.to, subroutineContext),
-                                    output,
-                                    "legacy JSR edge ${edge.from.value}->${edge.to.value}",
-                                )
-                            }
+                            mergeInto(
+                                FrameLocation(edge.to, subroutineContext),
+                                output,
+                                "legacy JSR edge ${edge.from.value}->${edge.to.value}",
+                            )
+                        }
                     } else {
                         propagateOrdinarySuccessors(location, output)
                     }

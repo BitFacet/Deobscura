@@ -530,23 +530,23 @@ internal object ModernFinallyRecognizer {
         } else {
             listOf(
                 bodyBlocks.asSequence().map(graph::block).sortedBy { it.startInstructionIndex }.let { blocks ->
-                        val list = blocks.toList()
-                        val rethrowBlock = graph.block(rethrow)
-                        val first = if (list.isNotEmpty()) {
-                            list.first().startInstructionIndex + handlerEntryInstructionOffset
-                        } else {
-                            rethrowBlock.startInstructionIndex + if (rethrow == handlerEntry) handlerEntryInstructionOffset else 0
-                        }
-                        val lastExclusive = if (rethrowPrefixSize != 0) {
-                            rethrowBlock.startInstructionIndex + rethrowPrefixSize
-                        } else {
-                            list.last().endInstructionIndexExclusive
-                        }
-                        val bodyInstructionCount = list.sumOf { it.endInstructionIndexExclusive - it.startInstructionIndex } - if (handlerEntry in bodyBlocks) handlerEntryInstructionOffset else 0
-                        val instructionCount = bodyInstructionCount + rethrowCleanupInstructionCount
-                        if (lastExclusive - first != instructionCount) return reject("non-contiguous-handler-body")
-                        first until lastExclusive
-                    },
+                    val list = blocks.toList()
+                    val rethrowBlock = graph.block(rethrow)
+                    val first = if (list.isNotEmpty()) {
+                        list.first().startInstructionIndex + handlerEntryInstructionOffset
+                    } else {
+                        rethrowBlock.startInstructionIndex + if (rethrow == handlerEntry) handlerEntryInstructionOffset else 0
+                    }
+                    val lastExclusive = if (rethrowPrefixSize != 0) {
+                        rethrowBlock.startInstructionIndex + rethrowPrefixSize
+                    } else {
+                        list.last().endInstructionIndexExclusive
+                    }
+                    val bodyInstructionCount = list.sumOf { it.endInstructionIndexExclusive - it.startInstructionIndex } - if (handlerEntry in bodyBlocks) handlerEntryInstructionOffset else 0
+                    val instructionCount = bodyInstructionCount + rethrowCleanupInstructionCount
+                    if (lastExclusive - first != instructionCount) return reject("non-contiguous-handler-body")
+                    first until lastExclusive
+                },
             )
         }
 
@@ -572,14 +572,14 @@ internal object ModernFinallyRecognizer {
         val gapStart = left.last + 1
         val gapEndExclusive = right.first
         val gapBlocks = graph.blocks.asSequence().filter { block ->
-                block.startInstructionIndex >= gapStart && block.endInstructionIndexExclusive <= gapEndExclusive
-            }.mapTo(linkedSetOf()) { it.id }
+            block.startInstructionIndex >= gapStart && block.endInstructionIndexExclusive <= gapEndExclusive
+        }.mapTo(linkedSetOf()) { it.id }
         val normalEntries = gapBlocks.flatMap { block ->
             facts.incoming[block].orEmpty().filter { edge -> edge.from !in gapBlocks }.map { edge -> "B${edge.from.value}->B${edge.to.value}:${edge.kind}" }
         }.distinct()
         val exceptionEntries = graph.edges.asSequence().filter { edge ->
-                edge.kind == ControlFlowEdgeKind.EXCEPTION && edge.from in blocks && edge.to in gapBlocks
-            }.map { edge -> "B${edge.from.value}->B${edge.to.value}" }.distinct().toList()
+            edge.kind == ControlFlowEdgeKind.EXCEPTION && edge.from in blocks && edge.to in gapBlocks
+        }.map { edge -> "B${edge.from.value}->B${edge.to.value}" }.distinct().toList()
         "gap=$gapStart..<$gapEndExclusive/blocks=${gapBlocks.joinToString(",") { "B${it.value}" }}" + "/normal-in=${normalEntries.ifEmpty { listOf("none") }.joinToString(",")}" + "/exception-in=${
             exceptionEntries.ifEmpty { listOf("none") }.joinToString(",")
         }"
@@ -604,13 +604,13 @@ internal object ModernFinallyRecognizer {
             if (gapStart >= gapEndExclusive) return false
 
             val gapBlocks = graph.blocks.asSequence().filter { block ->
-                    block.id in facts.blocks && block.startInstructionIndex >= gapStart && block.endInstructionIndexExclusive <= gapEndExclusive
-                }.mapTo(linkedSetOf()) { it.id }
+                block.id in facts.blocks && block.startInstructionIndex >= gapStart && block.endInstructionIndexExclusive <= gapEndExclusive
+            }.mapTo(linkedSetOf()) { it.id }
             if (gapBlocks.isEmpty()) return false
 
             val exceptionEntries = graph.edges.asSequence().filter { edge ->
-                    edge.kind == ControlFlowEdgeKind.EXCEPTION && edge.from in blocks && edge.to in gapBlocks
-                }.mapTo(linkedSetOf()) { it.to }
+                edge.kind == ControlFlowEdgeKind.EXCEPTION && edge.from in blocks && edge.to in gapBlocks
+            }.mapTo(linkedSetOf()) { it.to }
             if (exceptionEntries.isEmpty()) return false
 
             if (gapBlocks.any { block ->

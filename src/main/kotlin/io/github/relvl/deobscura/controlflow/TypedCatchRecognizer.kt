@@ -366,8 +366,8 @@ internal class TypedCatchRecognizer {
         facts: ControlFlowFacts,
     ): BasicBlockId? {
         val candidates = blocks.asSequence().filter { block ->
-                block != entry && block in facts.postDominators[entry].orEmpty() && facts.incoming[block].orEmpty().any { edge -> edge.from !in blocks }
-            }.toList()
+            block != entry && block in facts.postDominators[entry].orEmpty() && facts.incoming[block].orEmpty().any { edge -> edge.from !in blocks }
+        }.toList()
         return candidates.firstOrNull { candidate ->
             candidates.none { other ->
                 other != candidate && candidate in facts.postDominators[other].orEmpty()

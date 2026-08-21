@@ -165,8 +165,8 @@ internal object FragmentedSynchronizedRecognizer {
             }
 
             val protectedRanges = family.flatMap { candidate -> candidate.group.segments }.map { segment -> StructuredProtectedRange(segment.range.start, segment.range.endExclusive) }.distinct().sortedWith(
-                    compareBy<StructuredProtectedRange> { it.startInstructionIndex }.thenBy { it.endInstructionIndexExclusive },
-                )
+                compareBy<StructuredProtectedRange> { it.startInstructionIndex }.thenBy { it.endInstructionIndexExclusive },
+            )
             if (protectedRanges.isEmpty()) continue
 
             val syntheticCleanupCompanions = allGroups.filter { candidate ->
@@ -407,8 +407,8 @@ internal object FragmentedSynchronizedRecognizer {
         val edges = buildList {
             addAll(facts.normalEdges)
             graph.edges.asSequence().filter { edge ->
-                    edge.kind == ControlFlowEdgeKind.EXCEPTION && edge.from in facts.blocks && edge.to in facts.blocks
-                }.forEach(::add)
+                edge.kind == ControlFlowEdgeKind.EXCEPTION && edge.from in facts.blocks && edge.to in facts.blocks
+            }.forEach(::add)
         }
         val predecessors = edges.groupBy { it.to }.mapValues { (_, incoming) ->
             incoming.map { it.from }.distinct()
@@ -423,12 +423,12 @@ internal object FragmentedSynchronizedRecognizer {
         dominators: Map<BasicBlockId, Set<BasicBlockId>>,
         facts: ControlFlowFacts,
     ): Int? = instructions.indices.asSequence().filter { index ->
-            val monitor = instructions[index] as? RawMonitorInstruction ?: return@filter false
-            if (monitor.opcode.mnemonic != "monitorenter") return@filter false
-            if (monitorSlotBeforeEnter(instructions, index) != monitorSlot) return@filter false
-            val enterBlock = facts.instructionToBlock.getOrNull(index) ?: return@filter false
-            enterBlock in dominators[block].orEmpty()
-        }.maxOrNull()
+        val monitor = instructions[index] as? RawMonitorInstruction ?: return@filter false
+        if (monitor.opcode.mnemonic != "monitorenter") return@filter false
+        if (monitorSlotBeforeEnter(instructions, index) != monitorSlot) return@filter false
+        val enterBlock = facts.instructionToBlock.getOrNull(index) ?: return@filter false
+        enterBlock in dominators[block].orEmpty()
+    }.maxOrNull()
 
     private fun findNormalMonitorExits(
         instructions: List<RawInstruction>,
@@ -438,13 +438,13 @@ internal object FragmentedSynchronizedRecognizer {
         dominators: Map<BasicBlockId, Set<BasicBlockId>>,
         facts: ControlFlowFacts,
     ): List<Int> = instructions.indices.asSequence().filter { index -> index > monitorEnterInstructionIndex && index !in handlerMonitorExitInstructionIndices }.filter { index ->
-            val monitor = instructions[index] as? RawMonitorInstruction ?: return@filter false
-            if (monitor.opcode.mnemonic != "monitorexit") return@filter false
-            val load = instructions.getOrNull(index - 1) as? RawLocalInstruction ?: return@filter false
-            if (load.operation != LocalOperation.LOAD || load.slot != monitorSlot) return@filter false
-            val block = facts.instructionToBlock.getOrNull(index) ?: return@filter false
-            owningMonitorEnter(instructions, monitorSlot, block, dominators, facts) == monitorEnterInstructionIndex
-        }.toList()
+        val monitor = instructions[index] as? RawMonitorInstruction ?: return@filter false
+        if (monitor.opcode.mnemonic != "monitorexit") return@filter false
+        val load = instructions.getOrNull(index - 1) as? RawLocalInstruction ?: return@filter false
+        if (load.operation != LocalOperation.LOAD || load.slot != monitorSlot) return@filter false
+        val block = facts.instructionToBlock.getOrNull(index) ?: return@filter false
+        owningMonitorEnter(instructions, monitorSlot, block, dominators, facts) == monitorEnterInstructionIndex
+    }.toList()
 
     private fun collectBodyBlocks(
         header: BasicBlockId,

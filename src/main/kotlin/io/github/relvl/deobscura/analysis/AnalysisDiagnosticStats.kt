@@ -267,13 +267,13 @@ internal class ExceptionResidualFamilyStats(
     }
 
     internal fun summaries(): List<String> = families.entries.sortedWith(compareByDescending<Map.Entry<String, Family>> { it.value.count }.thenBy { it.key }).map { (name, family) ->
-            buildString {
-                append(name).append('=').append(family.count)
-                if (family.representatives.isNotEmpty()) {
-                    append(" [e.g. ").append(family.representatives.joinToString()).append(']')
-                }
+        buildString {
+            append(name).append('=').append(family.count)
+            if (family.representatives.isNotEmpty()) {
+                append(" [e.g. ").append(family.representatives.joinToString()).append(']')
             }
         }
+    }
 
     fun log(logger: Logger) {
         val ordered = families.entries.sortedWith(compareByDescending<Map.Entry<String, Family>> { it.value.count }.thenBy { it.key })

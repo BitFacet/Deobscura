@@ -35,10 +35,10 @@ internal class ResolutionImpactTracker {
 
     @Synchronized
     fun snapshot(): List<UnresolvedAnalysisUse> = unresolvedUses.toSortedMap().map { (internalName, requests) ->
-            UnresolvedAnalysisUse(
-                internalName = internalName,
-                strongestImpact = requests.maxBy { it.impact.priority }.impact,
-                requests = requests.toList(),
-            )
-        }
+        UnresolvedAnalysisUse(
+            internalName = internalName,
+            strongestImpact = requests.maxBy { it.impact.priority }.impact,
+            requests = requests.toList(),
+        )
+    }
 }

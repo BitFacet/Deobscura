@@ -104,18 +104,18 @@ class JarLoader(
             val multiRelease = jar.isMultiRelease
             jar.versionedStream().use { entries ->
                 entries.filter { entry ->
-                        !entry.isDirectory && entry.name.endsWith(CLASS_SUFFIX) && (multiRelease || !entry.name.startsWith(MULTI_RELEASE_PREFIX))
-                    }.map { entry ->
-                        LoadedClass(
-                            internalName = entry.name.removeSuffix(CLASS_SUFFIX),
-                            bytes = jar.getInputStream(entry).use { it.readAllBytes() },
-                            origin = ClassOrigin(
-                                jar = source.path,
-                                entry = entry.realName,
-                                role = source.role,
-                            ),
-                        )
-                    }.toList()
+                    !entry.isDirectory && entry.name.endsWith(CLASS_SUFFIX) && (multiRelease || !entry.name.startsWith(MULTI_RELEASE_PREFIX))
+                }.map { entry ->
+                    LoadedClass(
+                        internalName = entry.name.removeSuffix(CLASS_SUFFIX),
+                        bytes = jar.getInputStream(entry).use { it.readAllBytes() },
+                        origin = ClassOrigin(
+                            jar = source.path,
+                            entry = entry.realName,
+                            role = source.role,
+                        ),
+                    )
+                }.toList()
             }
         }
     }

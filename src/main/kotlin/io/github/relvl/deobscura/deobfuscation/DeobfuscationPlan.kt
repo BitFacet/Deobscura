@@ -183,10 +183,10 @@ data class DeobfuscationPlan(
                 val owner = classesByName[member.ownerInternalName] ?: return@all true
                 val params = methodParameterDescriptor(member.descriptor)
                 owner.methods.filterNot { it.name.startsWith("<") }.filter { methodParameterDescriptor(it.descriptor) == params }.none { other ->
-                        val otherKey = MethodOverrideKey(owner.internalName, other.name, other.descriptor)
-                        val otherFamily = methodOverrides.familyOf(otherKey) ?: otherKey
-                        otherFamily != family && (assignedFamilies[otherFamily] ?: other.name) == candidate
-                    }
+                    val otherKey = MethodOverrideKey(owner.internalName, other.name, other.descriptor)
+                    val otherFamily = methodOverrides.familyOf(otherKey) ?: otherKey
+                    otherFamily != family && (assignedFamilies[otherFamily] ?: other.name) == candidate
+                }
             }
         }
 
