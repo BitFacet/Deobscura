@@ -652,6 +652,33 @@ class SourceExpressionRendererTest {
     }
 
     @Test
+    fun `casts reconstructed local assignment when JVM carrier is wider than source type`() {
+        val initializer = ValueId(1)
+        val target = ValueId(2)
+        val intType = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT)
+        val byteType = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.BYTE)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                initializer to ExpressionValue(
+                    initializer,
+                    intType,
+                    ExpressionNode.Root(ValueOrigin.Parameter(0)),
+                ),
+                target to ExpressionValue(
+                    target,
+                    byteType,
+                    ExpressionNode.Phi(BasicBlockId(1), SsaPhiLocation.Local(0), emptyList()),
+                ),
+            ),
+            statements = emptyList(),
+        )
+
+        val renderer = SourceExpressionRenderer()
+        assertEquals("v2 = (byte) arg0", renderer.renderLocalAssignment(target, initializer, byteType, expression))
+        assertEquals("v2 = (byte) arg0", renderer.renderMaterializedLocalAssignment(target, initializer, byteType, expression))
+    }
+
+    @Test
     fun `uses materialized value when declaring copied source local`() {
         val initializer = ValueId(1)
         val target = ValueId(2)

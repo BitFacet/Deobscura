@@ -143,8 +143,8 @@ class JavaLikeSourceRenderer(
             analysis.sourceStructure.root,
             context,
             SourceValueBindings.EMPTY
-                .withSourceLocals(context.sourceLocalBindings)
-                .withBooleanSourceLocals(analysis.sourceLocals.booleanLocals),
+                .withSourceVariables(context.sourceVariableBindings)
+                .withBooleanSourceVariables(context.booleanSourceVariables),
             indent,
             out,
             tailPosition = method.allowsImplicitReturn,
@@ -213,7 +213,7 @@ class JavaLikeSourceRenderer(
 
             is StructuredRegion.If -> {
                 renderPhysicalBlock(region.header, context, bindings, indent, out, includeControl = false)
-                if (region.header in context.analysis.sourceLocals.consumedIfHeaders) return
+                if (region.header in context.analysis.sourceRewrites.consumedIfHeaders) return
                 context.conditionalAssignmentsByHeader[region.header].orEmpty().forEach { (phi, initialValue) ->
                     val target = context.analysis.expression.values.getValue(phi)
                     appendIndented(
@@ -223,7 +223,7 @@ class JavaLikeSourceRenderer(
                             target,
                             initialValue,
                             context.analysis.expression,
-                            target.id in context.analysis.sourceLocals.booleanLocals,
+                            target.id in context.analysis.sourceRewrites.booleanTargets,
                         ) + ";",
                     )
                 }
@@ -234,7 +234,7 @@ class JavaLikeSourceRenderer(
                         indent,
                         expressionRenderer(bindings).renderLocalDeclaration(
                             target,
-                            target.id in context.analysis.sourceLocals.booleanLocals,
+                            target.id in context.analysis.sourceRewrites.booleanTargets,
                         ) + ";",
                     )
                 }
@@ -364,7 +364,7 @@ class JavaLikeSourceRenderer(
                 indent,
                 expressionRenderer(bindings).renderLocalDeclaration(
                     value,
-                    value.id in context.analysis.sourceLocals.booleanLocals,
+                    value.id in context.analysis.sourceRewrites.booleanTargets,
                 ) + ";",
             )
         }
@@ -392,9 +392,18 @@ class JavaLikeSourceRenderer(
         if (diagnosticLabel) appendIndented(out, indent, "B${block.value}:")
         val contentIndent = indent + if (diagnosticLabel) 1 else 0
         val effectiveBindings = if (fallback) renderFallbackExceptionRoots(block, context, bindings, contentIndent, out) else bindings
+        context.analysis.sourceVariables.declarationsBeforeBlock[block].orEmpty().forEach { variableId ->
+            val variable = context.analysis.sourceVariables.variables.getValue(variableId)
+            val target = context.analysis.expression.values.getValue(variable.id)
+            appendIndented(
+                out,
+                contentIndent,
+                expressionRenderer(effectiveBindings).renderLocalDeclaration(target, variable.isBoolean) + ";",
+            )
+        }
         context.phisByBlock[block].orEmpty().forEach phiLoop@{ value ->
-            if (value.id in context.analysis.sourceLocals.conditionalAssignments || value.id in context.analysis.sourceLocals.twoArmAssignments || value.id in context.analysis.sourceLocals.loopAssignments || value.id in context.familyPhiValues) return@phiLoop
-            val conditional = context.analysis.sourceLocals.conditionalValues[value.id]
+            if (value.id in context.suppressedPhiDefinitions) return@phiLoop
+            val conditional = context.analysis.sourceRewrites.conditionalValues[value.id]
             val assignmentTarget = context.localAssignmentByValue[value.id]
             val rendered = when {
                 conditional != null && assignmentTarget != null -> {
@@ -406,7 +415,7 @@ class JavaLikeSourceRenderer(
                         conditional.thenValue,
                         conditional.elseValue,
                         context.analysis.expression,
-                        assignmentTarget in context.analysis.sourceLocals.booleanLocals,
+                        assignmentTarget in context.analysis.sourceRewrites.booleanTargets,
                     )
                 }
                 conditional != null -> {
@@ -424,10 +433,37 @@ class JavaLikeSourceRenderer(
             appendIndented(out, contentIndent, "$rendered;")
         }
         val events = context.eventsByBlock[block].orEmpty().filter { event -> instructionRanges.isEmpty() || instructionRanges.any { event.instructionIndex in it } }
+        var tailAssignmentsRendered = false
+        fun renderTailAssignments() {
+            if (tailAssignmentsRendered) return
+            tailAssignmentsRendered = true
+            context.familyAssignmentsByBlock[block].orEmpty().forEach { (targetId, valueId) ->
+                val target = context.analysis.expression.values.getValue(targetId)
+                appendIndented(
+                    out,
+                    contentIndent,
+                    expressionRenderer(effectiveBindings).renderMaterializedLocalAssignment(
+                        targetId,
+                        valueId,
+                        target.type,
+                        context.analysis.expression,
+                        targetId in context.analysis.sourceRewrites.booleanTargets,
+                    ) + ";",
+                )
+            }
+            context.analysis.sourceVariables.assignmentsAfterBlock[block].orEmpty().forEach { assignment ->
+                appendIndented(
+                    out,
+                    contentIndent,
+                    renderSourceVariableAssignment(assignment, context, effectiveBindings) + ";",
+                )
+            }
+        }
         events.forEachIndexed eventLoop@{ index, event ->
+            if (event is BlockEvent.Statement && event.statement.isStructuralControl()) renderTailAssignments()
             when (event) {
                 is BlockEvent.Value -> {
-                    if (event.value.id in context.analysis.sourceLocals.suppressedDefinitions || event.value.id in context.loopConditionInlineValues) return@eventLoop
+                    if (event.value.id in context.analysis.sourceRewrites.suppressedDefinitions || event.value.id in context.loopConditionInlineValues) return@eventLoop
                     if (event.value.id in context.analysis.expression.materialization.discardedResultValues) {
                         appendIndented(
                             out,
@@ -457,7 +493,7 @@ class JavaLikeSourceRenderer(
                                 target,
                                 declaration.second,
                                 context.analysis.expression,
-                                target.id in context.analysis.sourceLocals.booleanLocals,
+                                target.id in context.analysis.sourceRewrites.booleanTargets,
                             ) + ";",
                         )
                         return@eventLoop
@@ -473,7 +509,7 @@ class JavaLikeSourceRenderer(
                                 event.value.id,
                                 target.type,
                                 context.analysis.expression,
-                                assignment in context.analysis.sourceLocals.booleanLocals,
+                                assignment in context.analysis.sourceRewrites.booleanTargets,
                             ) + ";",
                         )
                         return@eventLoop
@@ -485,34 +521,48 @@ class JavaLikeSourceRenderer(
                     )
                 }
 
+                is BlockEvent.SourceVariableWrite -> {
+                    appendIndented(
+                        out,
+                        contentIndent,
+                        renderSourceVariableAssignment(event.assignment, context, effectiveBindings) + ";",
+                    )
+                }
+
                 is BlockEvent.Statement -> {
                     if (!includeControl && event.statement.isStructuralControl()) return@eventLoop
-                    if (block in context.analysis.sourceLocals.consumedIfHeaders && event.statement is ExpressionStatement.Branch) return@eventLoop
+                    if (block in context.analysis.sourceRewrites.consumedIfHeaders && event.statement is ExpressionStatement.Branch) return@eventLoop
                     if (suppressMonitor && event.statement is ExpressionStatement.Monitor) return@eventLoop
                     if (event.statement.isRedundantConstructorInvocation(context)) return@eventLoop
                     if (tailPosition && index == events.lastIndex && event.statement is ExpressionStatement.Return && event.statement.value == null) return@eventLoop
+                    if (fallback && context.analysis.sourceVariables.assignmentsOnEdge.keys.any { it.first == block }) {
+                        when (event.statement) {
+                            is ExpressionStatement.Branch -> {
+                                renderFallbackBranchWithEdgeAssignments(
+                                    event.statement, block, context, effectiveBindings, contentIndent, out,
+                                )
+                                return@eventLoop
+                            }
+
+                            is ExpressionStatement.Switch -> {
+                                renderFallbackSwitchWithEdgeAssignments(
+                                    event.statement, block, context, effectiveBindings, contentIndent, out,
+                                )
+                                return@eventLoop
+                            }
+
+                            else -> Unit
+                        }
+                    }
                     val rendered = renderStatement(event.statement, block, context, effectiveBindings)
                     appendIndented(out, contentIndent, rendered + ";")
                 }
             }
         }
-        context.familyAssignmentsByBlock[block].orEmpty().forEach { (targetId, valueId) ->
-            val target = context.analysis.expression.values.getValue(targetId)
-            appendIndented(
-                out,
-                contentIndent,
-                expressionRenderer(effectiveBindings).renderMaterializedLocalAssignment(
-                    targetId,
-                    valueId,
-                    target.type,
-                    context.analysis.expression,
-                    targetId in context.analysis.sourceLocals.booleanLocals,
-                ) + ";",
-            )
-        }
+        renderTailAssignments()
         if (fallback) {
             renderFallbackExceptionEdges(block, context, contentIndent, out)
-            renderFallbackTransfers(block, context, contentIndent, out)
+            renderFallbackTransfers(block, context, effectiveBindings, contentIndent, out)
         }
     }
 
@@ -540,6 +590,94 @@ class JavaLikeSourceRenderer(
                 val type = edge.catchType?.let(deobfuscation::sourceClassName) ?: "<any>"
                 appendIndented(out, indent, "/* exception $type -> B${edge.to.value} */")
             }
+    }
+
+    private fun renderSourceVariableAssignment(
+        assignment: SourceVariableAssignment,
+        context: RenderContext,
+        bindings: SourceValueBindings,
+    ): String {
+        val variable = context.analysis.sourceVariables.variables.getValue(assignment.variable)
+        return expressionRenderer(bindings).renderMaterializedLocalAssignment(
+            assignment.variable,
+            assignment.value,
+            variable.type,
+            context.analysis.expression,
+            variable.isBoolean,
+        )
+    }
+
+    private fun renderEdgeAssignments(
+        from: BasicBlockId,
+        to: BasicBlockId,
+        context: RenderContext,
+        bindings: SourceValueBindings,
+        indent: Int,
+        out: StringBuilder,
+    ) {
+        context.analysis.sourceVariables.assignmentsOnEdge[from to to].orEmpty().forEach { assignment ->
+            appendIndented(out, indent, renderSourceVariableAssignment(assignment, context, bindings) + ";")
+        }
+    }
+
+    private fun renderFallbackBranchWithEdgeAssignments(
+        statement: ExpressionStatement.Branch,
+        block: BasicBlockId,
+        context: RenderContext,
+        bindings: SourceValueBindings,
+        indent: Int,
+        out: StringBuilder,
+    ) {
+        val outgoing = context.outgoingByBlock[block].orEmpty().filter { it.kind != ControlFlowEdgeKind.EXCEPTION }
+        val condition = statement.condition
+        if (condition == null) {
+            outgoing.forEach { edge ->
+                renderEdgeAssignments(block, edge.to, context, bindings, indent, out)
+                appendIndented(out, indent, "goto B${edge.to.value};")
+            }
+            return
+        }
+
+        val taken = outgoing.firstOrNull { it.kind == ControlFlowEdgeKind.CONDITIONAL }?.to
+        val untaken = outgoing.firstOrNull { it.kind == ControlFlowEdgeKind.FALLTHROUGH }?.to
+            ?: outgoing.firstOrNull { it.kind == ControlFlowEdgeKind.JUMP }?.to
+        val renderedCondition = expressionRenderer(bindings).renderCondition(condition, context.analysis.expression)
+        if (taken != null) {
+            appendIndented(out, indent, "if ($renderedCondition) {")
+            renderEdgeAssignments(block, taken, context, bindings, indent + 1, out)
+            appendIndented(out, indent + 1, "goto B${taken.value};")
+            if (untaken != null) {
+                appendIndented(out, indent, "} else {")
+                renderEdgeAssignments(block, untaken, context, bindings, indent + 1, out)
+                appendIndented(out, indent + 1, "goto B${untaken.value};")
+            }
+            appendIndented(out, indent, "}")
+        } else if (untaken != null) {
+            renderEdgeAssignments(block, untaken, context, bindings, indent, out)
+            appendIndented(out, indent, "goto B${untaken.value};")
+        }
+    }
+
+    private fun renderFallbackSwitchWithEdgeAssignments(
+        statement: ExpressionStatement.Switch,
+        block: BasicBlockId,
+        context: RenderContext,
+        bindings: SourceValueBindings,
+        indent: Int,
+        out: StringBuilder,
+    ) {
+        val edges = context.outgoingByBlock[block].orEmpty().filter { it.kind == ControlFlowEdgeKind.SWITCH }
+        appendIndented(
+            out,
+            indent,
+            "switch (${expressionRenderer(bindings).renderValue(statement.selector, context.analysis.expression)}) {",
+        )
+        edges.forEach { edge ->
+            appendIndented(out, indent + 1, edge.switchValue?.let { "case $it:" } ?: "default:")
+            renderEdgeAssignments(block, edge.to, context, bindings, indent + 2, out)
+            appendIndented(out, indent + 2, "goto B${edge.to.value};")
+        }
+        appendIndented(out, indent, "}")
     }
 
     private fun renderStatement(statement: ExpressionStatement, block: BasicBlockId, context: RenderContext, bindings: SourceValueBindings): String {
@@ -576,12 +714,21 @@ class JavaLikeSourceRenderer(
         }
     }
 
-    private fun renderFallbackTransfers(block: BasicBlockId, context: RenderContext, indent: Int, out: StringBuilder) {
+    private fun renderFallbackTransfers(
+        block: BasicBlockId,
+        context: RenderContext,
+        bindings: SourceValueBindings,
+        indent: Int,
+        out: StringBuilder,
+    ) {
         val outgoing = context.outgoingByBlock[block].orEmpty()
         val terminalControl = context.eventsByBlock[block].orEmpty().lastOrNull()?.let { it as? BlockEvent.Statement }?.statement
         if (terminalControl is ExpressionStatement.Branch || terminalControl is ExpressionStatement.Switch) return
         outgoing.filter { it.kind != ControlFlowEdgeKind.EXCEPTION && it.to in context.analysis.optimization.controlFlow.blocks }
-            .forEach { edge -> appendIndented(out, indent, "goto B${edge.to.value};") }
+            .forEach { edge ->
+                renderEdgeAssignments(block, edge.to, context, bindings, indent, out)
+                appendIndented(out, indent, "goto B${edge.to.value};")
+            }
     }
 
     private fun renderArmExit(exit: StructuredArmExit, indent: Int, out: StringBuilder) {
@@ -729,52 +876,49 @@ class JavaLikeSourceRenderer(
         val loopConditionInlineValuesByHeader: Map<BasicBlockId, Set<ValueId>> = buildLoopConditionInlineValues(analysis)
         val loopConditionInlineValues: Set<ValueId> = loopConditionInlineValuesByHeader.values.flatten().toSet()
         val localDeclarationByInitializer: Map<ValueId, Pair<ValueId, ValueId>> = buildMap {
-            analysis.sourceLocals.conditionalAssignments.forEach { (phi, assignment) ->
+            analysis.sourceRewrites.conditionalAssignments.forEach { (phi, assignment) ->
                 if (assignment.declarationHeader == null) put(assignment.initialValue, phi to assignment.initialValue)
             }
-            analysis.sourceLocals.loopAssignments.forEach { (phi, assignment) ->
+            analysis.sourceRewrites.loopAssignments.forEach { (phi, assignment) ->
                 put(assignment.initialValue, phi to assignment.initialValue)
             }
-            analysis.sourceLocals.localFamilies.values.forEach { family ->
+            analysis.sourceRewrites.loopPhiFamilies.values.forEach { family ->
                 put(family.initialValue, family.target to family.initialValue)
             }
         }
         val localAssignmentByValue: Map<ValueId, ValueId> = buildMap {
-            analysis.sourceLocals.conditionalAssignments.forEach { (phi, assignment) ->
+            analysis.sourceRewrites.conditionalAssignments.forEach { (phi, assignment) ->
                 put(assignment.assignedValue, phi)
             }
-            analysis.sourceLocals.twoArmAssignments.forEach { (phi, assignment) ->
+            analysis.sourceRewrites.twoArmAssignments.forEach { (phi, assignment) ->
                 put(assignment.thenValue, phi)
                 put(assignment.elseValue, phi)
             }
-            analysis.sourceLocals.loopAssignments.forEach { (phi, assignment) ->
+            analysis.sourceRewrites.loopAssignments.forEach { (phi, assignment) ->
                 put(assignment.updatedValue, phi)
             }
         }
         val familyAssignmentsByBlock: Map<BasicBlockId, List<Pair<ValueId, ValueId>>> = buildMap<BasicBlockId, MutableList<Pair<ValueId, ValueId>>> {
-            analysis.sourceLocals.localFamilies.values.forEach { family ->
+            analysis.sourceRewrites.loopPhiFamilies.values.forEach { family ->
                 family.assignments.forEach { assignment ->
                     getOrPut(assignment.predecessor) { mutableListOf() }.add(family.target to assignment.value)
                 }
             }
         }
-        val familyPhiValues: Set<ValueId> = analysis.sourceLocals.localFamilies.values.flatMapTo(linkedSetOf()) { it.phiValues }
-        val sourceLocalBindings: Map<ValueId, ValueId> = buildMap {
-            analysis.sourceLocals.localFamilies.values.forEach { family ->
-                family.phiValues.forEach { put(it, family.target) }
-                put(family.initialValue, family.target)
-            }
-        }
+        val suppressedPhiDefinitions: Set<ValueId> = analysis.sourceRewrites.suppressedPhiDefinitions + analysis.sourceVariables.loweredPhiValues
+        val sourceVariableBindings: Map<ValueId, ValueId> =
+            analysis.sourceRewrites.sourceVariableBindings + analysis.sourceVariables.valueBindings
+        val booleanSourceVariables: Set<ValueId> = analysis.sourceRewrites.booleanTargets + analysis.sourceVariables.booleanVariables
         val hoistedValuesByRegionHeader: Map<BasicBlockId, List<ValueId>> = buildHoistedValues(
             analysis,
-            localDeclarationByInitializer.keys + localAssignmentByValue.keys + sourceLocalBindings.keys,
+            localDeclarationByInitializer.keys + localAssignmentByValue.keys + sourceVariableBindings.keys,
         )
         val hoistedValues: Set<ValueId> = hoistedValuesByRegionHeader.values.flatten().toSet()
         val conditionalAssignmentsByHeader: Map<BasicBlockId, List<Pair<ValueId, ValueId>>> =
-            analysis.sourceLocals.conditionalAssignments.entries
+            analysis.sourceRewrites.conditionalAssignments.entries
                 .mapNotNull { (phi, assignment) -> assignment.declarationHeader?.let { it to (phi to assignment.initialValue) } }
                 .groupBy({ it.first }, { it.second })
-        val twoArmAssignmentsByHeader: Map<BasicBlockId, List<ValueId>> = analysis.sourceLocals.twoArmAssignments.entries.groupBy(
+        val twoArmAssignmentsByHeader: Map<BasicBlockId, List<ValueId>> = analysis.sourceRewrites.twoArmAssignments.entries.groupBy(
             keySelector = { it.value.header },
             valueTransform = { it.key },
         )
@@ -860,7 +1004,7 @@ class JavaLikeSourceRenderer(
                 }
                 val result = linkedMapOf<BasicBlockId, MutableList<ValueId>>()
                 definitionBlock.forEach { (value, block) ->
-                    if (value in projectedValues || value in analysis.expression.materialization.inlineValues || value in analysis.sourceLocals.suppressedDefinitions) return@forEach
+                    if (value in projectedValues || value in analysis.expression.materialization.inlineValues || value in analysis.sourceRewrites.suppressedDefinitions) return@forEach
                     val uses = usesByValue[value].orEmpty()
                     if (uses.isEmpty()) return@forEach
                     val scopes = exceptionRegions.filter { block in it.tryBlocks && uses.any { use -> use !in it.tryBlocks } }
@@ -932,6 +1076,13 @@ class JavaLikeSourceRenderer(
                         val index = value.instructionIndices.last()
                         instructionToBlock[index]?.let { block -> getOrPut(block) { mutableListOf() } += BlockEvent.Value(index, value) }
                     }
+                    analysis.sourceVariables.assignmentsAtInstruction.forEach { (instructionIndex, assignments) ->
+                        instructionToBlock[instructionIndex]?.let { block ->
+                            assignments.forEach { assignment ->
+                                getOrPut(block) { mutableListOf() } += BlockEvent.SourceVariableWrite(instructionIndex, assignment)
+                            }
+                        }
+                    }
                     analysis.expression.statements.forEach { statement ->
                         instructionToBlock[statement.instructionIndex]?.let { block ->
                             getOrPut(block) { mutableListOf() } += BlockEvent.Statement(statement.instructionIndex, statement)
@@ -951,8 +1102,15 @@ class JavaLikeSourceRenderer(
             override val order = 0
         }
 
-        data class Statement(override val instructionIndex: Int, val statement: ExpressionStatement) : BlockEvent {
+        data class SourceVariableWrite(
+            override val instructionIndex: Int,
+            val assignment: io.github.relvl.deobscura.source.SourceVariableAssignment,
+        ) : BlockEvent {
             override val order = 1
+        }
+
+        data class Statement(override val instructionIndex: Int, val statement: ExpressionStatement) : BlockEvent {
+            override val order = 2
         }
     }
 

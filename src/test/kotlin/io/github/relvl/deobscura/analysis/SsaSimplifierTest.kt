@@ -51,6 +51,22 @@ class SsaSimplifierTest {
     }
 
     @Test
+    fun `rewrites local access provenance through phi aliases`() {
+        val root = root(ValueId(0), 0)
+        val phi = phi(ValueId(1), listOf(root.id, root.id))
+        val analysis = analysisOf(listOf(root, phi), listOf(phi)).copy(
+            localAccesses = listOf(SsaLocalAccess(7, 2, SsaLocalAccessKind.WRITE, phi.id)),
+        )
+
+        val result = simplifier.simplify(analysis)
+
+        assertEquals(
+            listOf(SsaLocalAccess(7, 2, SsaLocalAccessKind.WRITE, root.id)),
+            result.analysis.localAccesses,
+        )
+    }
+
+    @Test
     fun `collapses chained phi aliases to original definition`() {
         val root = root(ValueId(0), 0)
         val first = phi(ValueId(1), listOf(root.id, root.id))

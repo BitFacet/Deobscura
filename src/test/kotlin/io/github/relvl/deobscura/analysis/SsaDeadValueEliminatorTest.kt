@@ -161,6 +161,21 @@ class SsaDeadValueEliminatorTest {
     }
 
     @Test
+    fun `drops local access provenance with dead values`() {
+        val value = ValueId(0)
+        val analysis = analysis(
+            definitions = listOf(instructionValue(value, 0)),
+            operations = listOf(constantOperation(0, value, 1)),
+        ).copy(
+            localAccesses = listOf(SsaLocalAccess(0, 2, SsaLocalAccessKind.WRITE, value)),
+        )
+
+        val result = eliminator.eliminate(analysis)
+
+        assertTrue(result.analysis.localAccesses.isEmpty())
+    }
+
+    @Test
     fun `keeps inputs alive when unused result belongs to an unclassified operator`() {
         val input = ValueId(0)
         val output = ValueId(1)

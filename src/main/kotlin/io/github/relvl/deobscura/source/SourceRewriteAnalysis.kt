@@ -20,17 +20,45 @@ import io.github.relvl.deobscura.raw.RawFieldInstruction
 import io.github.relvl.deobscura.raw.RawInvokeDynamicInstruction
 import io.github.relvl.deobscura.raw.RawInvokeInstruction
 
-/** Source-only rewrites of SSA locals that are proven from already-structured control flow. */
-data class SourceLocalAnalysis(
+/** Source-only rewrites of SSA values that are proven from already-structured control flow. */
+data class SourceRewriteAnalysis(
     val conditionalValues: Map<ValueId, SourceConditionalValue> = emptyMap(),
     val conditionalAssignments: Map<ValueId, SourceConditionalAssignment> = emptyMap(),
     val twoArmAssignments: Map<ValueId, SourceTwoArmAssignment> = emptyMap(),
     val loopAssignments: Map<ValueId, SourceLoopAssignment> = emptyMap(),
-    val localFamilies: Map<ValueId, SourceLocalFamily> = emptyMap(),
-    val booleanLocals: Set<ValueId> = emptySet(),
+    val loopPhiFamilies: Map<ValueId, SourceLoopPhiFamily> = emptyMap(),
+    val booleanTargets: Set<ValueId> = emptySet(),
     val suppressedDefinitions: Set<ValueId> = emptySet(),
     val consumedIfHeaders: Set<BasicBlockId> = emptySet(),
-)
+) {
+    /** Phi values already represented by a higher-level source rewrite and unavailable to generic SSA destruction. */
+    val projectedPhiValues: Set<ValueId>
+        get() = buildSet {
+            addAll(conditionalValues.keys)
+            addAll(conditionalAssignments.keys)
+            addAll(twoArmAssignments.keys)
+            addAll(loopAssignments.keys)
+            loopPhiFamilies.values.forEach { addAll(it.phiValues) }
+        }
+
+    /** Phi definitions fully replaced by a source rewrite and therefore not emitted directly. */
+    val suppressedPhiDefinitions: Set<ValueId>
+        get() = buildSet {
+            addAll(conditionalAssignments.keys)
+            addAll(twoArmAssignments.keys)
+            addAll(loopAssignments.keys)
+            loopPhiFamilies.values.forEach { addAll(it.phiValues) }
+        }
+
+    /** SSA values whose materialized source name is owned by a rewrite-level local family. */
+    val sourceVariableBindings: Map<ValueId, ValueId>
+        get() = buildMap {
+            loopPhiFamilies.values.forEach { family ->
+                family.phiValues.forEach { put(it, family.target) }
+                put(family.initialValue, family.target)
+            }
+        }
+}
 
 data class SourceConditionalValue(
     val condition: StructuredCondition,
@@ -61,16 +89,16 @@ data class SourceLoopAssignment(
 )
 
 /** Several SSA local phis that are different versions of one source local. */
-data class SourceLocalFamily(
+data class SourceLoopPhiFamily(
     val slot: Int,
     val target: ValueId,
     val phiValues: Set<ValueId>,
     val initialValue: ValueId,
-    val assignments: Set<SourceLocalFamilyAssignment>,
+    val assignments: Set<SourceLoopPhiAssignment>,
 )
 
 /** A source-local assignment that occurs when control leaves one phi predecessor. */
-data class SourceLocalFamilyAssignment(
+data class SourceLoopPhiAssignment(
     val predecessor: BasicBlockId,
     val value: ValueId,
 )
@@ -82,14 +110,14 @@ data class SourceLocalFamilyAssignment(
  *
  * Canonical SSA/Expression IR remains untouched.
  */
-class SourceLocalAnalyzer {
+class SourceRewriteAnalyzer {
     fun analyze(
         graph: ControlFlowGraph,
         ssa: SsaAnalysis,
         expression: ExpressionAnalysis,
         structure: StructuredControlFlowAnalysis,
         controlFlow: SsaControlFlowGraph = SsaControlFlowGraph.from(graph),
-    ): SourceLocalAnalysis {
+    ): SourceRewriteAnalysis {
         val instructionToBlock = buildMap<Int, BasicBlockId> {
             graph.blocks.forEach { block ->
                 for (index in block.startInstructionIndex until block.endInstructionIndexExclusive) put(index, block.id)
@@ -114,7 +142,7 @@ class SourceLocalAnalyzer {
         val conditionalAssignments = linkedMapOf<ValueId, SourceConditionalAssignment>()
         val twoArmAssignments = linkedMapOf<ValueId, SourceTwoArmAssignment>()
         val loopAssignments = linkedMapOf<ValueId, SourceLoopAssignment>()
-        val localFamilies = linkedMapOf<ValueId, SourceLocalFamily>()
+        val loopPhiFamilies = linkedMapOf<ValueId, SourceLoopPhiFamily>()
         val suppressedDefinitions = linkedSetOf<ValueId>()
         val consumedIfHeaders = linkedSetOf<BasicBlockId>()
 
@@ -220,7 +248,7 @@ class SourceLocalAnalyzer {
                     val predecessor = boundary.input.predecessor ?: return@familyLoop
                     val normalOutgoing = controlFlow.edges.filter { it.from == predecessor && it.kind != io.github.relvl.deobscura.cfg.ControlFlowEdgeKind.EXCEPTION }
                     if (normalOutgoing.size != 1 || normalOutgoing.single().to != boundary.phiBlock) return@familyLoop
-                    SourceLocalFamilyAssignment(predecessor, boundary.input.value)
+                    SourceLoopPhiAssignment(predecessor, boundary.input.value)
                 }.toSet()
                 val initial = initialValues.single()
                 if (materializedValueBlocks[initial] == null || materializedValueBlocks[initial] in region.coveredBlocks) return@familyLoop
@@ -229,11 +257,11 @@ class SourceLocalAnalyzer {
                 val initialType = expression.values[initial]?.type ?: return@familyLoop
                 if (initialType != seed.type && initialType !is JvmValueType.Reference) return@familyLoop
 
-                localFamilies[seed.id] = SourceLocalFamily(location.slot, seed.id, phiIds, initial, assignments)
+                loopPhiFamilies[seed.id] = SourceLoopPhiFamily(location.slot, seed.id, phiIds, initial, assignments)
             }
 
             phisByBlock[region.header].orEmpty().forEach phiLoop@{ phiValue ->
-                if (localFamilies.values.any { phiValue.id in it.phiValues }) return@phiLoop
+                if (loopPhiFamilies.values.any { phiValue.id in it.phiValues }) return@phiLoop
                 if (!canDeclareSourceLocal(phiValue)) return@phiLoop
                 val phi = phiValue.node as ExpressionNode.Phi
                 if (phi.location !is SsaPhiLocation.Local) return@phiLoop
@@ -402,7 +430,7 @@ class SourceLocalAnalyzer {
         }
 
         val operationsByIndex = ssa.operations.associateBy { it.instructionIndex }
-        val booleanLocals = conditionalAssignments.filter { (phi, assignment) ->
+        val booleanTargets = conditionalAssignments.filter { (phi, assignment) ->
             isBooleanCarrierValue(assignment.initialValue, expression, conditionalValues) &&
                 isBooleanCarrierValue(assignment.assignedValue, expression, conditionalValues) &&
                 (
@@ -413,13 +441,13 @@ class SourceLocalAnalyzer {
                     )
         }.keys
 
-        return SourceLocalAnalysis(
+        return SourceRewriteAnalysis(
             conditionalValues,
             conditionalAssignments,
             twoArmAssignments,
             loopAssignments,
-            localFamilies,
-            booleanLocals,
+            loopPhiFamilies,
+            booleanTargets,
             suppressedDefinitions,
             consumedIfHeaders,
         )

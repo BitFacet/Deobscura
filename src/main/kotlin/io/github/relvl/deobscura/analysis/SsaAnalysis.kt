@@ -9,6 +9,8 @@ data class SsaAnalysis(
     val uses: Map<ValueId, List<SsaValueUse>>,
     val constants: Map<ValueId, SsaConstant> = emptyMap(),
     val eliminatedLocalInstructionCount: Int,
+    /** Source-reconstruction provenance for JVM local reads/writes eliminated from semantic SSA operations. */
+    val localAccesses: List<SsaLocalAccess> = emptyList(),
 ) {
     fun typeOf(id: ValueId): JvmValueType = requireNotNull(values[id]) { "Unknown SSA value v${id.value}." }.type
 
@@ -29,6 +31,16 @@ data class SsaAnalysis(
             phi.inputs.asSequence().map { it.value }.filter { it != phi.output }.distinct().count() <= 1
         }
 }
+
+/** JVM local-slot provenance retained after local load/store elimination. */
+data class SsaLocalAccess(
+    val instructionIndex: Int,
+    val slot: Int,
+    val kind: SsaLocalAccessKind,
+    val value: ValueId,
+)
+
+enum class SsaLocalAccessKind { READ, WRITE }
 
 sealed interface SsaValueDefinition {
     val id: ValueId

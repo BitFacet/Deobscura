@@ -96,6 +96,7 @@ class SsaDeadValueEliminator(
         val phiNodes = analysis.phiNodes.filter { it.output in liveValues }
         val uses = rebuildSsaUses(values, operations, phiNodes, "Dead-value elimination")
         val constants = analysis.constants.filterKeys { it in liveValues }
+        val localAccesses = analysis.localAccesses.filter { it.value in liveValues }
 
         return SsaDeadValueEliminationResult(
             analysis = analysis.copy(
@@ -104,6 +105,7 @@ class SsaDeadValueEliminator(
                 phiNodes = phiNodes,
                 uses = uses,
                 constants = constants,
+                localAccesses = localAccesses,
             ),
             removedOperationCount = analysis.operations.size - operations.size,
             removedValueCount = removedValueIds.size,

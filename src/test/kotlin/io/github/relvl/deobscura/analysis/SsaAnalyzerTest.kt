@@ -4,6 +4,8 @@ import io.github.relvl.deobscura.cfg.*
 import io.github.relvl.deobscura.raw.ClassImporter
 import io.github.relvl.deobscura.raw.RawCode
 import io.github.relvl.deobscura.raw.RawLocalInstruction
+import io.github.relvl.deobscura.raw.RawIncrementInstruction
+import io.github.relvl.deobscura.raw.JvmOpcode
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -33,6 +35,50 @@ class SsaAnalyzerTest {
         assertTrue(analysis.phiNodes.all { graph.block(it.blockId).predecessors.size > 1 })
         assertTrue(analysis.operations.none { it.instruction is RawLocalInstruction })
         assertTrue(analysis.eliminatedLocalInstructionCount > 0)
+        assertTrue(analysis.localAccesses.any { it.kind == SsaLocalAccessKind.READ })
+        assertTrue(analysis.localAccesses.any { it.kind == SsaLocalAccessKind.WRITE })
+        assertEquals(
+            valueFlow.operations.count { it.instruction is RawLocalInstruction },
+            analysis.localAccesses.size,
+        )
+    }
+
+    @Test
+    fun `retains read and write provenance for local increment`() {
+        val block = BasicBlockId(0)
+        val input = ValueId(0)
+        val output = ValueId(1)
+        val increment = RawIncrementInstruction(JvmOpcode("iinc"), slot = 2, amount = 3)
+        val graph = ControlFlowGraph(
+            code = RawCode(0, 3, 0, listOf(increment), emptyList(), emptyList(), emptyList()),
+            blocks = listOf(BasicBlock(block, 0, 1, emptyList(), emptyList())),
+            edges = emptyList(),
+            entryBlock = block,
+        )
+        val valueFlow = ValueFlowAnalysis(
+            values = linkedMapOf(
+                input to ValueDefinition.Root(input, FrameValueKind.INT, ValueOrigin.Parameter(0)),
+                output to ValueDefinition.Instruction(output, FrameValueKind.INT, 0),
+            ),
+            operations = listOf(ValueOperation(0, increment, listOf(input), output, localSlot = 2)),
+            blockEntryLocals = mapOf(block to listOf(null, null, input)),
+            blockEntryStacks = mapOf(block to emptyList()),
+            blockExitLocals = mapOf(block to listOf(null, null, output)),
+            blockExitStacks = mapOf(block to emptyList()),
+            mergeValueCount = 0,
+            eliminatedStackInstructionCount = 0,
+            unanalyzedBlockCount = 0,
+        )
+
+        val analysis = analyzer.analyze(graph, valueFlow)
+
+        assertEquals(
+            listOf(
+                SsaLocalAccess(0, 2, SsaLocalAccessKind.READ, input),
+                SsaLocalAccess(0, 2, SsaLocalAccessKind.WRITE, output),
+            ),
+            analysis.localAccesses,
+        )
     }
 
     @Test

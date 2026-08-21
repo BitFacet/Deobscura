@@ -16,7 +16,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-class SourceLocalAnalyzerTest {
+class SourceRewriteAnalyzerTest {
     @Test
     fun `projects unstructured boolean materialization diamond from cfg`() {
         val header = BasicBlockId(0)
@@ -95,7 +95,7 @@ class SourceLocalAnalyzerTest {
             eliminatedLocalInstructionCount = 0,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph = graph,
             ssa = ssa,
             expression = expression,
@@ -186,7 +186,7 @@ class SourceLocalAnalyzerTest {
             eliminatedLocalInstructionCount = 0,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph = graph(header.value, thenBlock.value, elseBlock.value, continuation.value),
             ssa = ssa,
             expression = expression,
@@ -255,7 +255,7 @@ class SourceLocalAnalyzerTest {
             eliminatedLocalInstructionCount = 0,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph = graph(header.value, thenBlock.value, elseBlock.value, continuation.value),
             ssa = ssa,
             expression = expression,
@@ -334,7 +334,7 @@ class SourceLocalAnalyzerTest {
             eliminatedLocalInstructionCount = 0,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph = graph(header.value, thenBlock.value, continuation.value),
             ssa = ssa,
             expression = expression,
@@ -412,7 +412,7 @@ class SourceLocalAnalyzerTest {
             eliminatedLocalInstructionCount = 0,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph = graph(header.value, thenBlock.value, continuation.value),
             ssa = ssa,
             expression = expression,
@@ -482,7 +482,7 @@ class SourceLocalAnalyzerTest {
             entryBlock = before,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph(before.value, header.value, thenBlock.value, continuation.value),
             ssa,
             expression,
@@ -554,7 +554,7 @@ class SourceLocalAnalyzerTest {
             entryBlock = before,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph(before.value, header.value, thenBlock.value, continuation.value),
             ssa,
             expression,
@@ -618,7 +618,7 @@ class SourceLocalAnalyzerTest {
             eliminatedLocalInstructionCount = 0,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph(header.value, thenBlock.value, continuation.value),
             ssa,
             expression,
@@ -714,7 +714,7 @@ class SourceLocalAnalyzerTest {
             eliminatedLocalInstructionCount = 0,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph(0, 1, 2, 3, 4, 5),
             ssa,
             expression,
@@ -795,7 +795,7 @@ class SourceLocalAnalyzerTest {
             eliminatedLocalInstructionCount = 0,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph(header.value, thenBlock.value, continuation.value),
             ssa,
             expression,
@@ -806,7 +806,7 @@ class SourceLocalAnalyzerTest {
             SourceConditionalAssignment(initialValue, assignedValue, declarationHeader = header),
             analysis.conditionalAssignments[phiValue],
         )
-        assertTrue(phiValue in analysis.booleanLocals)
+        assertTrue(phiValue in analysis.booleanTargets)
     }
 
     @Test
@@ -876,7 +876,7 @@ class SourceLocalAnalyzerTest {
             entryBlock = header,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph(header.value, foldedBlock.value, thenBlock.value, continuation.value),
             ssa,
             expression,
@@ -938,7 +938,7 @@ class SourceLocalAnalyzerTest {
             eliminatedLocalInstructionCount = 0,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph(header.value, thenBlock.value, elseBlock.value, continuation.value),
             ssa,
             expression,
@@ -1003,7 +1003,7 @@ class SourceLocalAnalyzerTest {
             eliminatedLocalInstructionCount = 0,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph(header.value, thenBlock.value, elseBlock.value, continuation.value),
             ssa,
             expression,
@@ -1060,7 +1060,7 @@ class SourceLocalAnalyzerTest {
             eliminatedLocalInstructionCount = 0,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph(header.value, thenBlock.value, continuation.value),
             ssa,
             expression,
@@ -1109,7 +1109,7 @@ class SourceLocalAnalyzerTest {
             eliminatedLocalInstructionCount = 0,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph(header.value, thenBlock.value, elseBlock.value, continuation.value), ssa, expression,
             StructuredControlFlowAnalysis(listOf(region), 1, 0),
         )
@@ -1171,7 +1171,7 @@ class SourceLocalAnalyzerTest {
             eliminatedLocalInstructionCount = 0,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph(initializerBlock.value, header.value, body.value, exit.value),
             ssa,
             expression,
@@ -1228,7 +1228,7 @@ class SourceLocalAnalyzerTest {
             eliminatedLocalInstructionCount = 0,
         )
 
-        val analysis = SourceLocalAnalyzer().analyze(
+        val analysis = SourceRewriteAnalyzer().analyze(
             graph(0, 1, 2, 3, 4, 5, 6),
             ssa,
             expression,
@@ -1248,14 +1248,14 @@ class SourceLocalAnalyzerTest {
         )
 
         assertEquals(
-            SourceLocalFamily(
+            SourceLoopPhiFamily(
                 2,
                 outerPhi,
                 setOf(outerPhi, innerPhi, joinPhi),
                 initial,
-                setOf(SourceLocalFamilyAssignment(updateBlock, update)),
+                setOf(SourceLoopPhiAssignment(updateBlock, update)),
             ),
-            analysis.localFamilies[outerPhi],
+            analysis.loopPhiFamilies[outerPhi],
         )
     }
 

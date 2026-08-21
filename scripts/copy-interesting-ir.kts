@@ -5,12 +5,20 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 val interestingFiles = listOf(
-    "package_class/ZM4cSqt3bl.java",
-    "package_class/ZM4cSqt3bl.ir",
-    "package_class/GkJmVtjv0Y.java",
-    "package_class/GkJmVtjv0Y.ir",
-    "com/sun/javafx/iio/jpeg/JPEGImageLoader.ir"
+    "org/apache/xerces/impl/xs/traversers/XSDAbstractTraverser.java",
+    "org/apache/xerces/impl/xs/traversers/XSDAbstractTraverser.ir",
+    "com/sun/javafx/geom/transform/TransformHelper.java",
+    "com/sun/javafx/geom/transform/TransformHelper.ir",
+    "org/fit/cssbox/css/HTMLNorm.java",
+    "org/fit/cssbox/css/HTMLNorm.ir",
+    "org/apache/xerces/impl/xs/traversers/XSDHandler.java",
+    "org/apache/xerces/impl/xs/traversers/XSDHandler.ir",
+    "org/fit/cssbox/layout/TableBox.java",
+    "org/fit/cssbox/layout/TableBox.ir",
+    "com/sun/media/jfxmedia/locator/Locator.java",
+    "com/sun/media/jfxmedia/locator/Locator.ir",
 )
+
 val zip = interestingFiles.size > 10
 
 fun findProjectRoot(start: Path): Path {

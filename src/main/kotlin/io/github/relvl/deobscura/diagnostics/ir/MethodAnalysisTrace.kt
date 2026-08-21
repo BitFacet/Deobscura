@@ -6,8 +6,9 @@ import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
 import io.github.relvl.deobscura.expression.ExpressionAnalysis
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
 import io.github.relvl.deobscura.raw.RawMethod
-import io.github.relvl.deobscura.source.SourceLocalAnalysis
+import io.github.relvl.deobscura.source.SourceRewriteAnalysis
 import io.github.relvl.deobscura.source.SourceStructureAnalysis
+import io.github.relvl.deobscura.source.SourceVariableAnalysis
 
 /** Method-local diagnostic state collected without mutating global technical-IR storage. */
 internal class MethodAnalysisTrace(
@@ -23,7 +24,8 @@ internal class MethodAnalysisTrace(
     var expression: ExpressionAnalysis? = null
     var structuredControlFlow: StructuredControlFlowAnalysis? = null
     var sourceStructure: SourceStructureAnalysis? = null
-    var sourceLocals: SourceLocalAnalysis? = null
+    var sourceRewrites: SourceRewriteAnalysis? = null
+    var sourceVariables: SourceVariableAnalysis? = null
     var failure: MethodAnalysisException? = null
 
     fun completeAnalysis(): MethodAnalysis? {
@@ -36,7 +38,8 @@ internal class MethodAnalysisTrace(
         val currentExpression = expression ?: return null
         val currentStructuredControlFlow = structuredControlFlow ?: return null
         val currentSourceStructure = sourceStructure ?: return null
-        val currentSourceLocals = sourceLocals ?: return null
+        val currentSourceRewrites = sourceRewrites ?: return null
+        val currentSourceVariables = sourceVariables ?: return null
         val currentNormalization = normalization ?: return null
         return MethodAnalysis(
             method = method,
@@ -48,7 +51,8 @@ internal class MethodAnalysisTrace(
             expression = currentExpression,
             structuredControlFlow = currentStructuredControlFlow,
             sourceStructure = currentSourceStructure,
-            sourceLocals = currentSourceLocals,
+            sourceRewrites = currentSourceRewrites,
+            sourceVariables = currentSourceVariables,
             normalization = currentNormalization,
         )
     }

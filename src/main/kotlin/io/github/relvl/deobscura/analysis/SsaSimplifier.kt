@@ -72,6 +72,7 @@ class SsaSimplifier {
         val operations = analysis.operations.map { operation ->
             operation.copy(inputs = operation.inputs.map(::resolve))
         }
+        val localAccesses = analysis.localAccesses.map { access -> access.copy(value = resolve(access.value)) }
         val uses = rebuildSsaUses(values, operations, phiNodes, "Simplified")
         val constants = linkedMapOf<ValueId, SsaConstant>()
         analysis.constants.forEach { (id, constant) ->
@@ -92,6 +93,7 @@ class SsaSimplifier {
                 phiNodes = phiNodes,
                 uses = uses,
                 constants = constants,
+                localAccesses = localAccesses,
             ),
             propagatedAliasCount = aliases.size,
             removedPhiCount = analysis.phiNodes.size - phiNodes.size,

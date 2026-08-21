@@ -3,6 +3,7 @@ package io.github.relvl.deobscura.source
 import io.github.relvl.deobscura.analysis.*
 import io.github.relvl.deobscura.deobfuscation.DeobfuscationPlan
 import io.github.relvl.deobscura.expression.*
+import io.github.relvl.deobscura.raw.JvmComputationalType
 import io.github.relvl.deobscura.raw.JvmReferenceType
 import io.github.relvl.deobscura.raw.JvmType
 import io.github.relvl.deobscura.raw.formatTypeName
@@ -211,7 +212,7 @@ internal class SourceExpressionRenderer(
     }
 
     private fun renderValue(id: ValueId, expression: ExpressionAnalysis, parentPrecedence: Int, mode: ValueRenderingMode = ValueRenderingMode.MATERIALIZED): String {
-        if (mode == ValueRenderingMode.MATERIALIZED) bindings.sourceLocal(id)?.let { return "v${it.value}" }
+        if (mode == ValueRenderingMode.MATERIALIZED) bindings.sourceVariable(id)?.let { return "v${it.value}" }
         val value = expression.values[id] ?: return "v${id.value}"
         if (value.node is ExpressionNode.Root) return renderNode(value.node, expression)
         if (mode == ValueRenderingMode.MATERIALIZED && !bindings.shouldInline(id, expression)) return "v${id.value}"
@@ -269,7 +270,7 @@ internal class SourceExpressionRenderer(
         val constant = (value?.node as? ExpressionNode.Constant)?.value
         if (constant?.equals(0) == true) return "false"
         if (constant?.equals(1) == true) return "true"
-        if (id in expression.materialization.booleanValues || value?.type?.isBoolean == true || bindings.isBooleanSourceLocal(id)) {
+        if (id in expression.materialization.booleanValues || value?.type?.isBoolean == true || bindings.isBooleanSourceVariable(id)) {
             return renderValue(id, expression, parentPrecedence, mode)
         }
 
@@ -447,17 +448,46 @@ internal class SourceExpressionRenderer(
     }
 
     /** Renders a value whose original SSA definition is absorbed into a reconstructed source local. */
-    private fun renderValueForType(id: ValueId, type: JvmValueType, expression: ExpressionAnalysis): String = if (type.isBoolean) {
-        renderBooleanValue(id, expression, mode = ValueRenderingMode.DEFINITION)
-    } else {
-        renderValue(id, expression, PRECEDENCE_LOWEST, ValueRenderingMode.DEFINITION)
-    }
+    private fun renderValueForType(id: ValueId, type: JvmValueType, expression: ExpressionAnalysis): String =
+        renderValueForAnalyzedType(id, type, expression, ValueRenderingMode.DEFINITION)
 
     /** Renders an already materialized SSA value when only the local assignment occurs on this edge. */
-    private fun renderMaterializedValueForType(id: ValueId, type: JvmValueType, expression: ExpressionAnalysis): String = if (type.isBoolean) {
-        renderBooleanValue(id, expression, mode = ValueRenderingMode.MATERIALIZED)
-    } else {
-        renderValue(id, expression, PRECEDENCE_LOWEST, ValueRenderingMode.MATERIALIZED)
+    private fun renderMaterializedValueForType(id: ValueId, type: JvmValueType, expression: ExpressionAnalysis): String =
+        renderValueForAnalyzedType(id, type, expression, ValueRenderingMode.MATERIALIZED)
+
+    private fun renderValueForAnalyzedType(
+        id: ValueId,
+        targetType: JvmValueType,
+        expression: ExpressionAnalysis,
+        mode: ValueRenderingMode,
+    ): String {
+        if (targetType.isBoolean) return renderBooleanValue(id, expression, mode = mode)
+
+        val needsCast = needsPrimitiveAssignmentCast(id, targetType, expression)
+        val rendered = renderValue(id, expression, if (needsCast) PRECEDENCE_UNARY else PRECEDENCE_LOWEST, mode)
+        return if (needsCast) {
+            "(${formatValueType(targetType)}) $rendered"
+        } else {
+            rendered
+        }
+    }
+
+    private fun needsPrimitiveAssignmentCast(id: ValueId, targetType: JvmValueType, expression: ExpressionAnalysis): Boolean {
+        val target = (targetType as? JvmValueType.Computational)?.type ?: return false
+        val source = (expression.values[id]?.type as? JvmValueType.Computational)?.type ?: return false
+        if (target == source || target == JvmComputationalType.BOOLEAN) return false
+        if (source == JvmComputationalType.BOOLEAN) return false // rejected by source-variable projection; keep existing rewrite behavior.
+        return !isJavaPrimitiveWidening(source, target)
+    }
+
+    private fun isJavaPrimitiveWidening(source: JvmComputationalType, target: JvmComputationalType): Boolean = when (source) {
+        JvmComputationalType.BYTE -> target in setOf(JvmComputationalType.SHORT, JvmComputationalType.INT, JvmComputationalType.LONG, JvmComputationalType.FLOAT, JvmComputationalType.DOUBLE)
+        JvmComputationalType.SHORT -> target in setOf(JvmComputationalType.INT, JvmComputationalType.LONG, JvmComputationalType.FLOAT, JvmComputationalType.DOUBLE)
+        JvmComputationalType.CHAR -> target in setOf(JvmComputationalType.INT, JvmComputationalType.LONG, JvmComputationalType.FLOAT, JvmComputationalType.DOUBLE)
+        JvmComputationalType.INT -> target in setOf(JvmComputationalType.LONG, JvmComputationalType.FLOAT, JvmComputationalType.DOUBLE)
+        JvmComputationalType.LONG -> target in setOf(JvmComputationalType.FLOAT, JvmComputationalType.DOUBLE)
+        JvmComputationalType.FLOAT -> target == JvmComputationalType.DOUBLE
+        JvmComputationalType.BOOLEAN, JvmComputationalType.DOUBLE, JvmComputationalType.REFERENCE, JvmComputationalType.VOID, JvmComputationalType.RETURN_ADDRESS -> false
     }
 
     private fun formatValueType(type: JvmValueType): String = type.formatTypeName(deobfuscation::sourceClassName, nullTypeName = "Object", unknownReferenceName = "Object")
@@ -525,30 +555,30 @@ internal class SourceExpressionRenderer(
     }
 }
 
-/** Lexical source names assigned to JVM-root values already represented by source syntax. */
+/** Source-facing names/bindings introduced by structured rewrites and SSA destruction. */
 internal data class SourceValueBindings(
     private val exceptionParameters: Map<Int, String> = emptyMap(),
-    private val sourceLocals: Map<ValueId, ValueId> = emptyMap(),
+    private val sourceVariables: Map<ValueId, ValueId> = emptyMap(),
     private val inlineValues: Set<ValueId> = emptySet(),
-    private val booleanSourceLocals: Set<ValueId> = emptySet(),
+    private val booleanSourceVariables: Set<ValueId> = emptySet(),
 ) {
     fun exceptionParameter(handlerInstructionIndex: Int): String? = exceptionParameters[handlerInstructionIndex]
 
-    fun sourceLocal(value: ValueId): ValueId? = sourceLocals[value]
+    fun sourceVariable(value: ValueId): ValueId? = sourceVariables[value]
 
-    fun isBooleanSourceLocal(value: ValueId): Boolean =
-        (sourceLocals[value] ?: value) in booleanSourceLocals
+    fun isBooleanSourceVariable(value: ValueId): Boolean =
+        (sourceVariables[value] ?: value) in booleanSourceVariables
 
     fun shouldInline(value: ValueId, expression: ExpressionAnalysis): Boolean =
         value in inlineValues || value in expression.materialization.inlineValues
 
     fun withExceptionParameter(handlerInstructionIndex: Int, name: String): SourceValueBindings = copy(exceptionParameters = exceptionParameters + (handlerInstructionIndex to name))
 
-    fun withSourceLocals(bindings: Map<ValueId, ValueId>): SourceValueBindings = copy(sourceLocals = sourceLocals + bindings)
+    fun withSourceVariables(bindings: Map<ValueId, ValueId>): SourceValueBindings = copy(sourceVariables = sourceVariables + bindings)
 
     fun withInlineValues(values: Set<ValueId>): SourceValueBindings = copy(inlineValues = inlineValues + values)
 
-    fun withBooleanSourceLocals(values: Set<ValueId>): SourceValueBindings = copy(booleanSourceLocals = booleanSourceLocals + values)
+    fun withBooleanSourceVariables(values: Set<ValueId>): SourceValueBindings = copy(booleanSourceVariables = booleanSourceVariables + values)
 
     companion object {
         val EMPTY = SourceValueBindings()

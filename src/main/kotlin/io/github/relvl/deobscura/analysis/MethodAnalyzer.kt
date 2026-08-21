@@ -10,9 +10,11 @@ import io.github.relvl.deobscura.expression.ExpressionBuilder
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizer
 import io.github.relvl.deobscura.raw.RawMethod
-import io.github.relvl.deobscura.source.SourceLocalAnalysis
-import io.github.relvl.deobscura.source.SourceLocalAnalyzer
+import io.github.relvl.deobscura.source.SourceRewriteAnalysis
+import io.github.relvl.deobscura.source.SourceRewriteAnalyzer
 import io.github.relvl.deobscura.source.SourceStructureAnalysis
+import io.github.relvl.deobscura.source.SourceVariableAnalysis
+import io.github.relvl.deobscura.source.SourceVariableAnalyzer
 import io.github.relvl.deobscura.source.SourceStructureBuilder
 
 /** Runs the complete low-level analysis pipeline for one method. */
@@ -26,7 +28,8 @@ class MethodAnalyzer(
     private val structuredControlFlowAnalyzer: StructuredControlFlowAnalyzer = StructuredControlFlowAnalyzer(),
     private val legacySubroutineNormalizer: LegacySubroutineNormalizer = LegacySubroutineNormalizer(),
     private val sourceStructureBuilder: SourceStructureBuilder = SourceStructureBuilder(),
-    private val sourceLocalAnalyzer: SourceLocalAnalyzer = SourceLocalAnalyzer(),
+    private val sourceRewriteAnalyzer: SourceRewriteAnalyzer = SourceRewriteAnalyzer(),
+    private val sourceVariableAnalyzer: SourceVariableAnalyzer = SourceVariableAnalyzer(),
 ) {
     fun analyze(ownerInternalName: String, method: RawMethod): MethodAnalysis = analyze(ownerInternalName, method, null)
 
@@ -144,14 +147,50 @@ class MethodAnalyzer(
         }
         trace?.sourceStructure = sourceStructure
 
-        val sourceLocals = sourceLocalAnalyzer.analyze(
-            graph = graph,
-            ssa = optimization.analysis,
-            expression = expression,
-            structure = structuredControlFlow,
-            controlFlow = optimization.controlFlow,
-        )
-        trace?.sourceLocals = sourceLocals
+        val sourceRewrites = try {
+            sourceRewriteAnalyzer.analyze(
+                graph = graph,
+                ssa = optimization.analysis,
+                expression = expression,
+                structure = structuredControlFlow,
+                controlFlow = optimization.controlFlow,
+            )
+        } catch (exception: Exception) {
+            throw failure(
+                trace,
+                MethodAnalysisStage.SOURCE_REWRITES,
+                normalization,
+                frames,
+                valueFlow,
+                initialSsa,
+                optimization,
+                exception,
+            )
+        }
+        trace?.sourceRewrites = sourceRewrites
+
+        val sourceVariables = try {
+            sourceVariableAnalyzer.analyze(
+                graph = graph,
+                ssa = optimization.analysis,
+                expression = expression,
+                controlFlow = optimization.controlFlow,
+                sourceStructure = sourceStructure,
+                preferredRewrites = sourceRewrites,
+            )
+        } catch (exception: Exception) {
+            throw failure(
+                trace,
+                MethodAnalysisStage.SOURCE_VARIABLES,
+                normalization,
+                frames,
+                valueFlow,
+                initialSsa,
+                optimization,
+                exception,
+            )
+        }
+        trace?.sourceVariables = sourceVariables
 
         return MethodAnalysis(
             method = normalizedMethod,
@@ -163,7 +202,8 @@ class MethodAnalyzer(
             expression = expression,
             structuredControlFlow = structuredControlFlow,
             sourceStructure = sourceStructure,
-            sourceLocals = sourceLocals,
+            sourceRewrites = sourceRewrites,
+            sourceVariables = sourceVariables,
             normalization = normalization,
         )
     }
@@ -198,7 +238,8 @@ data class MethodAnalysis(
     val expression: ExpressionAnalysis,
     val structuredControlFlow: StructuredControlFlowAnalysis,
     val sourceStructure: SourceStructureAnalysis,
-    val sourceLocals: SourceLocalAnalysis,
+    val sourceRewrites: SourceRewriteAnalysis,
+    val sourceVariables: SourceVariableAnalysis,
     val normalization: LegacySubroutineNormalizationResult,
 ) {
     val ssa: SsaAnalysis
@@ -206,7 +247,7 @@ data class MethodAnalysis(
 }
 
 enum class MethodAnalysisStage {
-    PREPARATION, FRAME, VALUE_FLOW, SSA, EXPRESSION, STRUCTURED_CONTROL_FLOW, SOURCE_STRUCTURE,
+    PREPARATION, FRAME, VALUE_FLOW, SSA, EXPRESSION, STRUCTURED_CONTROL_FLOW, SOURCE_STRUCTURE, SOURCE_REWRITES, SOURCE_VARIABLES,
 }
 
 class MethodAnalysisException(

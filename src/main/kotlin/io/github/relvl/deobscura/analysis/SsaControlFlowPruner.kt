@@ -133,6 +133,7 @@ class SsaControlFlowPruner {
 
         val uses = rebuildSsaUses(values, keptOperations, keptPhiNodes, "Pruned")
         val constants = analysis.constants.filterKeys { it in values }
+        val localAccesses = analysis.localAccesses.filter { it.value in values }
 
         return SsaControlFlowPruningResult(
             analysis = analysis.copy(
@@ -141,6 +142,7 @@ class SsaControlFlowPruner {
                 phiNodes = keptPhiNodes,
                 uses = uses,
                 constants = constants,
+                localAccesses = localAccesses,
             ),
             removedUnreachableBlockCount = controlFlow.blocks.count { it !in reachableBlocks },
             removedOperationCount = analysis.operations.size - keptOperations.size,

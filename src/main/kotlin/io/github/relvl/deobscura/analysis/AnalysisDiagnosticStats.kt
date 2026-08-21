@@ -9,6 +9,9 @@ import io.github.relvl.deobscura.expression.ExpressionAnalysis
 import io.github.relvl.deobscura.expression.ExpressionNode
 import io.github.relvl.deobscura.expression.ExpressionStatement
 import io.github.relvl.deobscura.normalize.LegacySubroutineNormalizationResult
+import io.github.relvl.deobscura.source.SourceRewriteAnalysis
+import io.github.relvl.deobscura.source.SourceVariableAnalysis
+import io.github.relvl.deobscura.source.SourceVariableOrigin
 import org.slf4j.Logger
 
 internal class AnalysisDiagnosticStats {
@@ -19,7 +22,8 @@ internal class AnalysisDiagnosticStats {
     val expression = ExpressionDiagnosticStats()
     val structuredControlFlow = StructuredControlFlowDiagnosticStats()
     val sourceStructure = SourceStructureDiagnosticStats()
-    val sourceLocals = SourceLocalDiagnosticStats()
+    val sourceRewrites = SourceRewriteDiagnosticStats()
+    val sourceVariables = SourceVariableDiagnosticStats()
     var preparationFailureCount = 0
 
     fun startMethod() {
@@ -29,7 +33,8 @@ internal class AnalysisDiagnosticStats {
         expression.methodCount++
         structuredControlFlow.methodCount++
         sourceStructure.methodCount++
-        sourceLocals.methodCount++
+        sourceRewrites.methodCount++
+        sourceVariables.methodCount++
     }
 
     fun record(methodName: String, analysis: MethodAnalysis) {
@@ -40,7 +45,8 @@ internal class AnalysisDiagnosticStats {
         expression.record(analysis.expression)
         structuredControlFlow.record(methodName, analysis.structuredControlFlow)
         sourceStructure.record(analysis.sourceStructure)
-        sourceLocals.record(analysis.sourceLocals)
+        sourceRewrites.record(analysis.sourceRewrites)
+        sourceVariables.record(methodName, analysis.sourceVariables)
     }
 
     fun recordProgress(progress: MethodAnalysisProgress) {
@@ -61,37 +67,152 @@ internal class AnalysisDiagnosticStats {
         expression.log(logger)
         structuredControlFlow.log(logger)
         sourceStructure.log(logger)
-        sourceLocals.log(logger)
+        sourceRewrites.log(logger)
+        sourceVariables.log(logger)
     }
 }
 
-internal class SourceLocalDiagnosticStats {
+internal class SourceVariableDiagnosticStats {
     var methodCount = 0
+    var failureCount = 0
+    private var analyzedMethodCount = 0
+    private var variableCount = 0L
+    private var localVariableCount = 0L
+    private var syntheticStackVariableCount = 0L
+    private var loweredPhiCount = 0L
+    private var instructionAssignmentCount = 0L
+    private var tailAssignmentCount = 0L
+    private var edgeAssignmentCount = 0L
+    private var unresolvedNormalPhiCount = 0L
+    private var exceptionalPhiCount = 0L
+    private val residualRanking = mutableListOf<SourceVariableResidualRankEntry>()
+
+    fun record(methodName: String, analysis: SourceVariableAnalysis) {
+        analyzedMethodCount++
+        variableCount += analysis.variables.size
+        localVariableCount += analysis.variables.values.count {
+            it.origin is SourceVariableOrigin.Local
+        }
+        syntheticStackVariableCount += analysis.variables.values.count {
+            it.origin is SourceVariableOrigin.SyntheticStack
+        }
+        loweredPhiCount += analysis.loweredPhiValues.size
+        instructionAssignmentCount += analysis.assignmentsAtInstruction.values.sumOf { it.size.toLong() }
+        tailAssignmentCount += analysis.assignmentsAfterBlock.values.sumOf { it.size.toLong() }
+        edgeAssignmentCount += analysis.assignmentsOnEdge.values.sumOf { it.size.toLong() }
+        unresolvedNormalPhiCount += analysis.unresolvedNormalPhiValues.size
+        exceptionalPhiCount += analysis.exceptionalPhiValues.size
+        if (analysis.unresolvedNormalPhiValues.isNotEmpty()) {
+            residualRanking += SourceVariableResidualRankEntry(
+                methodName = methodName,
+                ordinaryPhiCount = analysis.unresolvedNormalPhiValues.size,
+                exceptionalPhiCount = analysis.exceptionalPhiValues.size,
+            )
+            residualRanking.sortWith(
+                compareByDescending<SourceVariableResidualRankEntry> { it.ordinaryPhiCount }
+                    .thenByDescending { it.exceptionalPhiCount }
+                    .thenBy { it.methodName },
+            )
+            if (residualRanking.size > RESIDUAL_RANK_LIMIT) residualRanking.removeAt(residualRanking.lastIndex)
+        }
+    }
+
+    fun log(logger: Logger) {
+        logger.info(
+            "Source variable reconstruction analyzed {}/{} method(s): {} variable(s) ({} JVM-local, {} synthetic stack), lowered {} additional phi value(s) using {} exact JVM-local write assignment(s), {} conservative block-tail assignment(s), and {} explicit edge assignment(s); {} ordinary phi value(s) still require structured/source-shape placement, {} exceptional phi value(s) remain conservative.",
+            analyzedMethodCount,
+            methodCount,
+            variableCount,
+            localVariableCount,
+            syntheticStackVariableCount,
+            loweredPhiCount,
+            instructionAssignmentCount,
+            tailAssignmentCount,
+            edgeAssignmentCount,
+            unresolvedNormalPhiCount,
+            exceptionalPhiCount,
+        )
+        logResidualRanking(logger)
+        logger.info("Source-variable reconstruction completed with {} failure(s).", failureCount)
+    }
+
+    private fun logResidualRanking(logger: Logger) {
+        if (residualRanking.isEmpty()) return
+        logger.info("Top methods by unresolved ordinary phi values:")
+        residualRanking.forEachIndexed { index, entry ->
+            val location = TechnicalIrService.consumerLocations(listOf(entry.methodName)).singleOrNull()
+            logger.info(
+                "  #{}: {} ordinary / {} exceptional phi - '{}'{}",
+                index + 1,
+                entry.ordinaryPhiCount,
+                entry.exceptionalPhiCount,
+                entry.methodName,
+                location?.let { " [$it]" } ?: "",
+            )
+        }
+
+        val owners = residualRanking.asSequence()
+            .map { it.methodName.substringBeforeLast('.') }
+            .distinct()
+            .take(INTERESTING_CLASS_LIMIT)
+            .toList()
+        val paths = owners.flatMap { owner ->
+            listOfNotNull(
+                TechnicalIrService.classRelativeLocation(owner, "java"),
+                TechnicalIrService.classRelativeLocation(owner, "ir"),
+            )
+        }
+        if (paths.isNotEmpty()) {
+            val suggested = buildString {
+                appendLine("val interestingFiles = listOf(")
+                paths.forEach { appendLine("    \"$it\",") }
+                append(')')
+            }
+            logger.info("Suggested unresolved-phi files:\n{}", suggested)
+        }
+    }
+
+    private companion object {
+        const val RESIDUAL_RANK_LIMIT = 12
+        const val INTERESTING_CLASS_LIMIT = 6
+    }
+}
+
+private data class SourceVariableResidualRankEntry(
+    val methodName: String,
+    val ordinaryPhiCount: Int,
+    val exceptionalPhiCount: Int,
+)
+
+internal class SourceRewriteDiagnosticStats {
+    var methodCount = 0
+    var failureCount = 0
     private var analyzedMethodCount = 0
     private var conditionalValueCount = 0L
     private var conditionalAssignmentCount = 0L
     private var twoArmAssignmentCount = 0L
     private var loopAssignmentCount = 0L
-    private var localFamilyCount = 0L
-    private var localFamilyPhiCount = 0L
+    private var loopPhiFamilyCount = 0L
+    private var loopPhiFamilyPhiCount = 0L
     private var consumedIfCount = 0L
 
-    fun record(analysis: io.github.relvl.deobscura.source.SourceLocalAnalysis) {
+    fun record(analysis: SourceRewriteAnalysis) {
         analyzedMethodCount++
         conditionalValueCount += analysis.conditionalValues.size
         conditionalAssignmentCount += analysis.conditionalAssignments.size
         twoArmAssignmentCount += analysis.twoArmAssignments.size
         loopAssignmentCount += analysis.loopAssignments.size
-        localFamilyCount += analysis.localFamilies.size
-        localFamilyPhiCount += analysis.localFamilies.values.sumOf { it.phiValues.size.toLong() }
+        loopPhiFamilyCount += analysis.loopPhiFamilies.size
+        loopPhiFamilyPhiCount += analysis.loopPhiFamilies.values.sumOf { it.phiValues.size.toLong() }
         consumedIfCount += analysis.consumedIfHeaders.size
     }
 
     fun log(logger: Logger) {
         logger.info(
-            "Source locals analyzed {}/{} method(s): {} conditional phi value(s), {} conditional assignment phi value(s), {} two-arm assignment phi value(s), {} loop assignment phi value(s), {} source-local family(ies) covering {} phi value(s), {} materialization if(s) removed.",
-            analyzedMethodCount, methodCount, conditionalValueCount, conditionalAssignmentCount, twoArmAssignmentCount, loopAssignmentCount, localFamilyCount, localFamilyPhiCount, consumedIfCount,
+            "Source rewrites analyzed {}/{} method(s): {} conditional phi value(s), {} conditional assignment phi value(s), {} two-arm assignment phi value(s), {} loop assignment phi value(s), {} loop phi family(ies) covering {} phi value(s), {} materialization if(s) removed.",
+            analyzedMethodCount, methodCount, conditionalValueCount, conditionalAssignmentCount, twoArmAssignmentCount, loopAssignmentCount, loopPhiFamilyCount, loopPhiFamilyPhiCount, consumedIfCount,
         )
+        logger.info("Source rewrite analysis completed with {} failure(s).", failureCount)
     }
 }
 

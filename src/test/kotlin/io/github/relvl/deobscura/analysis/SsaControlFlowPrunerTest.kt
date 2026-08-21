@@ -50,6 +50,10 @@ class SsaControlFlowPrunerTest {
             uses = emptyMap(),
             constants = mapOf(left to SsaConstant.IntValue(7), right to SsaConstant.IntValue(9)),
             eliminatedLocalInstructionCount = 0,
+            localAccesses = listOf(
+                SsaLocalAccess(1, 0, SsaLocalAccessKind.WRITE, left),
+                SsaLocalAccess(2, 0, SsaLocalAccessKind.WRITE, right),
+            ),
         )
         val eliminated = graph.edges.first { it.from == BasicBlockId(0) && it.to == BasicBlockId(2) }
         val branchResult = SsaConstantBranchResult(
@@ -72,6 +76,10 @@ class SsaControlFlowPrunerTest {
         assertEquals(listOf(left), simplified.analysis.operations.single { it.instructionIndex == 3 }.inputs)
         assertEquals(SsaConstant.IntValue(7), simplified.analysis.constants[left])
         assertFalse(right in simplified.analysis.constants)
+        assertEquals(
+            listOf(SsaLocalAccess(1, 0, SsaLocalAccessKind.WRITE, left)),
+            pruning.analysis.localAccesses,
+        )
     }
 
     private fun operation(index: Int, inputs: List<ValueId>, output: ValueId) = ValueOperation(

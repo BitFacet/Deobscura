@@ -13,6 +13,11 @@ class TechnicalIrLocator(
 
     fun classLocation(ownerInternalName: String): String = classFile(ownerInternalName).toString()
 
+    fun classRelativeLocation(ownerInternalName: String, extension: String): String =
+        root.relativize(classOutputFile(root, classInternalName(ownerInternalName), extension))
+            .toString()
+            .replace('\\', '/')
+
     fun methodLocation(ownerInternalName: String, methodName: String, descriptor: String): String = "${classLocation(ownerInternalName)} :: $methodName$descriptor"
 
     fun consumerLocation(consumer: String): String? {

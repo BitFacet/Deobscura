@@ -3,6 +3,8 @@ package io.github.relvl.deobscura.analysis
 import io.github.relvl.deobscura.cfg.BasicBlockId
 import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
+import io.github.relvl.deobscura.raw.LocalOperation
+import io.github.relvl.deobscura.raw.RawIncrementInstruction
 import io.github.relvl.deobscura.raw.RawLocalInstruction
 
 class SsaAnalyzer {
@@ -79,6 +81,25 @@ class SsaAnalyzer {
             }
         }
 
+        val localAccesses = valueFlow.operations.flatMap { operation ->
+            when (val instruction = operation.instruction) {
+                is RawLocalInstruction -> listOf(
+                    SsaLocalAccess(
+                        instructionIndex = operation.instructionIndex,
+                        slot = instruction.slot,
+                        kind = if (instruction.operation == LocalOperation.LOAD) SsaLocalAccessKind.READ else SsaLocalAccessKind.WRITE,
+                        value = resolve(operation.inputs.single()),
+                    ),
+                )
+
+                is RawIncrementInstruction -> listOf(
+                    SsaLocalAccess(operation.instructionIndex, instruction.slot, SsaLocalAccessKind.READ, resolve(operation.inputs.single())),
+                    SsaLocalAccess(operation.instructionIndex, instruction.slot, SsaLocalAccessKind.WRITE, resolve(requireNotNull(operation.output))),
+                )
+
+                else -> emptyList()
+            }
+        }
         val operations = valueFlow.operations.asSequence().filterNot { it.instruction is RawLocalInstruction }.map { operation ->
             operation.copy(inputs = operation.inputs.map(::resolve))
         }.toList()
@@ -96,6 +117,7 @@ class SsaAnalyzer {
             operations = operations,
             phiNodes = phiNodes,
             uses = uses,
+            localAccesses = localAccesses,
             eliminatedLocalInstructionCount = eliminatedLocalInstructionCount,
         )
     }

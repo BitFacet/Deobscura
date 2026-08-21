@@ -75,6 +75,8 @@ class TechnicalIrServiceTest {
         )
         assertTrue(locator.classFile("odd/CON").endsWith(Path.of("odd", "%43ON.ir")))
         assertTrue(locator.classFile("odd/a:b").endsWith(Path.of("odd", "a%3Ab.ir")))
+        assertEquals("odd/%43ON.java", locator.classRelativeLocation("odd/CON", "java"))
+        assertEquals("odd/a%3Ab.ir", locator.classRelativeLocation("odd/a:b", "ir"))
     }
 
     @Test
@@ -94,6 +96,7 @@ class TechnicalIrServiceTest {
         TechnicalIrService.setDeobfuscation(DeobfuscationPlan.build(listOf(rawClass), enabled = true))
 
         assertTrue(requireNotNull(TechnicalIrService.locator).classFile("class/Sample").endsWith(Path.of("package_class", "Sample.ir")))
+        assertEquals("package_class/Sample.java", TechnicalIrService.classRelativeLocation("class/Sample", "java"))
     }
 
 }

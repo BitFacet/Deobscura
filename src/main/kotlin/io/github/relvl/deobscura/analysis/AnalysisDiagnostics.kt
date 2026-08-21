@@ -247,6 +247,16 @@ class AnalysisDiagnostics(
                 stats.sourceStructure.failureCount++
                 logger.warn("Failed source-structure projection for '{}': {}.{}", methodName, cause.message, ir)
             }
+
+            MethodAnalysisStage.SOURCE_REWRITES -> {
+                stats.sourceRewrites.failureCount++
+                logger.warn("Failed source-level rewrite analysis for '{}': {}.{}", methodName, cause.message, ir)
+            }
+
+            MethodAnalysisStage.SOURCE_VARIABLES -> {
+                stats.sourceVariables.failureCount++
+                logger.warn("Failed source-variable reconstruction for '{}': {}.{}", methodName, cause.message, ir)
+            }
         }
     }
 }

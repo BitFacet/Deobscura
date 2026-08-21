@@ -3,6 +3,9 @@ package io.github.relvl.deobscura.diagnostics.ir
 import io.github.relvl.deobscura.analysis.*
 import io.github.relvl.deobscura.cfg.ControlFlowEdge
 import io.github.relvl.deobscura.raw.*
+import io.github.relvl.deobscura.source.SourceVariableAssignment
+import io.github.relvl.deobscura.source.SourceVariableAssignmentSite
+import io.github.relvl.deobscura.source.SourceVariableOrigin
 
 /** Human-readable, deterministic dump of the current technical IR. */
 class TechnicalIrRenderer(
@@ -97,6 +100,52 @@ class TechnicalIrRenderer(
 
         appendLine("  source-structure:")
         append(sourceStructureRenderer.render(analysis.sourceStructure))
+        appendLine()
+
+        appendLine("  source-variables:")
+        if (analysis.sourceVariables.variables.isEmpty()) {
+            appendLine("    <none>")
+        } else {
+            analysis.sourceVariables.variables.values.sortedBy { it.id.value }.forEach { variable ->
+                val origin = when (val value = variable.origin) {
+                    is SourceVariableOrigin.Local -> "local[${value.slot}]"
+                    is SourceVariableOrigin.SyntheticStack -> "stack[${value.index}]"
+                }
+                appendLine(
+                    "    v${variable.id.value}:${formatValueType(variable.type)} <- $origin " +
+                        "phis=${variable.phiValues.sortedBy { it.value }.joinToString(prefix = "[", postfix = "]") { "v${it.value}" }} " +
+                        "declare=B${variable.declarationBlock.value}${if (variable.isBoolean) " boolean" else ""}",
+                )
+            }
+            analysis.sourceVariables.assignments.sortedWith(
+                compareBy<SourceVariableAssignment> { assignment ->
+                    when (val site = assignment.site) {
+                        is SourceVariableAssignmentSite.Instruction -> site.instructionIndex
+                        is SourceVariableAssignmentSite.BlockExit -> Int.MAX_VALUE - 1
+                        is SourceVariableAssignmentSite.Edge -> Int.MAX_VALUE
+                    }
+                }.thenBy { it.variable.value }.thenBy { it.value.value },
+            ).forEach { assignment ->
+                val site = when (val value = assignment.site) {
+                    is SourceVariableAssignmentSite.Instruction -> "@${value.instructionIndex}"
+                    is SourceVariableAssignmentSite.BlockExit -> "B${value.block.value}:exit"
+                    is SourceVariableAssignmentSite.Edge -> "B${value.from.value}->B${value.to.value}"
+                }
+                appendLine("      $site: v${assignment.variable.value} <- v${assignment.value.value} -> B${assignment.phiBlock.value}")
+            }
+        }
+        if (analysis.sourceVariables.unresolvedNormalPhiValues.isNotEmpty()) {
+            appendLine(
+                "    unresolved-normal-phi: " + analysis.sourceVariables.unresolvedNormalPhiValues.sortedBy { it.value }
+                    .joinToString { "v${it.value}" },
+            )
+        }
+        if (analysis.sourceVariables.exceptionalPhiValues.isNotEmpty()) {
+            appendLine(
+                "    exceptional-phi: " + analysis.sourceVariables.exceptionalPhiValues.sortedBy { it.value }
+                    .joinToString { "v${it.value}" },
+            )
+        }
         appendLine()
 
         appendLine("  roots:")

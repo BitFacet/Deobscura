@@ -56,6 +56,9 @@ object TechnicalIrService {
 
     fun methodHint(ownerInternalName: String, methodName: String, descriptor: String): String = locator?.let { " Technical IR: ${it.methodLocation(ownerInternalName, methodName, descriptor)}." } ?: ""
 
+    fun classRelativeLocation(ownerInternalName: String, extension: String): String? =
+        locator?.classRelativeLocation(ownerInternalName, extension)
+
     fun consumerLocations(consumers: Iterable<String>): List<String> {
         val currentLocator = locator ?: return emptyList()
         return consumers.mapNotNull(currentLocator::consumerLocation).distinct()
@@ -133,7 +136,7 @@ object TechnicalIrService {
         )
     }
 
-    const val FORMAT_VERSION = 13
+    const val FORMAT_VERSION = 15
     const val MANIFEST_FILE = "_manifest.txt"
     private const val PROGRESS_INTERVAL_NANOS = 5_000_000_000L
 }

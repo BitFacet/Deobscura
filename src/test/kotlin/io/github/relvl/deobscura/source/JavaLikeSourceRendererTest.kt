@@ -548,6 +548,151 @@ class JavaLikeSourceRendererTest {
         assertTrue(assignmentIndex > matchesIndex, rendered)
     }
 
+    @Test
+    fun `generic source variable lowering keeps multi-use phi inputs at their JVM store positions`() {
+        val elseLabel = RawLabelId(0)
+        val joinLabel = RawLabelId(1)
+        val method = RawMethod(
+            name = "choose",
+            descriptor = "(Z)Ljava/lang/Object;",
+            type = JvmMethodDescriptor.parse("(Z)Ljava/lang/Object;"),
+            accessFlags = ACC_PUBLIC or ACC_STATIC,
+            exceptions = emptyList(),
+            code = RawCode(
+                maxStack = 1,
+                maxLocals = 2,
+                bytecodeLength = 13,
+                instructions = listOf(
+                    RawLocalInstruction(JvmOpcode("iload"), LocalOperation.LOAD, JvmComputationalType.INT, 0),
+                    RawBranchInstruction(JvmOpcode("ifeq"), elseLabel),
+                    RawInvokeInstruction(
+                        JvmOpcode("invokestatic"), "example/Factory", "a", "()Ljava/lang/Object;",
+                        JvmMethodDescriptor.parse("()Ljava/lang/Object;"), false,
+                    ),
+                    RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 1),
+                    RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 1),
+                    RawInvokeInstruction(
+                        JvmOpcode("invokestatic"), "example/Factory", "consume", "(Ljava/lang/Object;)V",
+                        JvmMethodDescriptor.parse("(Ljava/lang/Object;)V"), false,
+                    ),
+                    RawBranchInstruction(JvmOpcode("goto"), joinLabel),
+                    RawInvokeInstruction(
+                        JvmOpcode("invokestatic"), "example/Factory", "b", "()Ljava/lang/Object;",
+                        JvmMethodDescriptor.parse("()Ljava/lang/Object;"), false,
+                    ),
+                    RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 1),
+                    RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 1),
+                    RawInvokeInstruction(
+                        JvmOpcode("invokestatic"), "example/Factory", "consume", "(Ljava/lang/Object;)V",
+                        JvmMethodDescriptor.parse("(Ljava/lang/Object;)V"), false,
+                    ),
+                    RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 1),
+                    RawReturnInstruction(JvmOpcode("areturn"), JvmComputationalType.REFERENCE),
+                ),
+                labels = listOf(
+                    RawLabel(elseLabel, 7, 7),
+                    RawLabel(joinLabel, 11, 11),
+                ),
+                exceptionHandlers = emptyList(),
+                lineNumbers = emptyList(),
+            ),
+        )
+        val rawClass = sampleClass(listOf(method))
+        val analysis = MethodAnalyzer().analyze(rawClass.internalName, method)
+        val variable = analysis.sourceVariables.variables.values.single()
+        val rendered = JavaLikeSourceRenderer().renderClass(
+            rawClass,
+            mapOf(SourceMethodKey(method.name, method.descriptor) to analysis),
+        )
+
+        assertTrue(analysis.sourceVariables.unresolvedNormalPhiValues.isEmpty(), analysis.sourceVariables.toString())
+        assertTrue(analysis.sourceVariables.assignmentsAtInstruction.keys.containsAll(listOf(3, 8)))
+        assertContains(rendered, "java.lang.Object v${variable.id.value};")
+        assertContains(rendered, "return v${variable.id.value};")
+        assertFalse(rendered.contains("/* phi */"), rendered)
+
+        val firstFactory = rendered.indexOf("example.Factory.a()")
+        val firstAssignment = rendered.indexOf("v${variable.id.value} =", firstFactory)
+        val firstConsume = rendered.indexOf("example.Factory.consume", firstFactory)
+        assertTrue(firstFactory >= 0 && firstFactory < firstAssignment && firstAssignment < firstConsume, rendered)
+    }
+
+    @Test
+    fun `renders source variable edge copy only inside matching fallback branch`() {
+        val joinLabel = RawLabelId(0)
+        val method = RawMethod(
+            name = "chooseEdge",
+            descriptor = "(Ljava/lang/Object;)Ljava/lang/Object;",
+            type = JvmMethodDescriptor.parse("(Ljava/lang/Object;)Ljava/lang/Object;"),
+            accessFlags = ACC_PUBLIC or ACC_STATIC,
+            exceptions = emptyList(),
+            code = RawCode(
+                maxStack = 2,
+                maxLocals = 1,
+                bytecodeLength = 6,
+                instructions = listOf(
+                    RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 0),
+                    RawStackInstruction(JvmOpcode("dup")),
+                    RawBranchInstruction(JvmOpcode("ifnonnull"), joinLabel),
+                    RawStackInstruction(JvmOpcode("pop")),
+                    RawConstantInstruction(JvmOpcode("aconst_null"), JvmComputationalType.REFERENCE, ConstantDescs.NULL),
+                    RawReturnInstruction(JvmOpcode("areturn"), JvmComputationalType.REFERENCE),
+                ),
+                labels = listOf(RawLabel(joinLabel, 5, 5)),
+                exceptionHandlers = emptyList(),
+                lineNumbers = emptyList(),
+            ),
+        )
+        val rawClass = sampleClass(listOf(method))
+        val analyzed = MethodAnalyzer().analyze(rawClass.internalName, method)
+        val fallbackStructure = SourceStructureAnalysis(
+            root = SourceBlock(
+                ownedBlocks = analyzed.optimization.controlFlow.blocks,
+                nodes = analyzed.graph.blocks
+                    .filter { it.id in analyzed.optimization.controlFlow.blocks }
+                    .map { block ->
+                        SourceNode.ProjectionFallback(
+                            block.id,
+                            SourceProjectionIssueReason.UNACCOUNTED_REACHABLE_BLOCK,
+                            SourceProvenance(setOf(block.id)),
+                        )
+                    },
+            ),
+            accountedBlocks = analyzed.optimization.controlFlow.blocks,
+            consumptions = emptyList(),
+        )
+        val rewrites = SourceRewriteAnalysis()
+        val sourceVariables = SourceVariableAnalyzer().analyze(
+            graph = analyzed.graph,
+            ssa = analyzed.ssa,
+            expression = analyzed.expression,
+            controlFlow = analyzed.optimization.controlFlow,
+            sourceStructure = fallbackStructure,
+            preferredRewrites = rewrites,
+        )
+        val edgeAssignment = sourceVariables.assignments.single { it.site is SourceVariableAssignmentSite.Edge }
+        val edgeSite = edgeAssignment.site as SourceVariableAssignmentSite.Edge
+        val analysis = analyzed.copy(
+            sourceStructure = fallbackStructure,
+            sourceRewrites = rewrites,
+            sourceVariables = sourceVariables,
+        )
+
+        val rendered = JavaLikeSourceRenderer().renderClass(
+            rawClass,
+            mapOf(SourceMethodKey(method.name, method.descriptor) to analysis),
+        )
+
+        assertTrue(sourceVariables.unresolvedNormalPhiValues.isEmpty(), sourceVariables.toString())
+        assertFalse(rendered.contains("/* phi */"), rendered)
+        assertContains(rendered, "v${edgeAssignment.variable.value} = arg0;")
+        val branchWithCopy = Regex(
+            """if \([^)]*\) \{\s*v${edgeAssignment.variable.value} = arg0;\s*goto B${edgeSite.to.value};\s*}""",
+            RegexOption.DOT_MATCHES_ALL,
+        )
+        assertTrue(branchWithCopy.containsMatchIn(rendered), rendered)
+    }
+
     private fun constructor(
         descriptor: String,
         maxLocals: Int,
