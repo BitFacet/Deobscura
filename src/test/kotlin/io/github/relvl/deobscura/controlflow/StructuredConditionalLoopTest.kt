@@ -187,6 +187,85 @@ class StructuredConditionalLoopTest {
         assertEquals(b1, region.continuation)
     }
 
+    // Pseudocode: if (cond) return LEFT; else return RIGHT
+    @Test
+    fun `keeps original condition polarity when terminal arms are equally local`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val edges = listOf(
+            edge(b0, b1, ControlFlowEdgeKind.CONDITIONAL),
+            edge(b0, b2, ControlFlowEdgeKind.FALLTHROUGH),
+        )
+        val condition = ValueId(0)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                condition to ExpressionValue(
+                    condition,
+                    JvmValueType.of(JvmComputationalType.BOOLEAN),
+                    ExpressionNode.Root(ValueOrigin.Parameter(0)),
+                ),
+            ),
+            statements = listOf(
+                branch(0),
+                ExpressionStatement.Return(1, null),
+                ExpressionStatement.Return(2, null),
+            ),
+        )
+        val result = analyzer.analyze(
+            graph(blocks(3), edges),
+            SsaControlFlowGraph(setOf(b0, b1, b2), edges, b0),
+            expression,
+        )
+
+        val region = assertIs<StructuredRegion.If>(result.regions.single())
+        assertEquals(ComparisonOperator.NE, assertIs<StructuredCondition.Atomic>(region.condition).condition.operator)
+        assertEquals(setOf(b1), region.thenBlocks)
+        assertEquals(b2, region.continuation)
+    }
+
+    // Pseudocode: if (!cond) return FALLBACK; LONG_PATH; return RESULT
+    @Test
+    fun `prefers the smaller terminal arm when both branches terminate`() {
+        val b0 = BasicBlockId(0)
+        val b1 = BasicBlockId(1)
+        val b2 = BasicBlockId(2)
+        val b3 = BasicBlockId(3)
+        val edges = listOf(
+            edge(b0, b1, ControlFlowEdgeKind.CONDITIONAL),
+            edge(b0, b2, ControlFlowEdgeKind.FALLTHROUGH),
+            edge(b1, b3, ControlFlowEdgeKind.JUMP),
+        )
+        val condition = ValueId(0)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                condition to ExpressionValue(
+                    condition,
+                    JvmValueType.of(JvmComputationalType.BOOLEAN),
+                    ExpressionNode.Root(ValueOrigin.Parameter(0)),
+                ),
+            ),
+            statements = listOf(
+                branch(0),
+                ExpressionStatement.Return(2, null),
+                ExpressionStatement.Return(3, null),
+            ),
+        )
+        val result = analyzer.analyze(
+            graph(blocks(4), edges),
+            SsaControlFlowGraph(setOf(b0, b1, b2, b3), edges, b0),
+            expression,
+        )
+
+        val region = assertIs<StructuredRegion.If>(result.regions.single())
+        assertEquals(ComparisonOperator.EQ, assertIs<StructuredCondition.Atomic>(region.condition).condition.operator)
+        assertEquals(setOf(b2), region.thenBlocks)
+        assertEquals(StructuredArmExitKind.RETURN_OR_THROW, region.thenExit?.kind)
+        assertEquals(b1, region.continuation)
+        assertEquals(1, result.terminalIfRegionCount)
+        assertEquals(0, result.unstructuredConditionalCount)
+    }
+
     // Pseudocode: while (...) { if (cond) continue; BODY }
     @Test
     fun `recognizes continue arm inside natural loop`() {

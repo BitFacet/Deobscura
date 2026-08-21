@@ -483,19 +483,7 @@ internal class StructuredConditionalRecognizer {
             blocks = blocks,
             outgoing = outgoing,
             explicitTerminalBlocks = explicitTerminalBlocks,
-        )
-        if (conditionalArm is ArmCollection.Success && singleEntryArm(conditionalArm.blocks, header, predecessors, ignoredPredecessors)) {
-            return StructuredRegion.If(
-                header = header,
-                condition = condition,
-                thenEntry = conditionalTarget,
-                thenBlocks = conditionalArm.blocks,
-                elseEntry = null,
-                elseBlocks = emptySet(),
-                continuation = fallthroughTarget,
-                thenExit = StructuredArmExit(StructuredArmExitKind.RETURN_OR_THROW),
-            )
-        }
+        ).takeIf { it is ArmCollection.Success && singleEntryArm(it.blocks, header, predecessors, ignoredPredecessors) } as? ArmCollection.Success
 
         val fallthroughArm = collectTerminalArm(
             start = fallthroughTarget,
@@ -504,20 +492,45 @@ internal class StructuredConditionalRecognizer {
             blocks = blocks,
             outgoing = outgoing,
             explicitTerminalBlocks = explicitTerminalBlocks,
-        )
-        if (fallthroughArm is ArmCollection.Success && singleEntryArm(fallthroughArm.blocks, header, predecessors, ignoredPredecessors)) {
-            return StructuredRegion.If(
+        ).takeIf { it is ArmCollection.Success && singleEntryArm(it.blocks, header, predecessors, ignoredPredecessors) } as? ArmCollection.Success
+
+        if (conditionalArm == null && fallthroughArm == null) return null
+
+        // When both successors terminate, keep the smaller/local terminal path inside the `if` and
+        // let the larger path remain linear source continuation. This avoids source shapes such as
+        // `if (!guard) { ...whole method... } return fallback` that depend on bytecode branch layout.
+        val useFallthroughArm = when {
+            conditionalArm == null -> true
+            fallthroughArm == null -> false
+            fallthroughTarget in explicitTerminalBlocks && conditionalTarget !in explicitTerminalBlocks -> true
+            conditionalTarget in explicitTerminalBlocks && fallthroughTarget !in explicitTerminalBlocks -> false
+            fallthroughArm.blocks.size < conditionalArm.blocks.size -> true
+            else -> false // Equivalent choices keep the original condition polarity.
+        }
+
+        return if (useFallthroughArm) {
+            StructuredRegion.If(
                 header = header,
                 condition = condition.negated(),
                 thenEntry = fallthroughTarget,
-                thenBlocks = fallthroughArm.blocks,
+                thenBlocks = requireNotNull(fallthroughArm).blocks,
                 elseEntry = null,
                 elseBlocks = emptySet(),
                 continuation = conditionalTarget,
                 thenExit = StructuredArmExit(StructuredArmExitKind.RETURN_OR_THROW),
             )
+        } else {
+            StructuredRegion.If(
+                header = header,
+                condition = condition,
+                thenEntry = conditionalTarget,
+                thenBlocks = requireNotNull(conditionalArm).blocks,
+                elseEntry = null,
+                elseBlocks = emptySet(),
+                continuation = fallthroughTarget,
+                thenExit = StructuredArmExit(StructuredArmExitKind.RETURN_OR_THROW),
+            )
         }
-        return null
     }
 
     private fun collectTerminalArm(
