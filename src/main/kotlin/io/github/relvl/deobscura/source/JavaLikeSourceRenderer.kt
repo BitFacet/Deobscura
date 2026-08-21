@@ -431,6 +431,19 @@ class JavaLikeSourceRenderer(
                 }
             }
         }
+        context.familyAssignmentsByBlock[block].orEmpty().forEach { (targetId, valueId) ->
+            val target = context.analysis.expression.values.getValue(targetId)
+            appendIndented(
+                out,
+                contentIndent,
+                expressionRenderer(bindings).renderMaterializedLocalAssignment(
+                    targetId,
+                    valueId,
+                    target.type,
+                    context.analysis.expression,
+                ) + ";",
+            )
+        }
         if (fallback) renderFallbackTransfers(block, context, indent + 1, out)
     }
 
@@ -619,8 +632,12 @@ class JavaLikeSourceRenderer(
             analysis.sourceLocals.loopAssignments.forEach { (phi, assignment) ->
                 put(assignment.updatedValue, phi)
             }
+        }
+        val familyAssignmentsByBlock: Map<BasicBlockId, List<Pair<ValueId, ValueId>>> = buildMap<BasicBlockId, MutableList<Pair<ValueId, ValueId>>> {
             analysis.sourceLocals.localFamilies.values.forEach { family ->
-                family.assignedValues.forEach { put(it, family.target) }
+                family.assignments.forEach { assignment ->
+                    getOrPut(assignment.predecessor) { mutableListOf() }.add(family.target to assignment.value)
+                }
             }
         }
         val familyPhiValues: Set<ValueId> = analysis.sourceLocals.localFamilies.values.flatMapTo(linkedSetOf()) { it.phiValues }
@@ -628,7 +645,6 @@ class JavaLikeSourceRenderer(
             analysis.sourceLocals.localFamilies.values.forEach { family ->
                 family.phiValues.forEach { put(it, family.target) }
                 put(family.initialValue, family.target)
-                family.assignedValues.forEach { put(it, family.target) }
             }
         }
         val hoistedValuesByRegionHeader: Map<BasicBlockId, List<ValueId>> = buildHoistedValues(

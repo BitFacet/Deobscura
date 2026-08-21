@@ -3,9 +3,11 @@ package io.github.relvl.deobscura.source
 import io.github.relvl.deobscura.analysis.MethodAnalyzer
 import io.github.relvl.deobscura.raw.*
 import io.github.relvl.deobscura.resolution.MethodOverrideAnalyzer
+import java.lang.constant.ConstantDescs
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class JavaLikeSourceRendererTest {
     @Test
@@ -338,6 +340,77 @@ class JavaLikeSourceRendererTest {
 
         assertContains(rendered, "= example.Factory.check();")
         assertFalse(rendered.contains("while (example.Factory.check())"))
+    }
+
+    @Test
+    fun `renders loop local assignment on phi predecessor instead of value definition`() {
+        val outerLoop = RawLabelId(0)
+        val innerLoop = RawLabelId(1)
+        val join = RawLabelId(2)
+        val exit = RawLabelId(3)
+        val method = RawMethod(
+            name = "find",
+            descriptor = "(Ljava/util/Iterator;)Ljava/lang/Object;",
+            type = JvmMethodDescriptor.parse("(Ljava/util/Iterator;)Ljava/lang/Object;"),
+            accessFlags = ACC_PUBLIC or ACC_STATIC,
+            exceptions = emptyList(),
+            code = RawCode(
+                maxStack = 2,
+                maxLocals = 5,
+                bytecodeLength = 25,
+                instructions = listOf(
+                    RawConstantInstruction(JvmOpcode("aconst_null"), JvmComputationalType.REFERENCE, ConstantDescs.NULL),
+                    RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 1),
+                    RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 0),
+                    RawInvokeInstruction(JvmOpcode("invokeinterface"), "java/util/Iterator", "hasNext", "()Z", JvmMethodDescriptor.parse("()Z"), true),
+                    RawBranchInstruction(JvmOpcode("ifeq"), exit),
+                    RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 0),
+                    RawInvokeInstruction(JvmOpcode("invokeinterface"), "java/util/Iterator", "next", "()Ljava/lang/Object;", JvmMethodDescriptor.parse("()Ljava/lang/Object;"), true),
+                    RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 2),
+                    RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+                    RawInvokeInstruction(JvmOpcode("invokestatic"), "example/Factory", "children", "(Ljava/lang/Object;)Ljava/util/Iterator;", JvmMethodDescriptor.parse("(Ljava/lang/Object;)Ljava/util/Iterator;"), false),
+                    RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 3),
+                    RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 3),
+                    RawInvokeInstruction(JvmOpcode("invokeinterface"), "java/util/Iterator", "hasNext", "()Z", JvmMethodDescriptor.parse("()Z"), true),
+                    RawBranchInstruction(JvmOpcode("ifeq"), outerLoop),
+                    RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 3),
+                    RawInvokeInstruction(JvmOpcode("invokeinterface"), "java/util/Iterator", "next", "()Ljava/lang/Object;", JvmMethodDescriptor.parse("()Ljava/lang/Object;"), true),
+                    RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 4),
+                    RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 4),
+                    RawInvokeInstruction(JvmOpcode("invokestatic"), "example/Factory", "matches", "(Ljava/lang/Object;)Z", JvmMethodDescriptor.parse("(Ljava/lang/Object;)Z"), false),
+                    RawBranchInstruction(JvmOpcode("ifeq"), join),
+                    RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 2),
+                    RawLocalInstruction(JvmOpcode("astore"), LocalOperation.STORE, JvmComputationalType.REFERENCE, 1),
+                    RawBranchInstruction(JvmOpcode("goto"), innerLoop),
+                    RawLocalInstruction(JvmOpcode("aload"), LocalOperation.LOAD, JvmComputationalType.REFERENCE, 1),
+                    RawReturnInstruction(JvmOpcode("areturn"), JvmComputationalType.REFERENCE),
+                ),
+                labels = listOf(
+                    RawLabel(outerLoop, 2, 2),
+                    RawLabel(innerLoop, 11, 11),
+                    RawLabel(join, 22, 22),
+                    RawLabel(exit, 23, 23),
+                ),
+                exceptionHandlers = emptyList(),
+                lineNumbers = emptyList(),
+            ),
+        )
+        val rawClass = sampleClass(listOf(method))
+        val analysis = MethodAnalyzer().analyze(rawClass.internalName, method)
+        val rendered = JavaLikeSourceRenderer().renderClass(
+            rawClass,
+            mapOf(SourceMethodKey(method.name, method.descriptor) to analysis),
+        )
+
+        assertContains(rendered, "example.Factory.matches")
+        val conditionalAssignment = Regex(
+            """if \([^)]*\) \{\s*v\d+ = v\d+;\s*}""",
+            RegexOption.DOT_MATCHES_ALL,
+        )
+        assertTrue(conditionalAssignment.containsMatchIn(rendered), rendered)
+        val matchesIndex = rendered.indexOf("example.Factory.matches")
+        val assignmentIndex = conditionalAssignment.find(rendered)!!.range.first
+        assertTrue(assignmentIndex > matchesIndex, rendered)
     }
 
     private fun constructor(

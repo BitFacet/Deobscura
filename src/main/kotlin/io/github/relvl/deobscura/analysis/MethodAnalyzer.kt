@@ -149,6 +149,7 @@ class MethodAnalyzer(
             ssa = optimization.analysis,
             expression = expression,
             structure = structuredControlFlow,
+            controlFlow = optimization.controlFlow,
         )
         trace?.sourceLocals = sourceLocals
 

@@ -258,6 +258,42 @@ class ExpressionBuilderTest {
         assertTrue(one in result.materialization.inlineValues)
     }
 
+    @Test
+    fun `lifts ifnull into null comparison`() {
+        assertNullBranch("ifnull", ComparisonOperator.EQ)
+    }
+
+    @Test
+    fun `lifts ifnonnull into null comparison`() {
+        assertNullBranch("ifnonnull", ComparisonOperator.NE)
+    }
+
+    private fun assertNullBranch(mnemonic: String, expectedOperator: ComparisonOperator) {
+        val value = ValueId(0)
+        val values = linkedMapOf<ValueId, SsaValueDefinition>(
+            value to SsaValueDefinition.Root(
+                value,
+                JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType("java/lang/Object"))),
+                ValueOrigin.Parameter(0),
+            ),
+        )
+        val operations = listOf(
+            ValueOperation(
+                0,
+                RawBranchInstruction(JvmOpcode(mnemonic), RawLabelId(0)),
+                listOf(value),
+            ),
+        )
+
+        val result = builder.build(ssa(values, operations))
+
+        val branch = assertIs<ExpressionStatement.Branch>(result.statements.single())
+        val condition = assertNotNull(branch.condition)
+        assertEquals(expectedOperator, condition.operator)
+        assertEquals(value, condition.left)
+        assertEquals(BranchOperand.Null, condition.right)
+    }
+
     private fun ssa(
         values: Map<ValueId, SsaValueDefinition>,
         operations: List<ValueOperation>,

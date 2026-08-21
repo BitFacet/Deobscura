@@ -56,7 +56,13 @@ data class SourceLocalFamily(
     val target: ValueId,
     val phiValues: Set<ValueId>,
     val initialValue: ValueId,
-    val assignedValues: Set<ValueId>,
+    val assignments: Set<SourceLocalFamilyAssignment>,
+)
+
+/** A source-local assignment that occurs when control leaves one phi predecessor. */
+data class SourceLocalFamilyAssignment(
+    val predecessor: BasicBlockId,
+    val value: ValueId,
 )
 
 /**
@@ -72,6 +78,7 @@ class SourceLocalAnalyzer {
         ssa: SsaAnalysis,
         expression: ExpressionAnalysis,
         structure: StructuredControlFlowAnalysis,
+        controlFlow: SsaControlFlowGraph = SsaControlFlowGraph.from(graph),
     ): SourceLocalAnalysis {
         val instructionToBlock = buildMap<Int, BasicBlockId> {
             graph.blocks.forEach { block ->
@@ -116,13 +123,22 @@ class SourceLocalAnalyzer {
 
                 // Local phi inputs are already predecessor-addressed and canonicalized by SsaAnalyzer.
                 // Comparing them with raw ValueFlowAnalysis ids here would mix pre-SSA and SSA identities.
+                data class BoundaryInput(val phiBlock: BasicBlockId, val input: SsaPhiInput)
                 val boundaryInputs = phiIds.flatMap { id ->
-                    (expression.values.getValue(id).node as ExpressionNode.Phi).inputs
-                }.filter { it.value !in phiIds }.distinct()
-                if (boundaryInputs.any { it.predecessor == null }) return@familyLoop
-                val initialValues = boundaryInputs.filter { it.predecessor !in region.coveredBlocks }.map { it.value }.distinct()
-                val assignedValues = boundaryInputs.filter { it.predecessor in region.bodyBlocks }.map { it.value }.distinct()
-                if (initialValues.size != 1 || assignedValues.isEmpty() || initialValues.size + assignedValues.size != boundaryInputs.map { it.value }.distinct().size) return@familyLoop
+                    val phi = expression.values.getValue(id).node as ExpressionNode.Phi
+                    phi.inputs.filter { it.value !in phiIds }.map { BoundaryInput(phi.blockId, it) }
+                }.distinct()
+                if (boundaryInputs.any { it.input.predecessor == null }) return@familyLoop
+                val initialValues = boundaryInputs.filter { it.input.predecessor !in region.coveredBlocks }.map { it.input.value }.distinct()
+                val assignmentInputs = boundaryInputs.filter { it.input.predecessor in region.bodyBlocks }
+                val assignedValues = assignmentInputs.map { it.input.value }.distinct()
+                if (initialValues.size != 1 || assignmentInputs.isEmpty() || initialValues.size + assignedValues.size != boundaryInputs.map { it.input.value }.distinct().size) return@familyLoop
+                val assignments = assignmentInputs.map assignmentLoop@{ boundary ->
+                    val predecessor = boundary.input.predecessor ?: return@familyLoop
+                    val normalOutgoing = controlFlow.edges.filter { it.from == predecessor && it.kind != io.github.relvl.deobscura.cfg.ControlFlowEdgeKind.EXCEPTION }
+                    if (normalOutgoing.size != 1 || normalOutgoing.single().to != boundary.phiBlock) return@familyLoop
+                    SourceLocalFamilyAssignment(predecessor, boundary.input.value)
+                }.toSet()
                 val initial = initialValues.single()
                 if (materializedValueBlocks[initial] == null || materializedValueBlocks[initial] in region.coveredBlocks) return@familyLoop
                 if (assignedValues.any { materializedValueBlocks[it] !in region.bodyBlocks }) return@familyLoop
@@ -130,7 +146,7 @@ class SourceLocalAnalyzer {
                 val initialType = expression.values[initial]?.type ?: return@familyLoop
                 if (initialType != seed.type && initialType !is JvmValueType.Reference) return@familyLoop
 
-                localFamilies[seed.id] = SourceLocalFamily(location.slot, seed.id, phiIds, initial, assignedValues.toSet())
+                localFamilies[seed.id] = SourceLocalFamily(location.slot, seed.id, phiIds, initial, assignments)
             }
 
             phisByBlock[region.header].orEmpty().forEach phiLoop@{ phiValue ->

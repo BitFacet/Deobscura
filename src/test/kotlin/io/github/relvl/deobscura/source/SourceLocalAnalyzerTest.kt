@@ -3,6 +3,8 @@ package io.github.relvl.deobscura.source
 import io.github.relvl.deobscura.analysis.*
 import io.github.relvl.deobscura.cfg.BasicBlock
 import io.github.relvl.deobscura.cfg.BasicBlockId
+import io.github.relvl.deobscura.cfg.ControlFlowEdge
+import io.github.relvl.deobscura.cfg.ControlFlowEdgeKind
 import io.github.relvl.deobscura.cfg.ControlFlowGraph
 import io.github.relvl.deobscura.controlflow.StructuredCondition
 import io.github.relvl.deobscura.controlflow.StructuredControlFlowAnalysis
@@ -524,10 +526,28 @@ class SourceLocalAnalyzerTest {
             ssa,
             expression,
             StructuredControlFlowAnalysis(listOf(region), 1, 0),
+            SsaControlFlowGraph(
+                setOf(before, outerHeader, outerBody, innerHeader, updateBlock, joinBlock, exit),
+                listOf(
+                    ControlFlowEdge(before, outerHeader, ControlFlowEdgeKind.FALLTHROUGH),
+                    ControlFlowEdge(outerHeader, outerBody, ControlFlowEdgeKind.FALLTHROUGH),
+                    ControlFlowEdge(outerBody, innerHeader, ControlFlowEdgeKind.FALLTHROUGH),
+                    ControlFlowEdge(innerHeader, joinBlock, ControlFlowEdgeKind.FALLTHROUGH),
+                    ControlFlowEdge(updateBlock, joinBlock, ControlFlowEdgeKind.FALLTHROUGH),
+                    ControlFlowEdge(joinBlock, outerHeader, ControlFlowEdgeKind.JUMP),
+                ),
+                before,
+            ),
         )
 
         assertEquals(
-            SourceLocalFamily(2, outerPhi, setOf(outerPhi, innerPhi, joinPhi), initial, setOf(update)),
+            SourceLocalFamily(
+                2,
+                outerPhi,
+                setOf(outerPhi, innerPhi, joinPhi),
+                initial,
+                setOf(SourceLocalFamilyAssignment(updateBlock, update)),
+            ),
             analysis.localFamilies[outerPhi],
         )
     }

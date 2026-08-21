@@ -238,6 +238,8 @@ class ExpressionBuilder(
     }
 
     private fun comparisonOperator(mnemonic: String): ComparisonOperator? = when {
+        mnemonic == "ifnull" -> ComparisonOperator.EQ
+        mnemonic == "ifnonnull" -> ComparisonOperator.NE
         mnemonic.endsWith("eq") -> ComparisonOperator.EQ
         mnemonic.endsWith("ne") -> ComparisonOperator.NE
         mnemonic.endsWith("lt") -> ComparisonOperator.LT

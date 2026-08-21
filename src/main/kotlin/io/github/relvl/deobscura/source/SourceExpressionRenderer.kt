@@ -36,6 +36,9 @@ internal class SourceExpressionRenderer(
 
     fun renderLocalAssignment(target: ValueId, value: ValueId, targetType: JvmValueType, expression: ExpressionAnalysis): String = "v${target.value} = ${renderValueForType(value, targetType, expression)}"
 
+    fun renderMaterializedLocalAssignment(target: ValueId, value: ValueId, targetType: JvmValueType, expression: ExpressionAnalysis): String =
+        "v${target.value} = ${renderMaterializedValueForType(value, targetType, expression)}"
+
     fun renderLocalDefinitionAssignment(value: ExpressionValue, expression: ExpressionAnalysis): String =
         "v${value.id.value} = ${renderNode(value.node, expression)}"
 
@@ -372,6 +375,13 @@ internal class SourceExpressionRenderer(
         renderBooleanValue(id, expression, mode = ValueRenderingMode.DEFINITION)
     } else {
         renderValue(id, expression, PRECEDENCE_LOWEST, ValueRenderingMode.DEFINITION)
+    }
+
+    /** Renders an already materialized SSA value when only the local assignment occurs on this edge. */
+    private fun renderMaterializedValueForType(id: ValueId, type: JvmValueType, expression: ExpressionAnalysis): String = if (type.isBoolean) {
+        renderBooleanValue(id, expression, mode = ValueRenderingMode.MATERIALIZED)
+    } else {
+        renderValue(id, expression, PRECEDENCE_LOWEST, ValueRenderingMode.MATERIALIZED)
     }
 
     private fun formatValueType(type: JvmValueType): String = type.formatTypeName(deobfuscation::sourceClassName, nullTypeName = "Object", unknownReferenceName = "Object")
