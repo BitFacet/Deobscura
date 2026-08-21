@@ -409,6 +409,129 @@ class SourceLocalAnalyzerTest {
         assertTrue(analysis.consumedIfHeaders.isEmpty())
     }
 
+    @Test
+    fun `projects loop carried local phi into declaration and update`() {
+        val initializerBlock = BasicBlockId(0)
+        val header = BasicBlockId(1)
+        val body = BasicBlockId(2)
+        val exit = BasicBlockId(3)
+        val initialValue = ValueId(1)
+        val phiValue = ValueId(2)
+        val updatedValue = ValueId(3)
+        val conditionValue = ValueId(4)
+        val type = JvmValueType.Computational(JvmComputationalType.INT)
+        val region = StructuredRegion.While(
+            header = header,
+            condition = StructuredCondition.Atomic(BranchCondition(ComparisonOperator.LT, phiValue, BranchOperand.Value(conditionValue))),
+            negateCondition = false,
+            bodyEntry = body,
+            bodyBlocks = setOf(body),
+            exit = exit,
+            latches = setOf(body),
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                initialValue to ExpressionValue(initialValue, type, ExpressionNode.Constant(constantDesc(0)), listOf(initializerBlock.value)),
+                phiValue to ExpressionValue(
+                    phiValue,
+                    type,
+                    ExpressionNode.Phi(
+                        header,
+                        SsaPhiLocation.Local(1),
+                        listOf(SsaPhiInput(initialValue, initializerBlock), SsaPhiInput(updatedValue, body)),
+                    ),
+                ),
+                updatedValue to ExpressionValue(
+                    updatedValue,
+                    type,
+                    ExpressionNode.Increment(phiValue, 1),
+                    listOf(body.value),
+                ),
+                conditionValue to ExpressionValue(conditionValue, type, ExpressionNode.Root(ValueOrigin.Parameter(0))),
+            ),
+            statements = emptyList(),
+        )
+        val ssa = SsaAnalysis(
+            values = emptyMap(),
+            operations = emptyList(),
+            phiNodes = emptyList(),
+            uses = mapOf(
+                initialValue to listOf(SsaValueUse.Phi(phiValue, initializerBlock, 0)),
+                updatedValue to listOf(SsaValueUse.Phi(phiValue, body, 1)),
+            ),
+            eliminatedLocalInstructionCount = 0,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph(initializerBlock.value, header.value, body.value, exit.value),
+            ssa,
+            expression,
+            StructuredControlFlowAnalysis(listOf(region), 1, 0),
+        )
+
+        assertEquals(SourceLoopAssignment(header, initialValue, updatedValue), analysis.loopAssignments[phiValue])
+    }
+
+    @Test
+    fun `groups nested loop phis from one local slot into source local family`() {
+        val before = BasicBlockId(0)
+        val outerHeader = BasicBlockId(1)
+        val outerBody = BasicBlockId(2)
+        val innerHeader = BasicBlockId(3)
+        val updateBlock = BasicBlockId(4)
+        val joinBlock = BasicBlockId(5)
+        val exit = BasicBlockId(6)
+        val initial = ValueId(1)
+        val outerPhi = ValueId(2)
+        val innerPhi = ValueId(3)
+        val joinPhi = ValueId(4)
+        val update = ValueId(5)
+        val condition = ValueId(6)
+        val type = JvmValueType.Reference(io.github.relvl.deobscura.raw.JvmReferenceType.Exact(io.github.relvl.deobscura.raw.JvmType.ObjectType("java/lang/Object")))
+        val region = StructuredRegion.While(
+            header = outerHeader,
+            condition = StructuredCondition.Atomic(BranchCondition(ComparisonOperator.NE, condition, BranchOperand.Zero)),
+            negateCondition = false,
+            bodyEntry = outerBody,
+            bodyBlocks = setOf(outerBody, innerHeader, updateBlock, joinBlock),
+            exit = exit,
+            latches = setOf(joinBlock),
+        )
+        fun phi(id: ValueId, block: BasicBlockId, inputs: List<SsaPhiInput>) = ExpressionValue(
+            id, type, ExpressionNode.Phi(block, SsaPhiLocation.Local(2), inputs),
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                initial to ExpressionValue(initial, type, ExpressionNode.Constant(constantDesc(java.lang.constant.ConstantDescs.NULL)), listOf(0)),
+                outerPhi to phi(outerPhi, outerHeader, listOf(SsaPhiInput(initial, before), SsaPhiInput(innerPhi, joinBlock))),
+                innerPhi to phi(innerPhi, innerHeader, listOf(SsaPhiInput(outerPhi, outerBody), SsaPhiInput(joinPhi, joinBlock))),
+                joinPhi to phi(joinPhi, joinBlock, listOf(SsaPhiInput(innerPhi, innerHeader), SsaPhiInput(update, updateBlock))),
+                update to ExpressionValue(update, type, ExpressionNode.Constant(constantDesc(java.lang.constant.ConstantDescs.NULL)), listOf(4)),
+                condition to ExpressionValue(condition, JvmValueType.Computational(JvmComputationalType.INT), ExpressionNode.Root(ValueOrigin.Parameter(0))),
+            ),
+            statements = emptyList(),
+        )
+        val ssa = SsaAnalysis(
+            values = emptyMap(),
+            operations = emptyList(),
+            phiNodes = emptyList(),
+            uses = emptyMap(),
+            eliminatedLocalInstructionCount = 0,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph(0, 1, 2, 3, 4, 5, 6),
+            ssa,
+            expression,
+            StructuredControlFlowAnalysis(listOf(region), 1, 0),
+        )
+
+        assertEquals(
+            SourceLocalFamily(2, outerPhi, setOf(outerPhi, innerPhi, joinPhi), initial, setOf(update)),
+            analysis.localFamilies[outerPhi],
+        )
+    }
+
     private fun graph(vararg ids: Int): ControlFlowGraph = ControlFlowGraph(
         code = RawCode(0, 0, 0, emptyList(), emptyList(), emptyList(), emptyList()),
         blocks = ids.map { id -> BasicBlock(BasicBlockId(id), id, id + 1, emptyList(), emptyList()) },

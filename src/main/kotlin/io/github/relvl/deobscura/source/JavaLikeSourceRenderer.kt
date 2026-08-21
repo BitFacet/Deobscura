@@ -141,7 +141,7 @@ class JavaLikeSourceRenderer(
         renderSourceBlock(
             analysis.sourceStructure.root,
             context,
-            SourceValueBindings.EMPTY,
+            SourceValueBindings.EMPTY.withSourceLocals(context.sourceLocalBindings),
             indent,
             out,
             tailPosition = method.allowsImplicitReturn,
@@ -228,9 +228,10 @@ class JavaLikeSourceRenderer(
             }
 
             is StructuredRegion.While -> {
-                renderPhysicalBlock(region.header, context, bindings, indent, out, includeControl = false)
+                val loopBindings = bindings.withInlineValues(context.loopConditionInlineValuesByHeader[region.header].orEmpty())
+                renderPhysicalBlock(region.header, context, loopBindings, indent, out, includeControl = false)
                 val condition = if (region.negateCondition) region.condition.negated() else region.condition
-                appendIndented(out, indent, "while (${renderCondition(condition, context.analysis, bindings)}) {")
+                appendIndented(out, indent, "while (${renderCondition(condition, context.analysis, loopBindings)}) {")
                 renderPart(node, SourceRegionPartKind.LOOP_BODY, 0, context, bindings, indent + 1, out)
                 appendIndented(out, indent, "}")
             }
@@ -249,6 +250,7 @@ class JavaLikeSourceRenderer(
             }
 
             is StructuredRegion.TryCatch -> {
+                renderHoistedDeclarations(region.header, context, bindings, indent, out)
                 appendIndented(out, indent, "try {")
                 renderPart(node, SourceRegionPartKind.TRY_BODY, 0, context, bindings, indent + 1, out, tailPosition)
                 region.catches.forEachIndexed { index, catch ->
@@ -273,6 +275,7 @@ class JavaLikeSourceRenderer(
             }
 
             is StructuredRegion.TryFinally -> {
+                renderHoistedDeclarations(region.header, context, bindings, indent, out)
                 appendIndented(out, indent, "try {")
                 renderPart(node, SourceRegionPartKind.TRY_BODY, 0, context, bindings, indent + 1, out)
                 appendIndented(out, indent, "} finally {")
@@ -281,6 +284,7 @@ class JavaLikeSourceRenderer(
             }
 
             is StructuredRegion.TryCatchFinally -> {
+                renderHoistedDeclarations(region.header, context, bindings, indent, out)
                 appendIndented(out, indent, "try {")
                 renderPart(node, SourceRegionPartKind.TRY_BODY, 0, context, bindings, indent + 1, out)
                 region.catches.forEachIndexed { index, catch ->
@@ -315,6 +319,19 @@ class JavaLikeSourceRenderer(
         }
     }
 
+    private fun renderHoistedDeclarations(
+        regionHeader: BasicBlockId,
+        context: RenderContext,
+        bindings: SourceValueBindings,
+        indent: Int,
+        out: StringBuilder,
+    ) {
+        context.hoistedValuesByRegionHeader[regionHeader].orEmpty().forEach { valueId ->
+            val value = context.analysis.expression.values.getValue(valueId)
+            appendIndented(out, indent, expressionRenderer(bindings).renderLocalDeclaration(value) + ";")
+        }
+    }
+
     private fun renderPart(node: SourceNode.Structured, kind: SourceRegionPartKind, ordinal: Int, context: RenderContext, bindings: SourceValueBindings, indent: Int, out: StringBuilder, tailPosition: Boolean = false) {
         node.parts.firstOrNull { it.kind == kind && it.ordinal == ordinal }?.let {
             renderSourceBlock(it.body, context, bindings, indent, out, it.instructionRanges, kind == SourceRegionPartKind.SYNCHRONIZED_BODY, tailPosition)
@@ -336,7 +353,7 @@ class JavaLikeSourceRenderer(
         if (fallback) appendIndented(out, indent, "B${block.value}:")
         val contentIndent = indent + if (fallback) 1 else 0
         context.phisByBlock[block].orEmpty().forEach phiLoop@{ value ->
-            if (value.id in context.analysis.sourceLocals.conditionalAssignments || value.id in context.analysis.sourceLocals.twoArmAssignments) return@phiLoop
+            if (value.id in context.analysis.sourceLocals.conditionalAssignments || value.id in context.analysis.sourceLocals.twoArmAssignments || value.id in context.analysis.sourceLocals.loopAssignments || value.id in context.familyPhiValues) return@phiLoop
             val conditional = context.analysis.sourceLocals.conditionalValues[value.id]
             val rendered = if (conditional == null) {
                 expressionRenderer(bindings).renderDefinition(value, context.analysis.expression)
@@ -356,7 +373,18 @@ class JavaLikeSourceRenderer(
         events.forEachIndexed eventLoop@{ index, event ->
             when (event) {
                 is BlockEvent.Value -> {
-                    if (event.value.id in context.analysis.sourceLocals.suppressedDefinitions) return@eventLoop
+                    if (event.value.id in context.analysis.sourceLocals.suppressedDefinitions || event.value.id in context.loopConditionInlineValues) return@eventLoop
+                    if (event.value.id in context.hoistedValues) {
+                        appendIndented(
+                            out,
+                            contentIndent,
+                            expressionRenderer(bindings).renderLocalDefinitionAssignment(
+                                event.value,
+                                context.analysis.expression,
+                            ) + ";",
+                        )
+                        return@eventLoop
+                    }
                     val declaration = context.localDeclarationByInitializer[event.value.id]
                     if (declaration != null) {
                         val target = context.analysis.expression.values.getValue(declaration.first)
@@ -365,7 +393,7 @@ class JavaLikeSourceRenderer(
                             contentIndent,
                             expressionRenderer(bindings).renderLocalDeclaration(
                                 target,
-                                declaration.second.initialValue,
+                                declaration.second,
                                 context.analysis.expression,
                             ) + ";",
                         )
@@ -567,8 +595,18 @@ class JavaLikeSourceRenderer(
         val outgoingByBlock: Map<BasicBlockId, List<ControlFlowEdge>> = analysis.optimization.controlFlow.edges.groupBy { it.from }
         val phisByBlock: Map<BasicBlockId, List<ExpressionValue>> = analysis.expression.values.values.filter { it.node is ExpressionNode.Phi }.groupBy { (it.node as ExpressionNode.Phi).blockId }
         val eventsByBlock: Map<BasicBlockId, List<BlockEvent>> = buildEvents(analysis)
-        val localDeclarationByInitializer: Map<ValueId, Pair<ValueId, SourceConditionalAssignment>> = analysis.sourceLocals.conditionalAssignments.entries.associate { (phi, assignment) ->
-            assignment.initialValue to (phi to assignment)
+        val loopConditionInlineValuesByHeader: Map<BasicBlockId, Set<ValueId>> = buildLoopConditionInlineValues(analysis)
+        val loopConditionInlineValues: Set<ValueId> = loopConditionInlineValuesByHeader.values.flatten().toSet()
+        val localDeclarationByInitializer: Map<ValueId, Pair<ValueId, ValueId>> = buildMap {
+            analysis.sourceLocals.conditionalAssignments.forEach { (phi, assignment) ->
+                put(assignment.initialValue, phi to assignment.initialValue)
+            }
+            analysis.sourceLocals.loopAssignments.forEach { (phi, assignment) ->
+                put(assignment.initialValue, phi to assignment.initialValue)
+            }
+            analysis.sourceLocals.localFamilies.values.forEach { family ->
+                put(family.initialValue, family.target to family.initialValue)
+            }
         }
         val localAssignmentByValue: Map<ValueId, ValueId> = buildMap {
             analysis.sourceLocals.conditionalAssignments.forEach { (phi, assignment) ->
@@ -578,13 +616,159 @@ class JavaLikeSourceRenderer(
                 put(assignment.thenValue, phi)
                 put(assignment.elseValue, phi)
             }
+            analysis.sourceLocals.loopAssignments.forEach { (phi, assignment) ->
+                put(assignment.updatedValue, phi)
+            }
+            analysis.sourceLocals.localFamilies.values.forEach { family ->
+                family.assignedValues.forEach { put(it, family.target) }
+            }
         }
+        val familyPhiValues: Set<ValueId> = analysis.sourceLocals.localFamilies.values.flatMapTo(linkedSetOf()) { it.phiValues }
+        val sourceLocalBindings: Map<ValueId, ValueId> = buildMap {
+            analysis.sourceLocals.localFamilies.values.forEach { family ->
+                family.phiValues.forEach { put(it, family.target) }
+                put(family.initialValue, family.target)
+                family.assignedValues.forEach { put(it, family.target) }
+            }
+        }
+        val hoistedValuesByRegionHeader: Map<BasicBlockId, List<ValueId>> = buildHoistedValues(
+            analysis,
+            localDeclarationByInitializer.keys + localAssignmentByValue.keys + sourceLocalBindings.keys,
+        )
+        val hoistedValues: Set<ValueId> = hoistedValuesByRegionHeader.values.flatten().toSet()
         val twoArmAssignmentsByHeader: Map<BasicBlockId, List<ValueId>> = analysis.sourceLocals.twoArmAssignments.entries.groupBy(
             keySelector = { it.value.header },
             valueTransform = { it.key },
         )
 
         companion object {
+            /**
+             * Values evaluated in a loop header must remain part of the repeated condition. The
+             * generic materializer intentionally keeps effectful calls explicit before structuring;
+             * once a natural loop is known, a single-use instruction value consumed only by that
+             * header's branch can safely be rendered directly in the condition instead.
+             */
+            private fun buildLoopConditionInlineValues(analysis: MethodAnalysis): Map<BasicBlockId, Set<ValueId>> {
+                val instructionToBlock = instructionToBlock(analysis)
+                val operationsByIndex = analysis.ssa.operations.associateBy { it.instructionIndex }
+                return buildMap {
+                    analysis.structuredControlFlow.regions.filterIsInstance<StructuredRegion.While>().forEach { region ->
+                        val values = structuredConditionInputs(region.condition).filterTo(linkedSetOf()) { value ->
+                            if (value in analysis.expression.materialization.inlineValues) return@filterTo false
+                            val definition = analysis.ssa.values[value] as? io.github.relvl.deobscura.analysis.SsaValueDefinition.Instruction ?: return@filterTo false
+                            val definitionBlock = instructionToBlock[definition.instructionIndex] ?: return@filterTo false
+                            val uses = analysis.ssa.uses[value].orEmpty()
+                            val use = uses.singleOrNull() as? io.github.relvl.deobscura.analysis.SsaValueUse.Operation ?: return@filterTo false
+                            val useBlock = instructionToBlock[use.instructionIndex] ?: return@filterTo false
+                            if (definitionBlock != useBlock) return@filterTo false
+                            val operation = operationsByIndex[use.instructionIndex] ?: return@filterTo false
+                            operation.instruction is RawBranchInstruction
+                        }
+                        if (values.isNotEmpty()) put(region.header, values)
+                    }
+                }
+            }
+
+            private fun structuredConditionInputs(condition: StructuredCondition): Set<ValueId> = when (condition) {
+                is StructuredCondition.Atomic -> conditionInputs(condition.condition).toSet()
+                is StructuredCondition.And -> condition.terms.flatMapTo(linkedSetOf(), ::structuredConditionInputs)
+                is StructuredCondition.Or -> condition.terms.flatMapTo(linkedSetOf(), ::structuredConditionInputs)
+            }
+
+            private fun buildHoistedValues(analysis: MethodAnalysis, projectedValues: Set<ValueId>): Map<BasicBlockId, List<ValueId>> {
+                val instructionToBlock = instructionToBlock(analysis)
+                val usesByValue = buildMap<ValueId, MutableSet<BasicBlockId>> {
+                    fun record(value: ValueId, block: BasicBlockId) {
+                        getOrPut(value) { linkedSetOf() } += block
+                    }
+
+                    analysis.expression.values.values.forEach { value ->
+                        val useBlock = when (val node = value.node) {
+                            is ExpressionNode.Phi -> node.blockId
+                            else -> value.instructionIndices.lastOrNull()?.let(instructionToBlock::get)
+                        } ?: return@forEach
+                        expressionInputs(value.node).forEach { record(it, useBlock) }
+                    }
+                    analysis.expression.statements.forEach { statement ->
+                        val block = instructionToBlock[statement.instructionIndex] ?: return@forEach
+                        statementInputs(statement).forEach { record(it, block) }
+                    }
+                }
+                val definitionBlock = analysis.expression.values.values.mapNotNull { value ->
+                    val block = value.instructionIndices.lastOrNull()?.let(instructionToBlock::get) ?: return@mapNotNull null
+                    value.id to block
+                }.toMap()
+                val exceptionRegions = analysis.structuredControlFlow.regions.mapNotNull { region ->
+                    when (region) {
+                        is StructuredRegion.TryCatch -> ExceptionScope(region.header, region.tryBlocks, region.coveredBlocks)
+                        is StructuredRegion.TryFinally -> ExceptionScope(region.header, region.tryBlocks, region.coveredBlocks)
+                        is StructuredRegion.TryCatchFinally -> ExceptionScope(region.header, region.tryBlocks, region.coveredBlocks)
+                        else -> null
+                    }
+                }
+                val result = linkedMapOf<BasicBlockId, MutableList<ValueId>>()
+                definitionBlock.forEach { (value, block) ->
+                    if (value in projectedValues || value in analysis.expression.materialization.inlineValues || value in analysis.sourceLocals.suppressedDefinitions) return@forEach
+                    val uses = usesByValue[value].orEmpty()
+                    if (uses.isEmpty()) return@forEach
+                    val scopes = exceptionRegions.filter { block in it.tryBlocks && uses.any { use -> use !in it.tryBlocks } }
+                    if (scopes.isEmpty()) return@forEach
+                    val scope = scopes.maxByOrNull { it.coveredBlocks.size } ?: return@forEach
+                    result.getOrPut(scope.header) { mutableListOf() } += value
+                }
+                return result.mapValues { (_, values) ->
+                    values.sortedBy { value -> analysis.expression.values.getValue(value).instructionIndices.lastOrNull() ?: Int.MAX_VALUE }
+                }
+            }
+
+            private fun instructionToBlock(analysis: MethodAnalysis): Map<Int, BasicBlockId> = buildMap {
+                analysis.graph.blocks.forEach { block ->
+                    for (index in block.startInstructionIndex until block.endInstructionIndexExclusive) put(index, block.id)
+                }
+            }
+
+            private fun expressionInputs(node: ExpressionNode): List<ValueId> = when (node) {
+                is ExpressionNode.Root, is ExpressionNode.Constant, is ExpressionNode.NewObject -> emptyList()
+                is ExpressionNode.Phi -> node.inputs.map { it.value }
+                is ExpressionNode.Unary -> listOf(node.operand)
+                is ExpressionNode.Binary -> listOf(node.left, node.right)
+                is ExpressionNode.Increment -> listOf(node.operand)
+                is ExpressionNode.ThreeWayCompare -> listOf(node.left, node.right)
+                is ExpressionNode.Conversion -> listOf(node.operand)
+                is ExpressionNode.FieldRead -> listOfNotNull(node.receiver)
+                is ExpressionNode.ArrayRead -> listOf(node.array, node.index)
+                is ExpressionNode.ArrayLength -> listOf(node.array)
+                is ExpressionNode.Call -> listOfNotNull(node.receiver) + node.arguments
+                is ExpressionNode.DynamicCall -> node.arguments
+                is ExpressionNode.ConstructObject -> node.arguments
+                is ExpressionNode.NewArray -> node.dimensions
+                is ExpressionNode.Cast -> listOf(node.operand)
+                is ExpressionNode.InstanceOf -> listOf(node.operand)
+                is ExpressionNode.Raw -> node.inputs
+            }
+
+            private fun statementInputs(statement: ExpressionStatement): List<ValueId> = when (statement) {
+                is ExpressionStatement.FieldWrite -> listOfNotNull(statement.receiver) + statement.value
+                is ExpressionStatement.ArrayWrite -> listOf(statement.array, statement.index, statement.value)
+                is ExpressionStatement.Call -> listOfNotNull(statement.receiver) + statement.arguments
+                is ExpressionStatement.DynamicCall -> statement.arguments
+                is ExpressionStatement.Return -> listOfNotNull(statement.value)
+                is ExpressionStatement.Throw -> listOf(statement.value)
+                is ExpressionStatement.Monitor -> listOf(statement.value)
+                is ExpressionStatement.Branch -> statement.condition?.let(::conditionInputs).orEmpty()
+                is ExpressionStatement.Switch -> listOf(statement.selector)
+                is ExpressionStatement.Raw -> statement.inputs
+            }
+
+            private fun conditionInputs(condition: io.github.relvl.deobscura.expression.BranchCondition): List<ValueId> =
+                listOf(condition.left) + ((condition.right as? io.github.relvl.deobscura.expression.BranchOperand.Value)?.value?.let(::listOf).orEmpty())
+
+            private data class ExceptionScope(
+                val header: BasicBlockId,
+                val tryBlocks: Set<BasicBlockId>,
+                val coveredBlocks: Set<BasicBlockId>,
+            )
+
             private fun buildEvents(analysis: MethodAnalysis): Map<BasicBlockId, List<BlockEvent>> {
                 val instructionToBlock = buildMap<Int, BasicBlockId> {
                     analysis.graph.blocks.forEach { block ->

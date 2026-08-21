@@ -36,6 +36,9 @@ internal class SourceExpressionRenderer(
 
     fun renderLocalAssignment(target: ValueId, value: ValueId, targetType: JvmValueType, expression: ExpressionAnalysis): String = "v${target.value} = ${renderValueForType(value, targetType, expression)}"
 
+    fun renderLocalDefinitionAssignment(value: ExpressionValue, expression: ExpressionAnalysis): String =
+        "v${value.id.value} = ${renderNode(value.node, expression)}"
+
     fun renderCondition(condition: BranchCondition, expression: ExpressionAnalysis): String {
         renderThreeWayComparison(condition, expression)?.let { return it }
 
@@ -131,9 +134,10 @@ internal class SourceExpressionRenderer(
     }
 
     private fun renderValue(id: ValueId, expression: ExpressionAnalysis, parentPrecedence: Int, mode: ValueRenderingMode = ValueRenderingMode.MATERIALIZED): String {
+        if (mode == ValueRenderingMode.MATERIALIZED) bindings.sourceLocal(id)?.let { return "v${it.value}" }
         val value = expression.values[id] ?: return "v${id.value}"
         if (value.node is ExpressionNode.Root) return renderNode(value.node, expression)
-        if (mode == ValueRenderingMode.MATERIALIZED && id !in expression.materialization.inlineValues) return "v${id.value}"
+        if (mode == ValueRenderingMode.MATERIALIZED && !bindings.shouldInline(id, expression)) return "v${id.value}"
         val precedence = precedence(value.node)
         val rendered = renderInlineNode(value.node, expression, precedence)
         return if (precedence < parentPrecedence) "($rendered)" else rendered
@@ -243,7 +247,7 @@ internal class SourceExpressionRenderer(
     private fun parenthesizeBoolean(id: ValueId, expression: ExpressionAnalysis): String {
         val rendered = renderValue(id, expression, PRECEDENCE_UNARY)
         val value = expression.values[id] ?: return rendered
-        return if (id in expression.materialization.inlineValues && precedence(value.node) < PRECEDENCE_UNARY) "($rendered)" else rendered
+        return if (bindings.shouldInline(id, expression) && precedence(value.node) < PRECEDENCE_UNARY) "($rendered)" else rendered
     }
 
     private fun renderStringConcat(
@@ -430,10 +434,23 @@ internal class SourceExpressionRenderer(
 }
 
 /** Lexical source names assigned to JVM-root values already represented by source syntax. */
-internal data class SourceValueBindings(private val exceptionParameters: Map<Int, String> = emptyMap()) {
+internal data class SourceValueBindings(
+    private val exceptionParameters: Map<Int, String> = emptyMap(),
+    private val sourceLocals: Map<ValueId, ValueId> = emptyMap(),
+    private val inlineValues: Set<ValueId> = emptySet(),
+) {
     fun exceptionParameter(handlerInstructionIndex: Int): String? = exceptionParameters[handlerInstructionIndex]
 
+    fun sourceLocal(value: ValueId): ValueId? = sourceLocals[value]
+
+    fun shouldInline(value: ValueId, expression: ExpressionAnalysis): Boolean =
+        value in inlineValues || value in expression.materialization.inlineValues
+
     fun withExceptionParameter(handlerInstructionIndex: Int, name: String): SourceValueBindings = copy(exceptionParameters = exceptionParameters + (handlerInstructionIndex to name))
+
+    fun withSourceLocals(bindings: Map<ValueId, ValueId>): SourceValueBindings = copy(sourceLocals = sourceLocals + bindings)
+
+    fun withInlineValues(values: Set<ValueId>): SourceValueBindings = copy(inlineValues = inlineValues + values)
 
     companion object {
         val EMPTY = SourceValueBindings()

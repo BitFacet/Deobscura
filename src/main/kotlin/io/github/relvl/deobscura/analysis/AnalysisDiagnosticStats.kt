@@ -71,6 +71,9 @@ internal class SourceLocalDiagnosticStats {
     private var conditionalValueCount = 0L
     private var conditionalAssignmentCount = 0L
     private var twoArmAssignmentCount = 0L
+    private var loopAssignmentCount = 0L
+    private var localFamilyCount = 0L
+    private var localFamilyPhiCount = 0L
     private var consumedIfCount = 0L
 
     fun record(analysis: io.github.relvl.deobscura.source.SourceLocalAnalysis) {
@@ -78,13 +81,16 @@ internal class SourceLocalDiagnosticStats {
         conditionalValueCount += analysis.conditionalValues.size
         conditionalAssignmentCount += analysis.conditionalAssignments.size
         twoArmAssignmentCount += analysis.twoArmAssignments.size
+        loopAssignmentCount += analysis.loopAssignments.size
+        localFamilyCount += analysis.localFamilies.size
+        localFamilyPhiCount += analysis.localFamilies.values.sumOf { it.phiValues.size.toLong() }
         consumedIfCount += analysis.consumedIfHeaders.size
     }
 
     fun log(logger: Logger) {
         logger.info(
-            "Source locals analyzed {}/{} method(s): {} conditional phi value(s), {} conditional assignment phi value(s), {} two-arm assignment phi value(s), {} materialization if(s) removed.",
-            analyzedMethodCount, methodCount, conditionalValueCount, conditionalAssignmentCount, twoArmAssignmentCount, consumedIfCount,
+            "Source locals analyzed {}/{} method(s): {} conditional phi value(s), {} conditional assignment phi value(s), {} two-arm assignment phi value(s), {} loop assignment phi value(s), {} source-local family(ies) covering {} phi value(s), {} materialization if(s) removed.",
+            analyzedMethodCount, methodCount, conditionalValueCount, conditionalAssignmentCount, twoArmAssignmentCount, loopAssignmentCount, localFamilyCount, localFamilyPhiCount, consumedIfCount,
         )
     }
 }

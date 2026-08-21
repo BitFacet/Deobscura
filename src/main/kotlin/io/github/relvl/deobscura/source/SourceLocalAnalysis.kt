@@ -18,6 +18,8 @@ data class SourceLocalAnalysis(
     val conditionalValues: Map<ValueId, SourceConditionalValue> = emptyMap(),
     val conditionalAssignments: Map<ValueId, SourceConditionalAssignment> = emptyMap(),
     val twoArmAssignments: Map<ValueId, SourceTwoArmAssignment> = emptyMap(),
+    val loopAssignments: Map<ValueId, SourceLoopAssignment> = emptyMap(),
+    val localFamilies: Map<ValueId, SourceLocalFamily> = emptyMap(),
     val suppressedDefinitions: Set<ValueId> = emptySet(),
     val consumedIfHeaders: Set<BasicBlockId> = emptySet(),
 )
@@ -41,10 +43,26 @@ data class SourceTwoArmAssignment(
     val elseValue: ValueId,
 )
 
+/** A loop-carried local phi represented as one declaration before the loop and a back-edge assignment. */
+data class SourceLoopAssignment(
+    val header: BasicBlockId,
+    val initialValue: ValueId,
+    val updatedValue: ValueId,
+)
+
+/** Several SSA local phis that are different versions of one source local. */
+data class SourceLocalFamily(
+    val slot: Int,
+    val target: ValueId,
+    val phiValues: Set<ValueId>,
+    val initialValue: ValueId,
+    val assignedValues: Set<ValueId>,
+)
+
 /**
  * Reconstructs source-local forms only when already-structured control flow proves their placement.
- * Pure constant diamonds become conditional expressions; one-arm local phis become an explicit
- * declaration before the if and an assignment in the populated arm.
+ * Pure constant diamonds become conditional expressions; branch and loop-carried local phis become
+ * explicit declarations and assignments at the original value-definition sites.
  *
  * Canonical SSA/Expression IR remains untouched.
  */
@@ -70,8 +88,69 @@ class SourceLocalAnalyzer {
         val conditionalValues = linkedMapOf<ValueId, SourceConditionalValue>()
         val conditionalAssignments = linkedMapOf<ValueId, SourceConditionalAssignment>()
         val twoArmAssignments = linkedMapOf<ValueId, SourceTwoArmAssignment>()
+        val loopAssignments = linkedMapOf<ValueId, SourceLoopAssignment>()
+        val localFamilies = linkedMapOf<ValueId, SourceLocalFamily>()
         val suppressedDefinitions = linkedSetOf<ValueId>()
         val consumedIfHeaders = linkedSetOf<BasicBlockId>()
+
+        structure.regions.filterIsInstance<StructuredRegion.While>().forEach { region ->
+            phisByBlock[region.header].orEmpty().forEach familyLoop@{ seed ->
+                val seedPhi = seed.node as ExpressionNode.Phi
+                val location = seedPhi.location as? SsaPhiLocation.Local ?: return@familyLoop
+                val phiIds = linkedSetOf<ValueId>()
+                val pending = ArrayDeque<ValueId>()
+                pending += seed.id
+                while (pending.isNotEmpty()) {
+                    val id = pending.removeFirst()
+                    if (!phiIds.add(id)) continue
+                    val value = expression.values[id] ?: return@familyLoop
+                    val phi = value.node as? ExpressionNode.Phi ?: return@familyLoop
+                    if ((phi.location as? SsaPhiLocation.Local)?.slot != location.slot) return@familyLoop
+                    if (phi.blockId !in region.coveredBlocks || phi.inputs.any { it.predecessor == null }) return@familyLoop
+                    phi.inputs.forEach { input ->
+                        val inputPhi = expression.values[input.value]?.node as? ExpressionNode.Phi
+                        if ((inputPhi?.location as? SsaPhiLocation.Local)?.slot == location.slot) pending += input.value
+                    }
+                }
+                if (phiIds.size <= 1) return@familyLoop
+
+                // Local phi inputs are already predecessor-addressed and canonicalized by SsaAnalyzer.
+                // Comparing them with raw ValueFlowAnalysis ids here would mix pre-SSA and SSA identities.
+                val boundaryInputs = phiIds.flatMap { id ->
+                    (expression.values.getValue(id).node as ExpressionNode.Phi).inputs
+                }.filter { it.value !in phiIds }.distinct()
+                if (boundaryInputs.any { it.predecessor == null }) return@familyLoop
+                val initialValues = boundaryInputs.filter { it.predecessor !in region.coveredBlocks }.map { it.value }.distinct()
+                val assignedValues = boundaryInputs.filter { it.predecessor in region.bodyBlocks }.map { it.value }.distinct()
+                if (initialValues.size != 1 || assignedValues.isEmpty() || initialValues.size + assignedValues.size != boundaryInputs.map { it.value }.distinct().size) return@familyLoop
+                val initial = initialValues.single()
+                if (materializedValueBlocks[initial] == null || materializedValueBlocks[initial] in region.coveredBlocks) return@familyLoop
+                if (assignedValues.any { materializedValueBlocks[it] !in region.bodyBlocks }) return@familyLoop
+                if (assignedValues.any { expression.values[it]?.type != seed.type }) return@familyLoop
+                val initialType = expression.values[initial]?.type ?: return@familyLoop
+                if (initialType != seed.type && initialType !is JvmValueType.Reference) return@familyLoop
+
+                localFamilies[seed.id] = SourceLocalFamily(location.slot, seed.id, phiIds, initial, assignedValues.toSet())
+            }
+
+            phisByBlock[region.header].orEmpty().forEach phiLoop@{ phiValue ->
+                if (localFamilies.values.any { phiValue.id in it.phiValues }) return@phiLoop
+                if (!canDeclareSourceLocal(phiValue)) return@phiLoop
+                val phi = phiValue.node as ExpressionNode.Phi
+                if (phi.location !is SsaPhiLocation.Local) return@phiLoop
+                if (phi.inputs.size != 2 || phi.inputs.any { it.predecessor == null }) return@phiLoop
+
+                val loopBlocks = region.coveredBlocks
+                val initialInput = phi.inputs.singleOrNull { it.predecessor !in loopBlocks }?.value ?: return@phiLoop
+                val updatedInput = phi.inputs.singleOrNull { it.predecessor in region.bodyBlocks }?.value ?: return@phiLoop
+                if (materializedValueBlocks[initialInput] == null) return@phiLoop
+                if (materializedValueBlocks[updatedInput] !in region.bodyBlocks) return@phiLoop
+                if (!isSingleUsePhiInput(initialInput, phiValue.id, ssa, expression)) return@phiLoop
+                if (!isSingleUsePhiInput(updatedInput, phiValue.id, ssa, expression)) return@phiLoop
+
+                loopAssignments[phiValue.id] = SourceLoopAssignment(region.header, initialInput, updatedInput)
+            }
+        }
 
         structure.regions.filterIsInstance<StructuredRegion.If>().forEach { region ->
             if (region.thenExit != null || region.elseExit != null) return@forEach
@@ -141,7 +220,7 @@ class SourceLocalAnalyzer {
             }
         }
 
-        return SourceLocalAnalysis(conditionalValues, conditionalAssignments, twoArmAssignments, suppressedDefinitions, consumedIfHeaders)
+        return SourceLocalAnalysis(conditionalValues, conditionalAssignments, twoArmAssignments, loopAssignments, localFamilies, suppressedDefinitions, consumedIfHeaders)
     }
 
     private fun canDeclareSourceLocal(value: ExpressionValue): Boolean = when (val type = value.type) {
