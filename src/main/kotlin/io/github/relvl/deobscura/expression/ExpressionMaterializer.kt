@@ -4,7 +4,8 @@ import io.github.relvl.deobscura.analysis.SsaAnalysis
 import io.github.relvl.deobscura.analysis.SsaOperationSemantics
 import io.github.relvl.deobscura.analysis.SsaValueUse
 import io.github.relvl.deobscura.analysis.ValueId
-import io.github.relvl.deobscura.raw.RawBranchInstruction
+import io.github.relvl.deobscura.analysis.ValueOperation
+import io.github.relvl.deobscura.raw.*
 
 /**
  * Plans source-like expression materialization without changing SSA identity.
@@ -54,12 +55,27 @@ class ExpressionMaterializer(
             if (meaningfulInputs.isEmpty() || meaningfulInputs.any { !expression.value(it).node.isZeroOrOneConstant() }) return@filter false
 
             val uses = ssa.uses[value.id].orEmpty()
-            uses.isNotEmpty() && uses.all { use ->
-                val operationUse = use as? SsaValueUse.Operation ?: return@all false
-                val branch = operationsByIndex[operationUse.instructionIndex]?.instruction as? RawBranchInstruction ?: return@all false
-                branch.opcode.mnemonic == "ifeq" || branch.opcode.mnemonic == "ifne"
-            }
+            uses.isNotEmpty() && uses.all { use -> isBooleanUse(use, operationsByIndex) }
         }.map { it.id }.toSet()
+    }
+
+    private fun isBooleanUse(use: SsaValueUse, operationsByIndex: Map<Int, ValueOperation>): Boolean {
+        val operationUse = use as? SsaValueUse.Operation ?: return false
+        return when (val instruction = operationsByIndex[operationUse.instructionIndex]?.instruction) {
+            is RawBranchInstruction -> instruction.opcode.mnemonic == "ifeq" || instruction.opcode.mnemonic == "ifne"
+            is RawInvokeInstruction -> {
+                val receiverOffset = if (instruction.opcode.mnemonic == "invokestatic") 0 else 1
+                instruction.type.parameterTypes.getOrNull(operationUse.inputIndex - receiverOffset) == JvmType.BooleanType
+            }
+            is RawInvokeDynamicInstruction ->
+                instruction.type.parameterTypes.getOrNull(operationUse.inputIndex) == JvmType.BooleanType
+            is RawFieldInstruction -> when (instruction.opcode.mnemonic) {
+                "putstatic" -> operationUse.inputIndex == 0 && instruction.type == JvmType.BooleanType
+                "putfield" -> operationUse.inputIndex == 1 && instruction.type == JvmType.BooleanType
+                else -> false
+            }
+            else -> false
+        }
     }
 
     private fun ExpressionNode.isZeroOrOneConstant(): Boolean = this is ExpressionNode.Constant && (value.equals(0) || value.equals(1))

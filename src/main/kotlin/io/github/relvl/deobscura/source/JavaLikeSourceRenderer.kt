@@ -142,7 +142,9 @@ class JavaLikeSourceRenderer(
         renderSourceBlock(
             analysis.sourceStructure.root,
             context,
-            SourceValueBindings.EMPTY.withSourceLocals(context.sourceLocalBindings),
+            SourceValueBindings.EMPTY
+                .withSourceLocals(context.sourceLocalBindings)
+                .withBooleanSourceLocals(analysis.sourceLocals.booleanLocals),
             indent,
             out,
             tailPosition = method.allowsImplicitReturn,
@@ -212,9 +214,29 @@ class JavaLikeSourceRenderer(
             is StructuredRegion.If -> {
                 renderPhysicalBlock(region.header, context, bindings, indent, out, includeControl = false)
                 if (region.header in context.analysis.sourceLocals.consumedIfHeaders) return
+                context.conditionalAssignmentsByHeader[region.header].orEmpty().forEach { (phi, initialValue) ->
+                    val target = context.analysis.expression.values.getValue(phi)
+                    appendIndented(
+                        out,
+                        indent,
+                        expressionRenderer(bindings).renderMaterializedLocalDeclaration(
+                            target,
+                            initialValue,
+                            context.analysis.expression,
+                            target.id in context.analysis.sourceLocals.booleanLocals,
+                        ) + ";",
+                    )
+                }
                 context.twoArmAssignmentsByHeader[region.header].orEmpty().forEach { phi ->
                     val target = context.analysis.expression.values.getValue(phi)
-                    appendIndented(out, indent, expressionRenderer(bindings).renderLocalDeclaration(target) + ";")
+                    appendIndented(
+                        out,
+                        indent,
+                        expressionRenderer(bindings).renderLocalDeclaration(
+                            target,
+                            target.id in context.analysis.sourceLocals.booleanLocals,
+                        ) + ";",
+                    )
                 }
                 appendIndented(out, indent, "if (${renderCondition(region.condition, context.analysis, bindings)}) {")
                 renderPart(node, SourceRegionPartKind.THEN, 0, context, bindings, indent + 1, out, tailPosition)
@@ -337,7 +359,14 @@ class JavaLikeSourceRenderer(
     ) {
         context.hoistedValuesByRegionHeader[regionHeader].orEmpty().forEach { valueId ->
             val value = context.analysis.expression.values.getValue(valueId)
-            appendIndented(out, indent, expressionRenderer(bindings).renderLocalDeclaration(value) + ";")
+            appendIndented(
+                out,
+                indent,
+                expressionRenderer(bindings).renderLocalDeclaration(
+                    value,
+                    value.id in context.analysis.sourceLocals.booleanLocals,
+                ) + ";",
+            )
         }
     }
 
@@ -366,9 +395,21 @@ class JavaLikeSourceRenderer(
         context.phisByBlock[block].orEmpty().forEach phiLoop@{ value ->
             if (value.id in context.analysis.sourceLocals.conditionalAssignments || value.id in context.analysis.sourceLocals.twoArmAssignments || value.id in context.analysis.sourceLocals.loopAssignments || value.id in context.familyPhiValues) return@phiLoop
             val conditional = context.analysis.sourceLocals.conditionalValues[value.id]
-            val rendered = if (conditional == null) {
-                expressionRenderer(effectiveBindings).renderDefinition(value, context.analysis.expression)
-            } else {
+            val assignmentTarget = context.localAssignmentByValue[value.id]
+            val rendered = when {
+                conditional != null && assignmentTarget != null -> {
+                    val target = context.analysis.expression.values.getValue(assignmentTarget)
+                    val condition = renderCondition(conditional.condition, context.analysis, effectiveBindings)
+                    expressionRenderer(effectiveBindings).renderConditionalAssignment(
+                        target,
+                        condition,
+                        conditional.thenValue,
+                        conditional.elseValue,
+                        context.analysis.expression,
+                        assignmentTarget in context.analysis.sourceLocals.booleanLocals,
+                    )
+                }
+                conditional != null -> {
                 val condition = renderCondition(conditional.condition, context.analysis, effectiveBindings)
                 expressionRenderer(effectiveBindings).renderConditionalDefinition(
                     value,
@@ -377,6 +418,8 @@ class JavaLikeSourceRenderer(
                     conditional.elseValue,
                     context.analysis.expression,
                 )
+                }
+                else -> expressionRenderer(effectiveBindings).renderDefinition(value, context.analysis.expression)
             }
             appendIndented(out, contentIndent, "$rendered;")
         }
@@ -414,6 +457,7 @@ class JavaLikeSourceRenderer(
                                 target,
                                 declaration.second,
                                 context.analysis.expression,
+                                target.id in context.analysis.sourceLocals.booleanLocals,
                             ) + ";",
                         )
                         return@eventLoop
@@ -429,6 +473,7 @@ class JavaLikeSourceRenderer(
                                 event.value.id,
                                 target.type,
                                 context.analysis.expression,
+                                assignment in context.analysis.sourceLocals.booleanLocals,
                             ) + ";",
                         )
                         return@eventLoop
@@ -442,6 +487,7 @@ class JavaLikeSourceRenderer(
 
                 is BlockEvent.Statement -> {
                     if (!includeControl && event.statement.isStructuralControl()) return@eventLoop
+                    if (block in context.analysis.sourceLocals.consumedIfHeaders && event.statement is ExpressionStatement.Branch) return@eventLoop
                     if (suppressMonitor && event.statement is ExpressionStatement.Monitor) return@eventLoop
                     if (event.statement.isRedundantConstructorInvocation(context)) return@eventLoop
                     if (tailPosition && index == events.lastIndex && event.statement is ExpressionStatement.Return && event.statement.value == null) return@eventLoop
@@ -460,6 +506,7 @@ class JavaLikeSourceRenderer(
                     valueId,
                     target.type,
                     context.analysis.expression,
+                    targetId in context.analysis.sourceLocals.booleanLocals,
                 ) + ";",
             )
         }
@@ -683,7 +730,7 @@ class JavaLikeSourceRenderer(
         val loopConditionInlineValues: Set<ValueId> = loopConditionInlineValuesByHeader.values.flatten().toSet()
         val localDeclarationByInitializer: Map<ValueId, Pair<ValueId, ValueId>> = buildMap {
             analysis.sourceLocals.conditionalAssignments.forEach { (phi, assignment) ->
-                put(assignment.initialValue, phi to assignment.initialValue)
+                if (assignment.declarationHeader == null) put(assignment.initialValue, phi to assignment.initialValue)
             }
             analysis.sourceLocals.loopAssignments.forEach { (phi, assignment) ->
                 put(assignment.initialValue, phi to assignment.initialValue)
@@ -723,6 +770,10 @@ class JavaLikeSourceRenderer(
             localDeclarationByInitializer.keys + localAssignmentByValue.keys + sourceLocalBindings.keys,
         )
         val hoistedValues: Set<ValueId> = hoistedValuesByRegionHeader.values.flatten().toSet()
+        val conditionalAssignmentsByHeader: Map<BasicBlockId, List<Pair<ValueId, ValueId>>> =
+            analysis.sourceLocals.conditionalAssignments.entries
+                .mapNotNull { (phi, assignment) -> assignment.declarationHeader?.let { it to (phi to assignment.initialValue) } }
+                .groupBy({ it.first }, { it.second })
         val twoArmAssignmentsByHeader: Map<BasicBlockId, List<ValueId>> = analysis.sourceLocals.twoArmAssignments.entries.groupBy(
             keySelector = { it.value.header },
             valueTransform = { it.key },

@@ -462,6 +462,90 @@ class SourceExpressionRendererTest {
     }
 
     @Test
+    fun `renders boolean conditional definition with boolean operands`() {
+        val thenId = ValueId(1)
+        val elseId = ValueId(2)
+        val phiId = ValueId(3)
+        val intType = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                thenId to ExpressionValue(thenId, intType, ExpressionNode.Constant(constantDesc(1))),
+                elseId to ExpressionValue(elseId, intType, ExpressionNode.Constant(constantDesc(0))),
+                phiId to ExpressionValue(
+                    phiId,
+                    intType,
+                    ExpressionNode.Phi(BasicBlockId(3), SsaPhiLocation.Stack(0), emptyList()),
+                ),
+            ),
+            statements = emptyList(),
+            materialization = ExpressionMaterialization(booleanValues = setOf(phiId)),
+        )
+
+        val rendered = SourceExpressionRenderer().renderConditionalDefinition(
+            expression.values.getValue(phiId),
+            "arg0",
+            thenId,
+            elseId,
+            expression,
+        )
+
+        assertEquals("var v3 = arg0 ? true : false", rendered)
+    }
+
+    @Test
+    fun `renders reconstructed conditional value directly into source local assignment`() {
+        val thenId = ValueId(1)
+        val elseId = ValueId(2)
+        val conditionalPhiId = ValueId(3)
+        val targetId = ValueId(4)
+        val intType = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                thenId to ExpressionValue(thenId, intType, ExpressionNode.Constant(constantDesc(0))),
+                elseId to ExpressionValue(elseId, intType, ExpressionNode.Constant(constantDesc(1))),
+                conditionalPhiId to ExpressionValue(
+                    conditionalPhiId,
+                    intType,
+                    ExpressionNode.Phi(BasicBlockId(3), SsaPhiLocation.Stack(0), emptyList()),
+                ),
+                targetId to ExpressionValue(
+                    targetId,
+                    intType,
+                    ExpressionNode.Phi(BasicBlockId(4), SsaPhiLocation.Local(1), emptyList()),
+                ),
+            ),
+            statements = emptyList(),
+        )
+
+        val rendered = SourceExpressionRenderer().renderConditionalAssignment(
+            expression.values.getValue(targetId),
+            "arg0 != 2",
+            thenId,
+            elseId,
+            expression,
+        )
+
+        assertEquals("v4 = arg0 != 2 ? 0 : 1", rendered)
+    }
+
+    @Test
+    fun `renders reconstructed boolean carrier directly into boolean source local`() {
+        val zero = ValueId(1)
+        val one = ValueId(2)
+        val target = ValueId(3)
+        val intType = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                zero to ExpressionValue(zero, intType, ExpressionNode.Constant(constantDesc(0))),
+                one to ExpressionValue(one, intType, ExpressionNode.Constant(constantDesc(1))),
+                target to ExpressionValue(target, intType, ExpressionNode.Phi(BasicBlockId(3), SsaPhiLocation.Local(1), emptyList())),
+            ),
+            statements = emptyList(),
+        )
+        assertEquals("v3 = arg0 != 2 ? false : true", SourceExpressionRenderer().renderConditionalAssignment(expression.values.getValue(target), "arg0 != 2", zero, one, expression, true))
+    }
+
+    @Test
     fun `renders bootstrap constants from concat recipe`() {
         val argumentId = ValueId(1)
         val resultId = ValueId(2)
@@ -565,6 +649,67 @@ class SourceExpressionRendererTest {
         val renderer = SourceExpressionRenderer()
         assertEquals("long v2 = 0", renderer.renderLocalDeclaration(expression.values.getValue(target), initializer, expression))
         assertEquals("v2 = 0", renderer.renderLocalAssignment(target, initializer, longType, expression))
+    }
+
+    @Test
+    fun `uses materialized value when declaring copied source local`() {
+        val initializer = ValueId(1)
+        val target = ValueId(2)
+        val type = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                initializer to ExpressionValue(
+                    initializer,
+                    type,
+                    ExpressionNode.Constant(constantDesc(7)),
+                    listOf(0),
+                ),
+                target to ExpressionValue(
+                    target,
+                    type,
+                    ExpressionNode.Phi(BasicBlockId(1), SsaPhiLocation.Local(0), emptyList()),
+                ),
+            ),
+            statements = emptyList(),
+        )
+
+        assertEquals(
+            "int v2 = v1",
+            SourceExpressionRenderer().renderMaterializedLocalDeclaration(expression.values.getValue(target), initializer, expression),
+        )
+    }
+
+    @Test
+    fun `inlines constant when declaring source local from inline initializer`() {
+        val initializer = ValueId(1)
+        val target = ValueId(2)
+        val type = JvmValueType.Computational(io.github.relvl.deobscura.raw.JvmComputationalType.INT)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                initializer to ExpressionValue(
+                    initializer,
+                    type,
+                    ExpressionNode.Constant(constantDesc(0)),
+                    listOf(0),
+                ),
+                target to ExpressionValue(
+                    target,
+                    type,
+                    ExpressionNode.Phi(BasicBlockId(1), SsaPhiLocation.Local(0), emptyList()),
+                ),
+            ),
+            statements = emptyList(),
+            materialization = ExpressionMaterialization(inlineValues = setOf(initializer)),
+        )
+
+        assertEquals(
+            "int v2 = 0",
+            SourceExpressionRenderer().renderMaterializedLocalDeclaration(
+                expression.values.getValue(target),
+                initializer,
+                expression,
+            ),
+        )
     }
 
     @Test

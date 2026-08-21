@@ -18,6 +18,99 @@ import kotlin.test.assertTrue
 
 class SourceLocalAnalyzerTest {
     @Test
+    fun `projects unstructured boolean materialization diamond from cfg`() {
+        val header = BasicBlockId(0)
+        val untakenArm = BasicBlockId(1)
+        val takenArm = BasicBlockId(2)
+        val continuation = BasicBlockId(3)
+        val conditionValue = ValueId(1)
+        val trueValue = ValueId(2)
+        val falseValue = ValueId(3)
+        val phiValue = ValueId(4)
+        val intType = JvmValueType.Computational(JvmComputationalType.INT)
+        val condition = BranchCondition(ComparisonOperator.EQ, conditionValue, BranchOperand.Zero)
+        val graph = ControlFlowGraph(
+            code = RawCode(0, 0, 0, emptyList(), emptyList(), emptyList(), emptyList()),
+            blocks = listOf(header, untakenArm, takenArm, continuation).map { id ->
+                BasicBlock(id, id.value, id.value + 1, emptyList(), emptyList())
+            },
+            edges = listOf(
+                ControlFlowEdge(header, takenArm, ControlFlowEdgeKind.CONDITIONAL),
+                ControlFlowEdge(header, untakenArm, ControlFlowEdgeKind.FALLTHROUGH),
+                ControlFlowEdge(untakenArm, continuation, ControlFlowEdgeKind.JUMP),
+                ControlFlowEdge(takenArm, continuation, ControlFlowEdgeKind.FALLTHROUGH),
+            ),
+            entryBlock = header,
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                conditionValue to ExpressionValue(
+                    conditionValue,
+                    intType,
+                    ExpressionNode.Root(ValueOrigin.Parameter(0)),
+                    listOf(header.value),
+                ),
+                trueValue to ExpressionValue(
+                    trueValue,
+                    intType,
+                    ExpressionNode.Constant(constantDesc(1)),
+                    listOf(untakenArm.value),
+                ),
+                falseValue to ExpressionValue(
+                    falseValue,
+                    intType,
+                    ExpressionNode.Constant(constantDesc(0)),
+                    listOf(takenArm.value),
+                ),
+                phiValue to ExpressionValue(
+                    phiValue,
+                    intType,
+                    ExpressionNode.Phi(
+                        continuation,
+                        SsaPhiLocation.Stack(0),
+                        listOf(
+                            SsaPhiInput(trueValue, untakenArm),
+                            SsaPhiInput(falseValue, takenArm),
+                        ),
+                    ),
+                ),
+            ),
+            statements = listOf(
+                ExpressionStatement.Branch(header.value, condition),
+                ExpressionStatement.Branch(untakenArm.value, null),
+            ),
+            materialization = ExpressionMaterialization(
+                inlineValues = setOf(trueValue, falseValue),
+                booleanValues = setOf(phiValue),
+            ),
+        )
+        val ssa = SsaAnalysis(
+            values = emptyMap(),
+            operations = emptyList(),
+            phiNodes = emptyList(),
+            uses = mapOf(
+                trueValue to listOf(SsaValueUse.Phi(phiValue, untakenArm, 0)),
+                falseValue to listOf(SsaValueUse.Phi(phiValue, takenArm, 1)),
+            ),
+            eliminatedLocalInstructionCount = 0,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph = graph,
+            ssa = ssa,
+            expression = expression,
+            structure = StructuredControlFlowAnalysis(emptyList(), 0, 0),
+        )
+
+        assertEquals(
+            SourceConditionalValue(StructuredCondition.Atomic(condition), falseValue, trueValue),
+            analysis.conditionalValues[phiValue],
+        )
+        assertEquals(setOf(trueValue, falseValue), analysis.suppressedDefinitions)
+        assertEquals(setOf(header), analysis.consumedIfHeaders)
+    }
+
+    @Test
     fun `projects constant materialization diamond into conditional phi`() {
         val header = BasicBlockId(0)
         val thenBlock = BasicBlockId(1)
@@ -110,6 +203,154 @@ class SourceLocalAnalyzerTest {
     }
 
     @Test
+    fun `projects inline constant materialization diamond into conditional phi`() {
+        val header = BasicBlockId(0)
+        val thenBlock = BasicBlockId(1)
+        val elseBlock = BasicBlockId(2)
+        val continuation = BasicBlockId(3)
+        val conditionValue = ValueId(1)
+        val thenValue = ValueId(2)
+        val elseValue = ValueId(3)
+        val phiValue = ValueId(4)
+        val condition = StructuredCondition.Atomic(BranchCondition(ComparisonOperator.EQ, conditionValue, BranchOperand.Zero))
+        val region = StructuredRegion.If(
+            header = header,
+            condition = condition,
+            thenEntry = thenBlock,
+            thenBlocks = setOf(thenBlock),
+            elseEntry = elseBlock,
+            elseBlocks = setOf(elseBlock),
+            continuation = continuation,
+        )
+        val intType = JvmValueType.Computational(JvmComputationalType.INT)
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                conditionValue to ExpressionValue(conditionValue, intType, ExpressionNode.Root(ValueOrigin.Parameter(0))),
+                thenValue to ExpressionValue(thenValue, intType, ExpressionNode.Constant(constantDesc(0)), listOf(2)),
+                elseValue to ExpressionValue(elseValue, intType, ExpressionNode.Constant(constantDesc(1)), listOf(1)),
+                phiValue to ExpressionValue(
+                    phiValue,
+                    intType,
+                    ExpressionNode.Phi(
+                        continuation,
+                        SsaPhiLocation.Stack(0),
+                        listOf(SsaPhiInput(thenValue, thenBlock), SsaPhiInput(elseValue, elseBlock)),
+                    ),
+                ),
+            ),
+            statements = listOf(
+                ExpressionStatement.Branch(1, null),
+                ExpressionStatement.Branch(2, null),
+            ),
+            materialization = ExpressionMaterialization(inlineValues = setOf(thenValue, elseValue)),
+        )
+        val ssa = SsaAnalysis(
+            values = emptyMap(),
+            operations = emptyList(),
+            phiNodes = emptyList(),
+            uses = mapOf(
+                thenValue to listOf(SsaValueUse.Phi(phiValue, thenBlock, 0)),
+                elseValue to listOf(SsaValueUse.Phi(phiValue, elseBlock, 1)),
+            ),
+            eliminatedLocalInstructionCount = 0,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph = graph(header.value, thenBlock.value, elseBlock.value, continuation.value),
+            ssa = ssa,
+            expression = expression,
+            structure = StructuredControlFlowAnalysis(listOf(region), 1, 0),
+        )
+
+        assertEquals(SourceConditionalValue(condition, thenValue, elseValue), analysis.conditionalValues[phiValue])
+        assertEquals(setOf(thenValue, elseValue), analysis.suppressedDefinitions)
+        assertEquals(setOf(header), analysis.consumedIfHeaders)
+    }
+
+    @Test
+    fun `projects empty arm local copy phi into conditional value`() {
+        val header = BasicBlockId(0)
+        val thenBlock = BasicBlockId(1)
+        val continuation = BasicBlockId(2)
+        val conditionValue = ValueId(1)
+        val inheritedValue = ValueId(2)
+        val selectedValue = ValueId(3)
+        val phiValue = ValueId(4)
+        val type = JvmValueType.Computational(JvmComputationalType.INT)
+        val condition = StructuredCondition.Atomic(
+            BranchCondition(ComparisonOperator.NE, conditionValue, BranchOperand.Zero),
+        )
+        val region = StructuredRegion.If(
+            header = header,
+            condition = condition,
+            thenEntry = thenBlock,
+            thenBlocks = setOf(thenBlock),
+            elseEntry = null,
+            elseBlocks = emptySet(),
+            continuation = continuation,
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                conditionValue to ExpressionValue(
+                    conditionValue,
+                    type,
+                    ExpressionNode.Root(ValueOrigin.Parameter(0)),
+                ),
+                inheritedValue to ExpressionValue(
+                    inheritedValue,
+                    type,
+                    ExpressionNode.Constant(constantDesc(10)),
+                    listOf(header.value),
+                ),
+                selectedValue to ExpressionValue(
+                    selectedValue,
+                    type,
+                    ExpressionNode.Constant(constantDesc(20)),
+                    listOf(header.value),
+                ),
+                phiValue to ExpressionValue(
+                    phiValue,
+                    type,
+                    ExpressionNode.Phi(
+                        continuation,
+                        SsaPhiLocation.Local(1),
+                        listOf(
+                            SsaPhiInput(inheritedValue, header),
+                            SsaPhiInput(selectedValue, thenBlock),
+                        ),
+                    ),
+                ),
+            ),
+            statements = listOf(ExpressionStatement.Branch(header.value, null)),
+        )
+        val ssa = SsaAnalysis(
+            values = emptyMap(),
+            operations = emptyList(),
+            phiNodes = emptyList(),
+            uses = mapOf(
+                inheritedValue to listOf(SsaValueUse.Phi(phiValue, header, 0)),
+                selectedValue to listOf(SsaValueUse.Phi(phiValue, thenBlock, 1)),
+            ),
+            eliminatedLocalInstructionCount = 0,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph = graph(header.value, thenBlock.value, continuation.value),
+            ssa = ssa,
+            expression = expression,
+            structure = StructuredControlFlowAnalysis(listOf(region), 1, 0),
+        )
+
+        assertEquals(
+            SourceConditionalValue(condition, selectedValue, inheritedValue),
+            analysis.conditionalValues[phiValue],
+        )
+        assertEquals(setOf(header), analysis.consumedIfHeaders)
+        assertTrue(analysis.suppressedDefinitions.isEmpty())
+        assertTrue(analysis.conditionalAssignments.isEmpty())
+    }
+
+    @Test
     fun `projects inherited value phi into conditional source assignment`() {
         val header = BasicBlockId(0)
         val thenBlock = BasicBlockId(1)
@@ -181,6 +422,472 @@ class SourceLocalAnalyzerTest {
         assertEquals(SourceConditionalAssignment(initialValue, assignedValue), analysis.conditionalAssignments[phiValue])
         assertTrue(analysis.conditionalValues.isEmpty())
         assertTrue(analysis.consumedIfHeaders.isEmpty())
+    }
+
+    @Test
+    fun `projects dominating inherited value into conditional source assignment`() {
+        val before = BasicBlockId(0)
+        val header = BasicBlockId(1)
+        val thenBlock = BasicBlockId(2)
+        val continuation = BasicBlockId(3)
+        val conditionValue = ValueId(1)
+        val initialValue = ValueId(2)
+        val assignedValue = ValueId(3)
+        val phiValue = ValueId(4)
+        val type = JvmValueType.Computational(JvmComputationalType.INT)
+        val region = StructuredRegion.If(
+            header,
+            StructuredCondition.Atomic(BranchCondition(ComparisonOperator.NE, conditionValue, BranchOperand.Zero)),
+            thenBlock,
+            setOf(thenBlock),
+            null,
+            emptySet(),
+            continuation,
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                conditionValue to ExpressionValue(conditionValue, type, ExpressionNode.Root(ValueOrigin.Parameter(0))),
+                initialValue to ExpressionValue(initialValue, type, ExpressionNode.Constant(constantDesc(-1)), listOf(0)),
+                assignedValue to ExpressionValue(assignedValue, type, ExpressionNode.Constant(constantDesc(7)), listOf(2)),
+                phiValue to ExpressionValue(
+                    phiValue,
+                    type,
+                    ExpressionNode.Phi(
+                        continuation,
+                        SsaPhiLocation.Local(1),
+                        listOf(SsaPhiInput(initialValue, header), SsaPhiInput(assignedValue, thenBlock)),
+                    ),
+                ),
+            ),
+            statements = emptyList(),
+        )
+        val ssa = SsaAnalysis(
+            values = emptyMap(),
+            operations = emptyList(),
+            phiNodes = emptyList(),
+            uses = mapOf(
+                initialValue to listOf(SsaValueUse.Phi(phiValue, header, 0)),
+                assignedValue to listOf(SsaValueUse.Phi(phiValue, thenBlock, 1)),
+            ),
+            eliminatedLocalInstructionCount = 0,
+        )
+        val controlFlow = SsaControlFlowGraph(
+            blocks = setOf(before, header, thenBlock, continuation),
+            edges = listOf(
+                ControlFlowEdge(before, header, ControlFlowEdgeKind.FALLTHROUGH),
+                ControlFlowEdge(header, thenBlock, ControlFlowEdgeKind.FALLTHROUGH),
+                ControlFlowEdge(header, continuation, ControlFlowEdgeKind.CONDITIONAL),
+                ControlFlowEdge(thenBlock, continuation, ControlFlowEdgeKind.FALLTHROUGH),
+            ),
+            entryBlock = before,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph(before.value, header.value, thenBlock.value, continuation.value),
+            ssa,
+            expression,
+            StructuredControlFlowAnalysis(listOf(region), 1, 0),
+            controlFlow,
+        )
+
+        assertEquals(SourceConditionalAssignment(initialValue, assignedValue), analysis.conditionalAssignments[phiValue])
+    }
+
+    @Test
+    fun `keeps multiply used initial value and declares conditional local at header`() {
+        val before = BasicBlockId(0)
+        val header = BasicBlockId(1)
+        val thenBlock = BasicBlockId(2)
+        val continuation = BasicBlockId(3)
+        val conditionValue = ValueId(1)
+        val initialValue = ValueId(2)
+        val assignedValue = ValueId(3)
+        val phiValue = ValueId(4)
+        val type = JvmValueType.Computational(JvmComputationalType.INT)
+        val region = StructuredRegion.If(
+            header,
+            StructuredCondition.Atomic(BranchCondition(ComparisonOperator.NE, conditionValue, BranchOperand.Zero)),
+            thenBlock,
+            setOf(thenBlock),
+            null,
+            emptySet(),
+            continuation,
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                conditionValue to ExpressionValue(conditionValue, type, ExpressionNode.Root(ValueOrigin.Parameter(0))),
+                initialValue to ExpressionValue(initialValue, type, ExpressionNode.Constant(constantDesc(-1)), listOf(0)),
+                assignedValue to ExpressionValue(assignedValue, type, ExpressionNode.Constant(constantDesc(7)), listOf(2)),
+                phiValue to ExpressionValue(
+                    phiValue,
+                    type,
+                    ExpressionNode.Phi(
+                        continuation,
+                        SsaPhiLocation.Local(1),
+                        listOf(SsaPhiInput(initialValue, header), SsaPhiInput(assignedValue, thenBlock)),
+                    ),
+                ),
+            ),
+            statements = emptyList(),
+        )
+        val ssa = SsaAnalysis(
+            values = emptyMap(),
+            operations = emptyList(),
+            phiNodes = emptyList(),
+            uses = mapOf(
+                initialValue to listOf(
+                    SsaValueUse.Phi(phiValue, header, 0),
+                    SsaValueUse.Operation(3, 0),
+                ),
+                assignedValue to listOf(SsaValueUse.Phi(phiValue, thenBlock, 1)),
+            ),
+            eliminatedLocalInstructionCount = 0,
+        )
+        val controlFlow = SsaControlFlowGraph(
+            blocks = setOf(before, header, thenBlock, continuation),
+            edges = listOf(
+                ControlFlowEdge(before, header, ControlFlowEdgeKind.FALLTHROUGH),
+                ControlFlowEdge(header, thenBlock, ControlFlowEdgeKind.FALLTHROUGH),
+                ControlFlowEdge(header, continuation, ControlFlowEdgeKind.CONDITIONAL),
+                ControlFlowEdge(thenBlock, continuation, ControlFlowEdgeKind.FALLTHROUGH),
+            ),
+            entryBlock = before,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph(before.value, header.value, thenBlock.value, continuation.value),
+            ssa,
+            expression,
+            StructuredControlFlowAnalysis(listOf(region), 1, 0),
+            controlFlow,
+        )
+
+        assertEquals(
+            SourceConditionalAssignment(initialValue, assignedValue, declarationHeader = header),
+            analysis.conditionalAssignments[phiValue],
+        )
+    }
+
+    @Test
+    fun `projects one arm assignment with root initial value`() {
+        val header = BasicBlockId(0)
+        val thenBlock = BasicBlockId(1)
+        val continuation = BasicBlockId(2)
+        val conditionValue = ValueId(1)
+        val initialValue = ValueId(2)
+        val assignedValue = ValueId(3)
+        val phiValue = ValueId(4)
+        val type = JvmValueType.Computational(JvmComputationalType.INT)
+        val region = StructuredRegion.If(
+            header,
+            StructuredCondition.Atomic(BranchCondition(ComparisonOperator.NE, conditionValue, BranchOperand.Zero)),
+            thenBlock,
+            setOf(thenBlock),
+            null,
+            emptySet(),
+            continuation,
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                conditionValue to ExpressionValue(conditionValue, type, ExpressionNode.Root(ValueOrigin.Parameter(0))),
+                initialValue to ExpressionValue(initialValue, type, ExpressionNode.Root(ValueOrigin.Parameter(1))),
+                assignedValue to ExpressionValue(assignedValue, type, ExpressionNode.Constant(constantDesc(7)), listOf(1)),
+                phiValue to ExpressionValue(
+                    phiValue,
+                    type,
+                    ExpressionNode.Phi(
+                        continuation,
+                        SsaPhiLocation.Local(1),
+                        listOf(SsaPhiInput(initialValue, header), SsaPhiInput(assignedValue, thenBlock)),
+                    ),
+                ),
+            ),
+            statements = emptyList(),
+        )
+        val ssa = SsaAnalysis(
+            values = emptyMap(),
+            operations = emptyList(),
+            phiNodes = emptyList(),
+            uses = mapOf(
+                initialValue to listOf(
+                    SsaValueUse.Phi(phiValue, header, 0),
+                    SsaValueUse.Operation(1, 0),
+                ),
+                assignedValue to listOf(SsaValueUse.Phi(phiValue, thenBlock, 1)),
+            ),
+            eliminatedLocalInstructionCount = 0,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph(header.value, thenBlock.value, continuation.value),
+            ssa,
+            expression,
+            StructuredControlFlowAnalysis(listOf(region), 1, 0),
+        )
+
+        assertEquals(
+            SourceConditionalAssignment(initialValue, assignedValue, declarationHeader = header),
+            analysis.conditionalAssignments[phiValue],
+        )
+    }
+
+    @Test
+    fun `projects reconstructed conditional value assigned in one arm`() {
+        val outerHeader = BasicBlockId(0)
+        val innerHeader = BasicBlockId(1)
+        val thenBlock = BasicBlockId(2)
+        val elseBlock = BasicBlockId(3)
+        val assignedBlock = BasicBlockId(4)
+        val continuation = BasicBlockId(5)
+        val outerConditionValue = ValueId(1)
+        val innerConditionValue = ValueId(2)
+        val initialValue = ValueId(3)
+        val thenValue = ValueId(4)
+        val elseValue = ValueId(5)
+        val assignedValue = ValueId(6)
+        val phiValue = ValueId(7)
+        val type = JvmValueType.Computational(JvmComputationalType.INT)
+        val innerCondition = StructuredCondition.Atomic(
+            BranchCondition(ComparisonOperator.NE, innerConditionValue, BranchOperand.Zero),
+        )
+        val innerRegion = StructuredRegion.If(
+            header = innerHeader,
+            condition = innerCondition,
+            thenEntry = thenBlock,
+            thenBlocks = setOf(thenBlock),
+            elseEntry = elseBlock,
+            elseBlocks = setOf(elseBlock),
+            continuation = assignedBlock,
+        )
+        val outerRegion = StructuredRegion.If(
+            header = outerHeader,
+            condition = StructuredCondition.Atomic(
+                BranchCondition(ComparisonOperator.NE, outerConditionValue, BranchOperand.Zero),
+            ),
+            thenEntry = innerHeader,
+            thenBlocks = setOf(innerHeader, thenBlock, elseBlock, assignedBlock),
+            elseEntry = null,
+            elseBlocks = emptySet(),
+            continuation = continuation,
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                outerConditionValue to ExpressionValue(outerConditionValue, type, ExpressionNode.Root(ValueOrigin.Parameter(0))),
+                innerConditionValue to ExpressionValue(innerConditionValue, type, ExpressionNode.Root(ValueOrigin.Parameter(1))),
+                initialValue to ExpressionValue(initialValue, type, ExpressionNode.Constant(constantDesc(0)), listOf(0)),
+                thenValue to ExpressionValue(thenValue, type, ExpressionNode.Constant(constantDesc(1)), listOf(2)),
+                elseValue to ExpressionValue(elseValue, type, ExpressionNode.Constant(constantDesc(0)), listOf(3)),
+                assignedValue to ExpressionValue(
+                    assignedValue,
+                    type,
+                    ExpressionNode.Phi(
+                        assignedBlock,
+                        SsaPhiLocation.Stack(0),
+                        listOf(SsaPhiInput(thenValue, thenBlock), SsaPhiInput(elseValue, elseBlock)),
+                    ),
+                ),
+                phiValue to ExpressionValue(
+                    phiValue,
+                    type,
+                    ExpressionNode.Phi(
+                        continuation,
+                        SsaPhiLocation.Local(1),
+                        listOf(SsaPhiInput(initialValue, outerHeader), SsaPhiInput(assignedValue, assignedBlock)),
+                    ),
+                ),
+            ),
+            statements = listOf(
+                ExpressionStatement.Branch(2, null),
+                ExpressionStatement.Branch(3, null),
+            ),
+        )
+        val ssa = SsaAnalysis(
+            values = emptyMap(),
+            operations = emptyList(),
+            phiNodes = emptyList(),
+            uses = mapOf(
+                thenValue to listOf(SsaValueUse.Phi(assignedValue, thenBlock, 0)),
+                elseValue to listOf(SsaValueUse.Phi(assignedValue, elseBlock, 1)),
+                initialValue to listOf(SsaValueUse.Phi(phiValue, outerHeader, 0)),
+                assignedValue to listOf(SsaValueUse.Phi(phiValue, assignedBlock, 1)),
+            ),
+            eliminatedLocalInstructionCount = 0,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph(0, 1, 2, 3, 4, 5),
+            ssa,
+            expression,
+            // Match the corpus ordering: the outer region is analyzed before the nested
+            // materialization diamond that reconstructs assignedValue.
+            StructuredControlFlowAnalysis(listOf(outerRegion, innerRegion), 2, 0),
+        )
+
+        assertEquals(SourceConditionalValue(innerCondition, thenValue, elseValue), analysis.conditionalValues[assignedValue])
+        assertEquals(SourceConditionalAssignment(initialValue, assignedValue), analysis.conditionalAssignments[phiValue])
+    }
+
+    @Test
+    fun `prefers one arm source local over boolean carrier materialization`() {
+        val header = BasicBlockId(0)
+        val thenBlock = BasicBlockId(1)
+        val continuation = BasicBlockId(2)
+        val conditionValue = ValueId(1)
+        val initialValue = ValueId(2)
+        val assignedValue = ValueId(3)
+        val phiValue = ValueId(4)
+        val type = JvmValueType.Computational(JvmComputationalType.INT)
+        val region = StructuredRegion.If(
+            header,
+            StructuredCondition.Atomic(BranchCondition(ComparisonOperator.NE, conditionValue, BranchOperand.Zero)),
+            thenBlock,
+            setOf(thenBlock),
+            null,
+            emptySet(),
+            continuation,
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                conditionValue to ExpressionValue(
+                    conditionValue,
+                    type,
+                    ExpressionNode.Root(ValueOrigin.Parameter(0)),
+                ),
+                initialValue to ExpressionValue(
+                    initialValue,
+                    type,
+                    ExpressionNode.Constant(constantDesc(0)),
+                    listOf(header.value),
+                ),
+                assignedValue to ExpressionValue(
+                    assignedValue,
+                    type,
+                    ExpressionNode.Constant(constantDesc(1)),
+                    listOf(thenBlock.value),
+                ),
+                phiValue to ExpressionValue(
+                    phiValue,
+                    type,
+                    ExpressionNode.Phi(
+                        continuation,
+                        SsaPhiLocation.Local(1),
+                        listOf(
+                            SsaPhiInput(initialValue, header),
+                            SsaPhiInput(assignedValue, thenBlock),
+                        ),
+                    ),
+                ),
+            ),
+            statements = emptyList(),
+            materialization = ExpressionMaterialization(
+                inlineValues = setOf(initialValue),
+                booleanValues = setOf(phiValue),
+            ),
+        )
+        val ssa = SsaAnalysis(
+            values = emptyMap(),
+            operations = emptyList(),
+            phiNodes = emptyList(),
+            uses = mapOf(
+                initialValue to listOf(SsaValueUse.Phi(phiValue, header, 0)),
+                assignedValue to listOf(SsaValueUse.Phi(phiValue, thenBlock, 1)),
+            ),
+            eliminatedLocalInstructionCount = 0,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph(header.value, thenBlock.value, continuation.value),
+            ssa,
+            expression,
+            StructuredControlFlowAnalysis(listOf(region), 1, 0),
+        )
+
+        assertEquals(
+            SourceConditionalAssignment(initialValue, assignedValue, declarationHeader = header),
+            analysis.conditionalAssignments[phiValue],
+        )
+        assertTrue(phiValue in analysis.booleanLocals)
+    }
+
+    @Test
+    fun `projects repeated inherited phi inputs from folded condition`() {
+        val header = BasicBlockId(0)
+        val foldedBlock = BasicBlockId(1)
+        val thenBlock = BasicBlockId(2)
+        val continuation = BasicBlockId(3)
+        val conditionValue = ValueId(1)
+        val initialValue = ValueId(2)
+        val assignedValue = ValueId(3)
+        val phiValue = ValueId(4)
+        val type = JvmValueType.Computational(JvmComputationalType.INT)
+        val region = StructuredRegion.If(
+            header,
+            StructuredCondition.Atomic(BranchCondition(ComparisonOperator.NE, conditionValue, BranchOperand.Zero)),
+            thenBlock,
+            setOf(thenBlock),
+            null,
+            emptySet(),
+            continuation,
+        )
+        val expression = ExpressionAnalysis(
+            values = mapOf(
+                conditionValue to ExpressionValue(conditionValue, type, ExpressionNode.Root(ValueOrigin.Parameter(0))),
+                initialValue to ExpressionValue(initialValue, type, ExpressionNode.Constant(constantDesc(12)), listOf(0)),
+                assignedValue to ExpressionValue(assignedValue, type, ExpressionNode.Constant(constantDesc(10)), listOf(2)),
+                phiValue to ExpressionValue(
+                    phiValue,
+                    type,
+                    ExpressionNode.Phi(
+                        continuation,
+                        SsaPhiLocation.Local(1),
+                        listOf(
+                            SsaPhiInput(initialValue, header),
+                            SsaPhiInput(initialValue, foldedBlock),
+                            SsaPhiInput(assignedValue, thenBlock),
+                        ),
+                    ),
+                ),
+            ),
+            statements = emptyList(),
+        )
+        val ssa = SsaAnalysis(
+            values = emptyMap(),
+            operations = emptyList(),
+            phiNodes = emptyList(),
+            uses = mapOf(
+                initialValue to listOf(
+                    SsaValueUse.Phi(phiValue, header, 0),
+                    SsaValueUse.Phi(phiValue, foldedBlock, 1),
+                    SsaValueUse.Operation(1, 0),
+                ),
+                assignedValue to listOf(SsaValueUse.Phi(phiValue, thenBlock, 2)),
+            ),
+            eliminatedLocalInstructionCount = 0,
+        )
+        val controlFlow = SsaControlFlowGraph(
+            blocks = setOf(header, foldedBlock, thenBlock, continuation),
+            edges = listOf(
+                ControlFlowEdge(header, foldedBlock, ControlFlowEdgeKind.FALLTHROUGH),
+                ControlFlowEdge(header, continuation, ControlFlowEdgeKind.CONDITIONAL),
+                ControlFlowEdge(foldedBlock, thenBlock, ControlFlowEdgeKind.FALLTHROUGH),
+                ControlFlowEdge(foldedBlock, continuation, ControlFlowEdgeKind.CONDITIONAL),
+                ControlFlowEdge(thenBlock, continuation, ControlFlowEdgeKind.FALLTHROUGH),
+            ),
+            entryBlock = header,
+        )
+
+        val analysis = SourceLocalAnalyzer().analyze(
+            graph(header.value, foldedBlock.value, thenBlock.value, continuation.value),
+            ssa,
+            expression,
+            StructuredControlFlowAnalysis(listOf(region), 1, 0),
+            controlFlow,
+        )
+
+        assertEquals(
+            SourceConditionalAssignment(initialValue, assignedValue, declarationHeader = header),
+            analysis.conditionalAssignments[phiValue],
+        )
     }
 
     @Test
@@ -309,7 +1016,7 @@ class SourceLocalAnalyzerTest {
     }
 
     @Test
-    fun `does not project inherited stack phi as source local`() {
+    fun `projects inherited stack phi into conditional source assignment`() {
         val header = BasicBlockId(0)
         val thenBlock = BasicBlockId(1)
         val continuation = BasicBlockId(2)
@@ -360,7 +1067,7 @@ class SourceLocalAnalyzerTest {
             StructuredControlFlowAnalysis(listOf(region), 1, 0),
         )
 
-        assertTrue(analysis.conditionalAssignments.isEmpty())
+        assertEquals(SourceConditionalAssignment(initialValue, assignedValue), analysis.conditionalAssignments[phiValue])
     }
 
     @Test

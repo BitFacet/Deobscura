@@ -259,6 +259,60 @@ class ExpressionBuilderTest {
     }
 
     @Test
+    fun `recognizes zero-one phi used only as boolean method argument`() {
+        val zero = ValueId(0)
+        val one = ValueId(1)
+        val phi = ValueId(2)
+        val receiver = ValueId(3)
+        val b0 = io.github.relvl.deobscura.cfg.BasicBlockId(0)
+        val b1 = io.github.relvl.deobscura.cfg.BasicBlockId(1)
+        val b2 = io.github.relvl.deobscura.cfg.BasicBlockId(2)
+        val phiInputs = listOf(SsaPhiInput(zero, b0), SsaPhiInput(one, b1))
+        val ownerType = JvmValueType.Reference(JvmReferenceType.Exact(JvmType.ObjectType("example/Owner")))
+        val values = linkedMapOf<ValueId, SsaValueDefinition>(
+            zero to SsaValueDefinition.Instruction(zero, FrameValueKind.INT, 0),
+            one to SsaValueDefinition.Instruction(one, FrameValueKind.INT, 1),
+            phi to SsaValueDefinition.Phi(phi, FrameValueKind.INT, b2, SsaPhiLocation.Stack(0), phiInputs),
+            receiver to SsaValueDefinition.Root(receiver, ownerType, ValueOrigin.Parameter(0)),
+        )
+        val operations = listOf(
+            ValueOperation(0, RawConstantInstruction(JvmOpcode("iconst_0"), JvmComputationalType.INT, constantDesc(0)), emptyList(), zero),
+            ValueOperation(1, RawConstantInstruction(JvmOpcode("iconst_1"), JvmComputationalType.INT, constantDesc(1)), emptyList(), one),
+            ValueOperation(
+                2,
+                RawInvokeInstruction(
+                    JvmOpcode("invokevirtual"),
+                    "example/Owner",
+                    "accept",
+                    "(Z)V",
+                    JvmMethodDescriptor(listOf(JvmType.BooleanType), JvmType.VoidType),
+                    false,
+                ),
+                listOf(receiver, phi),
+            ),
+        )
+        val uses = mapOf<ValueId, List<SsaValueUse>>(
+            zero to listOf(SsaValueUse.Phi(phi, b0, 0)),
+            one to listOf(SsaValueUse.Phi(phi, b1, 1)),
+            phi to listOf(SsaValueUse.Operation(2, 1)),
+            receiver to listOf(SsaValueUse.Operation(2, 0)),
+        )
+        val analysis = SsaAnalysis(
+            values = values,
+            operations = operations,
+            phiNodes = listOf(SsaPhiNode(phi, b2, SsaPhiLocation.Stack(0), phiInputs)),
+            uses = uses,
+            eliminatedLocalInstructionCount = 0,
+        )
+
+        val result = builder.build(analysis)
+
+        assertEquals(setOf(phi), result.materialization.booleanValues)
+        assertTrue(zero in result.materialization.inlineValues)
+        assertTrue(one in result.materialization.inlineValues)
+    }
+
+    @Test
     fun `lifts ifnull into null comparison`() {
         assertNullBranch("ifnull", ComparisonOperator.EQ)
     }

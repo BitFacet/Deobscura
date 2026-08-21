@@ -42,17 +42,76 @@ internal class SourceExpressionRenderer(
     }
 
     fun renderConditionalDefinition(value: ExpressionValue, condition: String, thenValue: ValueId, elseValue: ValueId, expression: ExpressionAnalysis): String =
-        "var v${value.id.value} = $condition ? ${renderConditionalOperand(thenValue, expression)} : ${renderConditionalOperand(elseValue, expression)}"
+        "var v${value.id.value} = ${renderConditionalValue(value, condition, thenValue, elseValue, expression)}"
 
-    fun renderLocalDeclaration(target: ExpressionValue, initializer: ValueId, expression: ExpressionAnalysis): String =
-        "${formatValueType(target.type)} v${target.id.value} = ${renderValueForType(initializer, target.type, expression)}"
+    fun renderConditionalAssignment(
+        target: ExpressionValue,
+        condition: String,
+        thenValue: ValueId,
+        elseValue: ValueId,
+        expression: ExpressionAnalysis,
+        booleanTarget: Boolean = false,
+    ): String {
+        if (booleanTarget) {
+            return renderBooleanConditionalAssignment(target.id, condition, thenValue, elseValue, expression)
+        }
+        return "v${target.id.value} = ${renderConditionalValue(target, condition, thenValue, elseValue, expression)}"
+    }
 
-    fun renderLocalDeclaration(target: ExpressionValue): String = "${formatValueType(target.type)} v${target.id.value}"
+    private fun renderBooleanConditionalAssignment(
+        target: ValueId,
+        condition: String,
+        thenValue: ValueId,
+        elseValue: ValueId,
+        expression: ExpressionAnalysis,
+    ): String =
+        "v${target.value} = $condition ? ${renderBooleanValue(thenValue, expression)} : ${renderBooleanValue(elseValue, expression)}"
 
-    fun renderLocalAssignment(target: ValueId, value: ValueId, targetType: JvmValueType, expression: ExpressionAnalysis): String = "v${target.value} = ${renderValueForType(value, targetType, expression)}"
+    private fun renderConditionalValue(
+        target: ExpressionValue,
+        condition: String,
+        thenValue: ValueId,
+        elseValue: ValueId,
+        expression: ExpressionAnalysis,
+    ): String {
+        // Boolean values still use the JVM int carrier in many bytecode shapes. Expression
+        // materialization has already proven which phi results are boolean; use that source
+        // semantic fact instead of expecting the low-level value type to be BOOLEAN.
+        val thenRendered: String
+        val elseRendered: String
+        if (target.id in expression.materialization.booleanValues) {
+            thenRendered = renderBooleanValue(thenValue, expression)
+            elseRendered = renderBooleanValue(elseValue, expression)
+        } else {
+            thenRendered = renderValueForType(thenValue, target.type, expression)
+            elseRendered = renderValueForType(elseValue, target.type, expression)
+        }
+        return "$condition ? $thenRendered : $elseRendered"
+    }
 
-    fun renderMaterializedLocalAssignment(target: ValueId, value: ValueId, targetType: JvmValueType, expression: ExpressionAnalysis): String =
-        "v${target.value} = ${renderMaterializedValueForType(value, targetType, expression)}"
+    fun renderLocalDeclaration(target: ExpressionValue, initializer: ValueId, expression: ExpressionAnalysis, booleanTarget: Boolean = false): String =
+        "${if (booleanTarget) "boolean" else formatValueType(target.type)} v${target.id.value} = ${
+            if (booleanTarget) renderBooleanValue(initializer, expression) else renderValueForType(initializer, target.type, expression)
+        }"
+
+    fun renderLocalDeclaration(target: ExpressionValue, booleanTarget: Boolean = false): String =
+        "${if (booleanTarget) "boolean" else formatValueType(target.type)} v${target.id.value}"
+
+    fun renderLocalAssignment(target: ValueId, value: ValueId, targetType: JvmValueType, expression: ExpressionAnalysis, booleanTarget: Boolean = false): String =
+        "v${target.value} = ${if (booleanTarget) renderBooleanValue(value, expression) else renderValueForType(value, targetType, expression)}"
+
+    fun renderMaterializedLocalAssignment(target: ValueId, value: ValueId, targetType: JvmValueType, expression: ExpressionAnalysis, booleanTarget: Boolean = false): String =
+        "v${target.value} = ${
+            if (booleanTarget) renderBooleanValue(value, expression, mode = ValueRenderingMode.MATERIALIZED)
+            else renderMaterializedValueForType(value, targetType, expression)
+        }"
+
+    /** Declares a source local from an SSA value that has already been emitted at its definition site. */
+    fun renderMaterializedLocalDeclaration(target: ExpressionValue, initializer: ValueId, expression: ExpressionAnalysis, booleanTarget: Boolean = false): String =
+        "${if (booleanTarget) "boolean" else formatValueType(target.type)} v${target.id.value} = ${
+            if (booleanTarget) renderBooleanValue(initializer, expression, mode = ValueRenderingMode.MATERIALIZED)
+            else renderMaterializedValueForType(initializer, target.type, expression)
+        }"
 
     fun renderLocalDefinitionAssignment(value: ExpressionValue, expression: ExpressionAnalysis): String =
         "v${value.id.value} = ${renderNode(value.node, expression)}"
@@ -210,7 +269,9 @@ internal class SourceExpressionRenderer(
         val constant = (value?.node as? ExpressionNode.Constant)?.value
         if (constant?.equals(0) == true) return "false"
         if (constant?.equals(1) == true) return "true"
-        if (value?.type?.isBoolean == true) return renderValue(id, expression, parentPrecedence, mode)
+        if (id in expression.materialization.booleanValues || value?.type?.isBoolean == true || bindings.isBooleanSourceLocal(id)) {
+            return renderValue(id, expression, parentPrecedence, mode)
+        }
 
         val rendered = "${renderValue(id, expression, PRECEDENCE_EQUALITY, mode)} != 0"
         return if (PRECEDENCE_EQUALITY < parentPrecedence) "($rendered)" else rendered
@@ -469,10 +530,14 @@ internal data class SourceValueBindings(
     private val exceptionParameters: Map<Int, String> = emptyMap(),
     private val sourceLocals: Map<ValueId, ValueId> = emptyMap(),
     private val inlineValues: Set<ValueId> = emptySet(),
+    private val booleanSourceLocals: Set<ValueId> = emptySet(),
 ) {
     fun exceptionParameter(handlerInstructionIndex: Int): String? = exceptionParameters[handlerInstructionIndex]
 
     fun sourceLocal(value: ValueId): ValueId? = sourceLocals[value]
+
+    fun isBooleanSourceLocal(value: ValueId): Boolean =
+        (sourceLocals[value] ?: value) in booleanSourceLocals
 
     fun shouldInline(value: ValueId, expression: ExpressionAnalysis): Boolean =
         value in inlineValues || value in expression.materialization.inlineValues
@@ -482,6 +547,8 @@ internal data class SourceValueBindings(
     fun withSourceLocals(bindings: Map<ValueId, ValueId>): SourceValueBindings = copy(sourceLocals = sourceLocals + bindings)
 
     fun withInlineValues(values: Set<ValueId>): SourceValueBindings = copy(inlineValues = inlineValues + values)
+
+    fun withBooleanSourceLocals(values: Set<ValueId>): SourceValueBindings = copy(booleanSourceLocals = booleanSourceLocals + values)
 
     companion object {
         val EMPTY = SourceValueBindings()
